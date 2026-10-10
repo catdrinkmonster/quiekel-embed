@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+*.log
+
+# Never commit secrets or local settings
+.env
+.env.*
+*.pem
+*.key

@@ -1,0 +1,68 @@
+[project]
+name = "quiekel-embed"
+version = "0.8.0"
+description = "Quiekel Embed: search your own files by meaning, fully local, with EmbeddingGemma 2."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "sentence-transformers[image]>=6.1.0",
+    "transformers",
+    "torch",
+    "torchvision",
+    "lancedb",
+    "pyarrow",
+    "fastapi",
+    "uvicorn",
+    "watchdog",
+    "pymupdf",
+    "python-docx",
+    "python-pptx",
+    "openpyxl",
+    "pillow",
+    "pillow-heif",
+    "pywebview>=6.2.1",
+    "pystray>=0.19.5",
+    "psutil>=7.2.2",
+    "nvidia-ml-py>=13.615.71",
+]
+
+[project.urls]
+Homepage = "https://github.com/catdrinkmonster/quiekel-embed"
+Issues = "https://github.com/catdrinkmonster/quiekel-embed/issues"
+Security = "https://github.com/catdrinkmonster/quiekel-embed/security"
+
+[dependency-groups]
+dev = ["pytest", "httpx"]
+
+[project.scripts]
+quiekel-embed = "quiekel_embed.app:main"
+quiekel-embed-shortcuts = "quiekel_embed.shortcuts:main"
+
+# No console window: this is what the Desktop / Start Menu shortcuts launch.
+[project.gui-scripts]
+quiekel-embed-app = "quiekel_embed.desktop:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quiekel_embed"]
+
+# Always run on uv's own Python. The Microsoft Store Python runs as a packaged app: Windows then
+# shows its icon for our window in the taskbar and quietly redirects our data folder into its
+# package, where uninstalling or resetting that Python would delete it.
+[tool.uv]
+python-preference = "only-managed"
+
+# CUDA build of PyTorch, for NVIDIA GPUs (CUDA 12.8).
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

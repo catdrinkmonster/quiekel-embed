@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en" class="i18n-pending">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quiekel Embed</title>
+  <link rel="icon" href="/static/pig.svg" type="image/svg+xml">
+  <script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <a class="brand" id="brand" href="#/search"><img class="logo" src="/static/pig.svg" alt="Quiekel Embed"></a>
+
+    <nav class="nav">
+      <a href="#/search" data-page="search" data-icon="search" data-i18n-tip="nav.search"></a>
+      <a href="#/map" data-page="map" data-icon="cube" id="nav-map"></a>
+      <a href="#/folders" data-page="folders" data-icon="folder" data-i18n-tip="nav.folders"><span class="count" id="nav-count"></span></a>
+    </nav>
+
+    <div class="rail-foot">
+      <button class="update-badge" id="update-badge" data-icon="update" hidden></button>
+      <button class="status" id="status" aria-live="polite">
+        <svg class="ring" viewBox="0 0 40 40" aria-hidden="true"><circle class="ring-track" cx="20" cy="20" r="16"/><circle class="ring-arc" id="status-arc" cx="20" cy="20" r="16"/></svg>
+        <span class="status-inner" id="status-inner"></span>
+      </button>
+      <nav class="nav">
+        <a href="#/settings" data-page="settings" data-icon="settings" data-i18n-tip="nav.settings"></a>
+      </nav>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- Search -->
+    <section class="page" id="page-search">
+      <form id="search-form" class="search" autocomplete="off" role="search">
+        <span data-icon="search"></span>
+        <input id="q" type="search" data-i18n-aria="nav.search" spellcheck="false" autofocus>
+     </form>
+      <div class="toolbar">
+        <div class="seg" id="kinds" role="radiogroup">
+          <button type="button" class="active" data-kind="all" data-icon="all"></button>
+          <button type="button" data-kind="docs" data-icon="doc"></button>
+          <button type="button" data-kind="text" data-icon="text"></button>
+          <button type="button" data-kind="code" data-icon="code"></button>
+          <button type="button" data-kind="images" data-icon="image"></button>
+        </div>
+        <div class="scope" id="scope-search"></div>
+        <div class="chip" id="similar-chip" hidden>
+          <span data-icon="similar"></span><span class="chip-name" id="similar-name"></span>
+          <button type="button" class="chip-x" id="similar-clear" data-icon="close" data-i18n-tip="search.back"></button>
+        </div>
+        <span class="toolbar-gap"></span>
+        <span class="hint-icon" id="notice" data-icon="hourglass" hidden></span>
+        <div class="seg" id="views" role="radiogroup">
+          <button type="button" data-view="cards" data-icon="rows"></button>
+          <button type="button" data-view="list" data-icon="list"></button>
+          <button type="button" data-view="grid" data-icon="grid"></button>
+        </div>
+      </div>
+      <div id="results" class="results"></div>
+      <div id="empty" class="empty"></div>
+    </section>
+
+    <!-- Map -->
+    <section class="page page-map" id="page-map" hidden>
+      <div class="map-bar">
+        <form id="map-search" class="search mini" autocomplete="off" role="search">
+          <span data-icon="search"></span>
+          <input id="map-q" type="search" data-i18n-aria="map.highlight" spellcheck="false">
+        </form>
+        <div class="seg" id="map-kinds">
+          <button type="button" class="active" data-kind="docs" data-icon="doc"></button>
+          <button type="button" class="active" data-kind="text" data-icon="text"></button>
+          <button type="button" class="active" data-kind="code" data-icon="code"></button>
+          <button type="button" class="active" data-kind="images" data-icon="image"></button>
+        </div>
+        <div class="scope" id="scope-map"></div>
+        <span class="toolbar-gap"></span>
+        <span class="map-count" id="map-count" hidden></span>
+        <button class="icon-btn on" id="map-spin" data-icon="turntable"></button>
+        <button class="icon-btn" id="map-reset" data-icon="focus" data-i18n-tip="map.reset"></button>
+      </div>
+      <div class="map-stage" id="map-stage">
+        <canvas id="map-canvas"></canvas>
+        <img class="logo map-center map-busy" id="map-busy" src="/static/pig.svg" alt="" data-i18n-tip="map.computing" hidden>
+        <img class="logo map-center map-empty" id="map-empty" src="/static/pig.svg" alt="" hidden>
+        <div class="map-card" id="map-card" hidden>
+          <div class="mc-head">
+            <div class="mc-name" id="mc-name"></div>
+            <button type="button" class="chip-x" id="mc-info" data-icon="info" data-i18n-tip="map.how"></button>
+            <button type="button" class="chip-x" id="mc-close" data-icon="close" data-i18n-tip="common.close"></button>
+          </div>
+          <button type="button" class="mc-dir" id="mc-dir"></button>
+          <div class="seg mc-tabs" id="mc-tabs" role="tablist">
+            <button type="button" role="tab" data-tab="preview" data-icon="image" data-i18n-tip="map.preview"></button>
+            <button type="button" role="tab" data-tab="print" data-icon="dots" data-i18n-tip="map.fingerprint"></button>
+          </div>
+          <div class="mc-view">
+            <div class="mc-preview" id="mc-preview"></div>
+            <canvas class="mc-print" id="mc-print" width="160" height="160" hidden></canvas>
+          </div>
+          <div class="mc-label" data-i18n="map.closest"></div>
+          <div class="mc-related" id="mc-related"></div>
+          <div class="mc-foot">
+            <div class="actions" id="mc-actions"></div>
+            <span class="toolbar-gap"></span>
+            <button type="button" class="icon-btn small" id="mc-back" data-icon="arrowLeft" data-i18n-tip="map.back"></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Folders -->
+    <section class="page" id="page-folders" hidden>
+      <div class="folder-bar">
+        <button class="icon-btn primary big" id="pick-btn" data-icon="folderPlus" data-i18n-tip="folders.add"></button>
+        <form id="path-form" class="path-form">
+          <input id="path-input" class="input" data-i18n-placeholder="folders.path_placeholder" spellcheck="false">
+          <button class="icon-btn" type="submit" data-icon="arrowRight" data-i18n-tip="folders.add_path"></button>
+        </form>
+      </div>
+      <p id="folder-error" class="error" hidden></p>
+      <div class="folders" id="folders"></div>
+    </section>
+
+    <!-- Settings -->
+    <section class="page" id="page-settings" hidden>
+      <div class="card">
+        <div class="set-row">
+          <span class="set-label"><span data-icon="gauge"></span><span data-i18n="settings.speed"></span><button type="button" class="info-btn" id="speed-info" data-icon="info" data-i18n-tip="common.explain"></button></span>
+          <div class="seg" id="modes" role="radiogroup">
+            <button type="button" data-mode="gentle" data-icon="speed1"></button>
+            <button type="button" data-mode="balanced" data-icon="speed2"></button>
+            <button type="button" data-mode="full" data-icon="speed3"></button>
+          </div>
+        </div>
+        <div class="set-row">
+          <span class="set-label"><span data-icon="ram"></span><span data-i18n="settings.memory"></span><button type="button" class="info-btn" id="memory-info" data-icon="info" data-i18n-tip="common.explain"></button></span>
+          <div class="seg" id="memories" role="radiogroup">
+            <button type="button" data-memory="lean" data-icon="leaf"></button>
+            <button type="button" data-memory="fast" data-icon="bolt"></button>
+          </div>
+        </div>
+        <label class="set-row">
+          <span class="set-label" id="free-gpu-label"><span data-icon="chip"></span><span data-i18n="settings.free_gpu_short"></span></span>
+          <input type="checkbox" class="switch" id="free-gpu">
+        </label>
+        <label class="set-row">
+          <span class="set-label" id="zips-label"><span data-icon="archive"></span><span data-i18n="settings.zips"></span></span>
+          <input type="checkbox" class="switch" id="search-zips">
+        </label>
+        <label class="set-row" id="autostart-row" hidden>
+          <span class="set-label"><span data-icon="power"></span><span data-i18n="settings.autostart"></span></span>
+          <input type="checkbox" class="switch" id="autostart">
+        </label>
+        <div class="set-row">
+          <span class="set-label"><span data-icon="globe"></span><span data-i18n="settings.language_title"></span></span>
+          <select id="language" class="select" data-i18n-aria="settings.language_title"></select>
+        </div>
+        <div class="set-row">
+          <span class="set-label"><span data-icon="contrast"></span><span data-i18n="settings.theme"></span></span>
+          <div class="seg" id="themes" role="radiogroup">
+            <button type="button" data-theme-mode="auto" data-icon="monitor" data-i18n-tip="theme.auto"></button>
+            <button type="button" data-theme-mode="light" data-icon="sun" data-i18n-tip="theme.light"></button>
+            <button type="button" data-theme-mode="dark" data-icon="moon" data-i18n-tip="theme.dark"></button>
+          </div>
+        </div>
+        <div class="set-row">
+          <span class="set-label"><span data-icon="update"></span><span data-i18n="settings.updates"></span><span class="version" id="version"></span></span>
+          <span class="set-controls">
+            <span class="update-state" id="update-state"></span>
+            <button class="icon-btn small" id="check-now" data-icon="refresh" data-i18n-tip="update.check"></button>
+            <input type="checkbox" class="switch" id="check-updates">
+          </span>
+        </div>
+        <div class="set-row">
+          <span class="set-label"><span data-icon="bug"></span><span data-i18n="settings.feedback"></span></span>
+          <button class="icon-btn small" id="report-bug" data-icon="external" data-i18n-tip="settings.report_bug"></button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="meters">
+          <div class="meter" id="meter-cpu"><div class="meter-row"><span>CPU</span><b id="m-cpu">–</b></div><div class="meter-bar"><i id="mb-cpu"></i></div></div>
+          <div class="meter" id="meter-ram"><div class="meter-row"><span>RAM</span><b id="m-ram">–</b></div><div class="meter-bar"><i id="mb-ram"></i></div></div>
+          <div class="meter" id="meter-gpu"><div class="meter-row"><span>GPU</span><b id="m-gpu">–</b></div><div class="meter-bar"><i id="mb-gpu"></i></div></div>
+          <div class="meter" id="meter-vram"><div class="meter-row"><span>VRAM</span><b id="m-vram">–</b></div><div class="meter-bar"><i id="mb-vram"></i></div></div>
+        </div>
+        <div class="device" id="device"></div>
+      </div>
+
+      <div class="card">
+        <div class="set-row">
+          <span class="set-label"><span data-icon="keyboard"></span><span data-i18n="settings.keyboard_title"></span></span>
+        </div>
+        <div class="keys" id="keys"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="lightbox" id="lightbox" hidden>
+  <button class="lb-btn lb-close" id="lb-close" data-icon="close" data-i18n-tip="common.close"></button>
+  <button class="lb-btn" id="lb-prev" data-icon="chevronLeft" data-i18n-tip="common.previous"></button>
+  <figure>
+    <img id="lb-img" alt="">
+    <figcaption>
+      <div class="lb-name" id="lb-name"></div>
+      <div class="actions" id="lb-actions"></div>
+    </figcaption>
+  </figure>
+  <button class="lb-btn" id="lb-next" data-icon="chevronRight" data-i18n-tip="common.next"></button>
+</div>
+
+<div class="modal" id="update-modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="um-title">
+    <button class="icon-btn small modal-x" id="um-later" data-icon="close" data-i18n-tip="update.later"></button>
+    <div class="modal-head">
+      <img class="logo" src="/static/pig.svg" alt="">
+      <div><h3 id="um-title"></h3><p id="um-sub"></p></div>
+    </div>
+    <pre class="notes" id="um-notes"></pre>
+    <p class="modal-hint" id="um-hint" hidden></p>
+    <p class="error" id="um-error" hidden></p>
+    <div class="modal-actions">
+      <button class="icon-btn" id="um-github" data-icon="external" data-i18n-tip="update.notes"></button>
+      <button class="icon-btn primary big" id="um-apply" data-icon="download" data-i18n-tip="update.apply"></button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="folder-modal" hidden>
+  <div class="modal-card folder-info" role="dialog" aria-modal="true" aria-labelledby="fm-name">
+    <button class="icon-btn small modal-x" id="fm-close" data-icon="close" data-i18n-tip="common.close"></button>
+    <div class="modal-head">
+      <span class="folder-icon big" data-icon="folder"></span>
+      <div class="fm-title"><h3 id="fm-name"></h3><p id="fm-path"></p></div>
+    </div>
+    <div class="fm-numbers" id="fm-numbers"></div>
+    <div class="fm-problems" id="fm-problems" hidden>
+      <div class="fm-problems-head">
+        <span class="fm-label" data-i18n="folder.unreadable_title"></span>
+        <button class="icon-btn small" id="fm-retry" data-icon="refresh" data-i18n-tip="folder.retry"></button>
+      </div>
+      <div class="fm-list" id="fm-list"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="confirm-modal" hidden>
+  <div class="modal-card confirm" role="alertdialog" aria-modal="true" aria-labelledby="cm-title" aria-describedby="cm-text">
+    <div class="modal-head">
+      <img class="logo" src="/static/pig.svg" alt="">
+      <div><h3 id="cm-title"></h3><p id="cm-text"></p></div>
+    </div>
+    <div class="modal-actions">
+      <button class="icon-btn" id="cm-cancel" data-icon="close" data-i18n-tip="common.cancel"></button>
+      <button class="icon-btn danger-solid" id="cm-ok" data-icon="trash"></button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="help" hidden>
+  <div class="modal-card help" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <button class="icon-btn small modal-x" id="help-close" data-icon="close" data-i18n-tip="common.close"></button>
+    <div class="modal-head">
+      <img class="logo" src="/static/pig.svg" alt="">
+      <div><h3 id="help-title"></h3><p class="help-intro" id="help-intro"></p></div>
+    </div>
+    <div class="help-body" id="help-body"></div>
+  </div>
+</div>
+
+<div class="menu" id="scope-menu" hidden></div>
+<div class="menu ctx" id="ctx-menu" role="menu" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
