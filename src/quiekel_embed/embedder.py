@@ -1,8 +1,11 @@
 """EmbeddingGemma 2 wrapper. One model instance shared by indexing and search.
 
-The model normally lives on the GPU. It can move to the CPU to give video memory
-back (when video memory runs low, or when there is nothing to index); searches keep working
-there. Batches shrink automatically when video memory is tight.
+Two engines run it. With an NVIDIA card, PyTorch on CUDA: the model normally lives on the GPU
+and can move to the CPU to give video memory back (when video memory runs low, or when there
+is nothing to index); searches keep working there. With any other card, or none, ONNX Runtime
+(onnx_engine.py): on the graphics card through DirectML, else on the processor. Which one is
+installed is the installer's choice; QUIEKEL_EMBED_ENGINE=torch|onnx picks one when both are.
+Batches shrink automatically when video memory is tight.
 """
 
 import logging
@@ -35,7 +38,29 @@ def model_cached() -> bool:
 
 
 def _is_oom(e: BaseException) -> bool:
-    return type(e).__name__ == "OutOfMemoryError" or "out of memory" in str(e).lower()
+    text = str(e).lower()
+    return (type(e).__name__ == "OutOfMemoryError" or "out of memory" in text
+            or "e_outofmemory" in text or "8007000e" in text)  # (DirectML's way of saying it)
+
+
+def _wanted_engine() -> str:
+    """"torch" or "onnx": PyTorch when it can use an NVIDIA card, else ONNX Runtime if installed."""
+    import importlib.util
+
+    choice = os.environ.get("QUIEKEL_EMBED_ENGINE", "").lower()
+    has_torch = importlib.util.find_spec("torch") is not None
+    from . import onnx_engine
+
+    if choice in ("torch", "onnx"):
+        return choice
+    if has_torch:
+        import torch
+
+        if torch.cuda.is_available() or not onnx_engine.available():
+            return "torch"
+    if onnx_engine.available():
+        return "onnx"
+    raise RuntimeError("No AI engine is installed: run the installer again")
 
 
 def _drop(ahead):
@@ -54,6 +79,8 @@ class Embedder:
         self.cuda = False
         self.on_gpu = False
         self.gpu_name = ""
+        self.engine = ""  # cuda | directml | cpu: where the model runs (the page explains it)
+        self._onnx = False
         self._gpu_dtypes: dict[str, object] = {}
         # Set by the indexer: called with the seconds each batch took, to pace itself.
         self.pace: Callable[[float], None] | None = None
@@ -76,7 +103,7 @@ class Embedder:
         if not self.ready:
             return ""
         if self.on_gpu:
-            return self.gpu_name
+            return f"{self.gpu_name} (DirectML)" if self._onnx else self.gpu_name
         return "CPU (GPU memory released)" if self.cuda else "CPU"
 
     def load(self, prefer_gpu: bool = True):
@@ -89,6 +116,36 @@ class Embedder:
         if self._model is not None:
             return
         self.error = None
+        try:
+            engine = _wanted_engine()
+        except Exception as e:
+            self.status, self.error = "error", str(e)
+            raise
+        if engine == "onnx":
+            self._load_onnx(prefer_gpu)
+        else:
+            self._load_torch(prefer_gpu)
+
+    def _load_onnx(self, prefer_gpu: bool):
+        from . import onnx_engine
+
+        try:
+            card = onnx_engine.best_card() if onnx_engine.directml() else None
+            gpu = card is not None and prefer_gpu
+            self.status = "loading" if onnx_engine.cached(gpu) else "downloading"
+            self._model = onnx_engine.OnnxModel(gpu, card[0] if gpu else 0)
+            self._onnx, self.cuda, self.on_gpu = True, False, gpu
+            self.gpu_name = card[1] if card else ""
+            self.engine = "directml" if gpu else "cpu"
+            self.status = "ready"
+            log.info("Model ready on %s (ONNX Runtime)", self.device)
+        except Exception as e:
+            self.status = "error"
+            self.error = f"{type(e).__name__}: {e}"
+            log.exception("Model failed to load")
+            raise
+
+    def _load_torch(self, prefer_gpu: bool):
         cached = model_cached()
         self.status = "loading" if cached else "downloading"
         if cached:
@@ -120,6 +177,8 @@ class Embedder:
                 if not on_gpu:
                     self._move(lambda name, t: ("cpu", torch.float32 if t.is_floating_point() else t.dtype))
             self.on_gpu = on_gpu
+            self._onnx = False
+            self.engine = "cuda" if self.cuda else "cpu"
             self.status = "ready"
             log.info("Model ready on %s", self.device)
         except Exception as e:
@@ -139,6 +198,7 @@ class Embedder:
             self._model = None
             self.on_gpu = False
             self.status = "asleep"
+            self.engine = ""
         gc.collect()
         self.free_cache()
         log.info("Model unloaded (%s)", why)
@@ -146,8 +206,12 @@ class Embedder:
     # ---- GPU <-> CPU ------------------------------------------------------
 
     def release_gpu(self, why: str):
-        """Move the model to the CPU and hand its video memory back to other apps."""
+        """Move the model to the CPU and hand its video memory back to other apps. (ONNX Runtime
+        can't move it: it lets go of it, and loads it again when it's needed.)"""
         if not (self.ready and self.on_gpu):
+            return
+        if self._onnx:
+            self.unload(why)
             return
         import torch
 
@@ -161,7 +225,7 @@ class Embedder:
 
     def use_gpu(self) -> bool:
         """Move the model back to the GPU. False if there isn't enough video memory."""
-        if not self.ready or self.on_gpu or not self.cuda:
+        if not self.ready or self.on_gpu or not self.cuda or self._onnx:
             return self.on_gpu
         import torch
 
@@ -197,7 +261,7 @@ class Embedder:
                             store[name] = t.to(device=device, dtype=dtype)
 
     def free_cache(self):
-        if self.cuda:
+        if self.cuda and not self._onnx:
             import torch
 
             torch.cuda.empty_cache()
@@ -211,6 +275,9 @@ class Embedder:
 
     def _prep(self, items: list, prompt: str | None):
         """Model-ready features for one batch."""
+        if self._onnx:
+            with self._prep_lock:
+                return self._model.preprocess(items, prompt=prompt)
         import torch
 
         kwargs = {}
@@ -241,6 +308,9 @@ class Embedder:
         return self._prep(items, prompt)
 
     def _forward(self, features) -> np.ndarray:
+        if self._onnx:
+            with self._lock:
+                return self._model.embed(features)
         import torch
         from sentence_transformers.util import batch_to_device, truncate_embeddings
 

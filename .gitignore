@@ -10,3 +10,6 @@ data/
 .env.*
 *.pem
 *.key
+
+# The AI engine this copy was installed with (see install.ps1)
+engine.txt

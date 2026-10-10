@@ -206,6 +206,7 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
             "model": {
                 "id": config.MODEL_ID, "status": embedder.status, "error": embedder.error,
                 "on_gpu": embedder.on_gpu, "cuda": embedder.cuda, "gpu_name": embedder.gpu_name,
+                "engine": embedder.engine,
                 "dim": config.EMBED_DIM,
             },
             "progress": indexer.progress(),

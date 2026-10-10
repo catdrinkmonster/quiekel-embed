@@ -3,7 +3,8 @@
 Run by the app (standard library only, isolated interpreter):
   1. wait for the app process to exit,
   2. fast-forward the checkout to the release tag (never a merge),
-  3. install exactly the locked, hash-checked dependencies (`uv sync --locked`),
+  3. install exactly the locked, hash-checked dependencies (`uv sync --locked`), with the AI
+     engine the installer chose (engine.txt),
   4. on any failure, roll back to the previous commit,
   5. write the outcome for the app to report, and start the app again.
 """
@@ -39,6 +40,16 @@ def run(cmd: list[str], cwd: str) -> tuple[bool, str]:
     return out.returncode == 0, (out.stderr or out.stdout).strip()[-2000:]
 
 
+def engine_groups(root: str) -> list[str]:
+    """PyTorch is the default engine; a copy installed for DirectML keeps DirectML."""
+    try:
+        with open(os.path.join(root, "engine.txt"), encoding="utf-8") as f:
+            engine = f.read().strip().lower()
+    except OSError:
+        engine = ""
+    return ["--no-group", "nvidia", "--group", "directml"] if engine == "directml" else []
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--wait-pid", type=int, required=True)
@@ -61,14 +72,14 @@ def main():
         if not ok:
             result["error"] = f"Fast-forward failed: {out}"
         else:
-            ok, out = run([a.uv, "sync", "--locked", "--project", a.root], a.root)
+            ok, out = run([a.uv, "sync", "--locked", "--project", a.root, *engine_groups(a.root)], a.root)
             if ok:
                 result["ok"] = True
             else:
                 result["error"] = f"Installing dependencies failed, so the update was rolled back: {out}"
                 # Safe: the app checked there were no uncommitted changes before updating.
                 run(["git", "-C", a.root, "reset", "--hard", before], a.root)
-                run([a.uv, "sync", "--locked", "--project", a.root], a.root)
+                run([a.uv, "sync", "--locked", "--project", a.root, *engine_groups(a.root)], a.root)
 
     try:
         os.makedirs(os.path.dirname(a.result), exist_ok=True)
