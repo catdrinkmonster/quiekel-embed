@@ -1011,16 +1011,18 @@ function renderSettings({ settings, resources, model }) {
   meter("cpu", m.cpu_others, t("settings.cpu"));
   meter("ram", m.ram_total_gb ? (1 - m.ram_free_gb / m.ram_total_gb) * 100 : null,
     `${t("settings.memory")}${m.ram_total_gb ? `\n${free(m.ram_free_gb)}` : ""}`);
-  meter("gpu", m.gpu_others, t("settings.gpu"));
-  meter("vram", m.vram_total_gb ? (1 - m.vram_free_gb / m.vram_total_gb) * 100 : null,
-    `${t("settings.vram")}${m.vram_total_gb ? `\n${free(m.vram_free_gb)}` : ""}`);
+  // Without an NVIDIA card there's no graphics card to measure (or to use): say so.
+  const nvidia = m.vram_total_gb != null;
+  meter("gpu", m.gpu_others, nvidia ? t("settings.gpu") : t("settings.no_nvidia"), nvidia ? t("settings.na") : "–");
+  meter("vram", nvidia ? (1 - m.vram_free_gb / m.vram_total_gb) * 100 : null,
+    nvidia ? `${t("settings.vram")}\n${free(m.vram_free_gb)}` : t("settings.no_nvidia"), nvidia ? t("settings.na") : "–");
   renderDevice(model, m);
 }
 
-function meter(name, used, tip) {
+function meter(name, used, tip, unknown = t("settings.na")) {
   const known = used != null;
   const frac = known ? Math.max(0, Math.min(1, used / 100)) : 0;
-  $(`m-${name}`).textContent = known ? pct(used) : t("settings.na");
+  $(`m-${name}`).textContent = known ? pct(used) : unknown;
   const bar = $(`mb-${name}`);
   bar.style.width = `${Math.max(frac * 100, 2)}%`;
   bar.className = frac > 0.85 ? "high" : frac > 0.6 ? "mid" : "";
@@ -1037,6 +1039,7 @@ function renderDevice(model, m) {
   if (model.status === "ready") {
     const where = model.on_gpu ? model.gpu_name : t(model.cuda ? "device.cpu_released" : "device.cpu");
     chips.push(stat("chip", model.on_gpu ? shortGpu(model.gpu_name) : "CPU", t("settings.model_on", { device: where })));
+    if (!model.cuda) chips.push(stat("info", t("settings.no_nvidia"), t("settings.cpu_only"))); // why indexing is slow
   } else {
     const k = { loading: "model.loading", downloading: "model.downloading", error: "model.error" }[model.status] || "model.not_loaded";
     chips.push(stat("hourglass", "", t("settings.model_state", { state: t(k) })));
