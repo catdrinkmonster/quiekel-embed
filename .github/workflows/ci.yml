@@ -25,7 +25,13 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - name: Install exactly the locked dependencies (minus CUDA PyTorch, which the tests don't use)
+      - name: Install exactly the locked dependencies (minus PyTorch's CUDA build, 2.5 GB)
         run: uv sync --locked --no-install-package torch --no-install-package torchvision
+      # These machines have no NVIDIA card: the same PyTorch version's CPU build (about 200 MB)
+      # runs every test, the model's own too.
+      - name: Add the CPU build of the locked PyTorch
+        run: |
+          $torch = uv run --no-sync python -c "import tomllib; print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package'] if p['name'] == 'torch').split('+')[0])"
+          uv pip install "torch==$torch" --index-url https://download.pytorch.org/whl/cpu
       - name: Test
         run: uv run --no-sync pytest -q
