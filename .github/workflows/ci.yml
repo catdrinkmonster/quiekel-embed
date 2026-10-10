@@ -25,13 +25,28 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - name: Install exactly the locked dependencies (minus PyTorch's CUDA build, 2.5 GB)
-        run: uv sync --locked --no-install-package torch --no-install-package torchvision
+      - name: Install exactly the locked dependencies, both AI engines (minus PyTorch's CUDA build, 2.5 GB)
+        run: uv sync --locked --group directml --no-install-package torch --no-install-package torchvision
       # These machines have no NVIDIA card: the same PyTorch version's CPU build (about 200 MB)
       # runs every test, the model's own too.
       - name: Add the CPU build of the locked PyTorch
         run: |
           $torch = uv run --no-sync python -c "import tomllib; print(next(p['version'] for p in tomllib.load(open('uv.lock', 'rb'))['package'] if p['name'] == 'torch').split('+')[0])"
           uv pip install "torch==$torch" --index-url https://download.pytorch.org/whl/cpu
+      - name: Test
+        run: uv run --no-sync pytest -q
+
+  # What a PC without an NVIDIA card gets: the app must work with no PyTorch at all.
+  test-directml:
+    name: test (DirectML engine, no PyTorch)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install exactly the locked dependencies, as the installer does without an NVIDIA card
+        run: uv sync --locked --no-group nvidia --group directml
       - name: Test
         run: uv run --no-sync pytest -q

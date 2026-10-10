@@ -7,10 +7,10 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-    "sentence-transformers[image]>=6.1.0",
-    "transformers",
-    "torch",
-    "torchvision",
+    "numpy",
+    "scikit-learn",
+    "huggingface-hub",
+    "tokenizers",
     "lancedb",
     "pyarrow",
     "fastapi",
@@ -35,8 +35,14 @@ Homepage = "https://github.com/catdrinkmonster/quiekel-embed"
 Issues = "https://github.com/catdrinkmonster/quiekel-embed/issues"
 Security = "https://github.com/catdrinkmonster/quiekel-embed/security"
 
+# The AI engine: one of these two. NVIDIA cards get PyTorch with CUDA (the default, so a plain
+# `uv sync` keeps it); any other card, or none, gets ONNX Runtime with DirectML, 2.5 GB smaller:
+# `uv sync --no-group nvidia --group directml`. The installer picks one and notes it in
+# engine.txt, which updates follow.
 [dependency-groups]
 dev = ["pytest", "httpx"]
+nvidia = ["sentence-transformers[image]>=6.1.0", "transformers", "torch", "torchvision"]
+directml = ["onnxruntime-directml>=1.24.4; sys_platform == 'win32'"]
 
 [project.scripts]
 quiekel-embed = "quiekel_embed.app:main"
@@ -58,6 +64,7 @@ packages = ["src/quiekel_embed"]
 # package, where uninstalling or resetting that Python would delete it.
 [tool.uv]
 python-preference = "only-managed"
+default-groups = ["dev", "nvidia"]
 
 # CUDA build of PyTorch, for NVIDIA GPUs (CUDA 12.8).
 [tool.uv.sources]

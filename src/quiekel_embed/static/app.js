@@ -1010,11 +1010,11 @@ function renderSettings({ settings, resources, model }) {
   meter("cpu", m.cpu_others, t("settings.cpu"));
   meter("ram", m.ram_total_gb ? (1 - m.ram_free_gb / m.ram_total_gb) * 100 : null,
     `${t("settings.memory")}${m.ram_total_gb ? `\n${free(m.ram_free_gb)}` : ""}`);
-  // Without an NVIDIA card there's no graphics card to measure (or to use): say so.
+  // Only NVIDIA cards report how busy they are: other cards, or none, show a dash.
   const nvidia = m.vram_total_gb != null;
-  meter("gpu", m.gpu_others, nvidia ? t("settings.gpu") : t("settings.no_nvidia"), nvidia ? t("settings.na") : "–");
+  meter("gpu", m.gpu_others, nvidia ? t("settings.gpu") : t("settings.gpu_unmeasured"), nvidia ? t("settings.na") : "–");
   meter("vram", nvidia ? (1 - m.vram_free_gb / m.vram_total_gb) * 100 : null,
-    nvidia ? `${t("settings.vram")}\n${free(m.vram_free_gb)}` : t("settings.no_nvidia"), nvidia ? t("settings.na") : "–");
+    nvidia ? `${t("settings.vram")}\n${free(m.vram_free_gb)}` : t("settings.gpu_unmeasured"), nvidia ? t("settings.na") : "–");
   renderDevice(model, m);
 }
 
@@ -1031,14 +1031,15 @@ function meter(name, used, tip, unknown = t("settings.na")) {
 // Where the model runs, plus "you're away", as small chips.
 function renderDevice(model, m) {
   const away = m.idle_s >= 180;
-  const key = JSON.stringify([model.status, model.on_gpu, model.cuda, model.gpu_name, away, i18n.lang]);
+  const key = JSON.stringify([model.status, model.on_gpu, model.cuda, model.gpu_name, model.engine, away, i18n.lang]);
   if (key === state.deviceKey) return;
   state.deviceKey = key;
   const chips = [];
   if (model.status === "ready") {
-    const where = model.on_gpu ? model.gpu_name : t(model.cuda ? "device.cpu_released" : "device.cpu");
+    const card = model.engine === "directml" ? `${model.gpu_name} (DirectML)` : model.gpu_name;
+    const where = model.on_gpu ? card : t(model.cuda ? "device.cpu_released" : "device.cpu");
     chips.push(stat("chip", model.on_gpu ? shortGpu(model.gpu_name) : "CPU", t("settings.model_on", { device: where })));
-    if (!model.cuda) chips.push(stat("info", t("settings.no_nvidia"), t("settings.cpu_only"))); // why indexing is slow
+    if (model.engine === "cpu") chips.push(stat("info", t("settings.no_gpu"), t("settings.cpu_only"))); // why indexing is slow
   } else {
     const k = { loading: "model.loading", downloading: "model.downloading", error: "model.error" }[model.status] || "model.not_loaded";
     chips.push(stat("hourglass", "", t("settings.model_state", { state: t(k) })));
