@@ -20,8 +20,8 @@ Notes for anyone changing this repository, people and coding agents alike.
 - Run the app with `uv run quiekel-embed-app`, or `uv run quiekel-embed` for the browser version.
 - Every UI text lives in `src/quiekel_embed/static/i18n.json`: every key in English, German,
   French and Spanish.
-- Tests must pass. CI runs them on Windows without PyTorch, so tests that need it skip themselves
-  (`pytest.importorskip("torch")`).
+- Tests must pass. CI runs all of them on Windows for every pull request, with PyTorch's CPU build
+  (the machines have no NVIDIA card).
 - The app stays gentle on the PC: no windows or focus changes over fullscreen apps, and GPU work
   waits while one runs.
 
