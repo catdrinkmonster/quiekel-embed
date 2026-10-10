@@ -46,7 +46,7 @@ class FakeEmbedder:
 class FakeGovernor:
     def __init__(self):
         self.decision = SimpleNamespace(duty=1.0, level="full", code="full", params={})
-        self.metrics = SimpleNamespace(ram_free_gb=16.0, vram_free_gb=None, fullscreen=False)
+        self.metrics = SimpleNamespace(ram_free_gb=16.0, vram_free_gb=None)
 
     def pace(self, *args, **kwargs):
         pass
@@ -97,22 +97,22 @@ def test_reading_ahead_indexes_every_file_in_order(make_indexer, tmp_path):
     assert len(indexer.store.file_ids_under(str(folder))) == 34  # the 6 empty notes are skipped
 
 
-def test_waiting_out_a_game_hands_the_gpu_back(make_indexer, tmp_path):
+def test_waiting_for_video_memory_hands_the_gpu_back(make_indexer, tmp_path):
     indexer = make_indexer(FakeEmbedder(on_gpu=True))
     folder = tmp_path / "docs"
     files = notes(folder, 10)
     fid = indexer.store.add_folder(str(folder))
     gov = indexer.governor
-    gov.decision.duty, gov.metrics.fullscreen = 0.0, True  # a game is running: everything waits
+    gov.decision.duty, gov.metrics.vram_free_gb = 0.0, 0.2  # a game took the video memory: everything waits
 
     t = in_thread(lambda: indexer._index_files(fid, str(folder), files))
     for _ in range(50):
         if indexer.embedder.released:
             break
         time.sleep(0.1)
-    assert indexer.embedder.released, "the model kept its video memory during the game"
+    assert indexer.embedder.released, "the model kept its video memory although the game needed it"
 
-    gov.decision.duty, gov.metrics.fullscreen = 1.0, False  # the game is over
+    gov.decision.duty, gov.metrics.vram_free_gb = 1.0, 4.0  # the memory is back
     t.join(10)
     assert not t.is_alive()
     assert indexer.embedder.on_gpu
@@ -218,10 +218,10 @@ def test_lean_memory_lets_the_model_go_when_unused_and_wakes_it_for_work(make_in
     assert e.ready and e.loads == 1
 
 
-def test_lean_memory_lets_the_model_go_entirely_for_a_game(make_indexer):
+def test_lean_memory_lets_the_model_go_entirely_when_video_memory_runs_out(make_indexer):
     e = FakeEmbedder(on_gpu=True)
     ix = make_indexer(e)
-    ix.governor.metrics.fullscreen, ix.governor.metrics.vram_free_gb = True, 4.0
+    ix.governor.metrics.vram_free_gb = 0.2
     ix._manage_device(working=False)
     assert e.released and not e.unloaded  # fast: into RAM, ready for the next search
     e.on_gpu, e.released = True, []

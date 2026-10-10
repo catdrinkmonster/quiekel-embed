@@ -1,10 +1,13 @@
 """Resource governor: decides how hard background indexing may run right now.
 
 Every two seconds it samples CPU, memory, GPU load from *other* processes, free
-video memory, battery, whether you are away, and whether a game or fullscreen app
-is in front. It turns that into a duty cycle (1.0 = full speed, 0 = paused) plus a
-plain-language reason for the UI. The indexer calls `pace()` after each unit of
-work and sleeps as much as the duty cycle asks.
+video memory, battery and whether you are away. It turns that into a duty cycle
+(1.0 = full speed, 0 = paused) plus a plain-language reason for the UI. The indexer
+calls `pace()` after each unit of work and sleeps as much as the duty cycle asks.
+
+Indexing only stops when memory or video memory runs out. Other apps, games included,
+make it slower (how much is the speed setting's choice), never stop it: like a
+download, it keeps going in the background.
 """
 
 import ctypes
@@ -25,7 +28,6 @@ log = logging.getLogger(__name__)
 MODES = ("gentle", "balanced", "full")  # names and descriptions live in i18n.json
 DEFAULT_MODE = "balanced"
 AWAY_AFTER_S = 180  # no keyboard/mouse input for this long counts as "away"
-FULLSCREEN_HOLD_S = 15  # keep treating a game as running through short alt-tabs
 
 
 @dataclass
@@ -37,7 +39,6 @@ class Metrics:
     vram_free_gb: float | None = None
     vram_total_gb: float | None = None
     on_battery: bool = False
-    fullscreen: bool = False
     idle_s: float = 0.0
 
 
@@ -68,8 +69,6 @@ def decide(mode: str, m: Metrics) -> Decision:
     if mode != "full":
         gentle = mode == "gentle"
         away = m.idle_s >= AWAY_AFTER_S
-        if m.fullscreen:
-            caps.append((0.0, "fullscreen", {}))
         if m.on_battery:
             caps.append((0.0 if gentle else 0.25, "battery", {}))
 
@@ -101,49 +100,8 @@ def decide(mode: str, m: Metrics) -> Decision:
 
 # ---- Windows signals -------------------------------------------------------
 
-_SHELL_CLASSES = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
-
-
-class _MONITORINFO(ctypes.Structure):
-    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
-                ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
-
-
 class _LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
-
-
-def foreground_fullscreen() -> bool:
-    """True when a game, video or presentation fills the screen (not just a maximized window)."""
-    if os.name != "nt":
-        return False
-    try:
-        user32 = ctypes.windll.user32
-        state = ctypes.c_int()
-        # 3 = exclusive fullscreen Direct3D, 4 = presentation mode
-        if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state)) == 0 \
-                and state.value in (3, 4):
-            return True
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd or user32.IsZoomed(hwnd):
-            return False
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if pid.value == os.getpid():
-            return False
-        cls = ctypes.create_unicode_buffer(256)
-        user32.GetClassNameW(hwnd, cls, 256)
-        if cls.value in _SHELL_CLASSES:
-            return False
-        rect = wintypes.RECT()
-        user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        info = _MONITORINFO(cbSize=ctypes.sizeof(_MONITORINFO))
-        user32.GetMonitorInfoW(user32.MonitorFromWindow(hwnd, 2), ctypes.byref(info))
-        mon = info.rcMonitor
-        return (rect.left <= mon.left and rect.top <= mon.top
-                and rect.right >= mon.right and rect.bottom >= mon.bottom)
-    except (AttributeError, OSError):
-        return False
 
 
 def idle_seconds() -> float:
@@ -207,7 +165,6 @@ class Governor:
         self._proc = psutil.Process()
         self._ncpu = psutil.cpu_count() or 1
         self._nvml = _Nvml.open()
-        self._fullscreen_until = 0.0
         self._logged = -60.0
         self._lock = threading.Lock()
         self.metrics = Metrics()
@@ -234,8 +191,6 @@ class Governor:
         total = psutil.cpu_percent(None)
         own = self._proc.cpu_percent(None) / self._ncpu
         battery = psutil.sensors_battery()
-        if foreground_fullscreen():
-            self._fullscreen_until = now + FULLSCREEN_HOLD_S
         gpu_others = vram_free = vram_total = None
         if self._nvml:
             try:
@@ -252,7 +207,6 @@ class Governor:
             vram_free_gb=vram_free,
             vram_total_gb=vram_total,
             on_battery=bool(battery and not battery.power_plugged),
-            fullscreen=now < self._fullscreen_until,
             idle_s=idle_seconds(),
         )
         d = decide(self._get_mode(), m)

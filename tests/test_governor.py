@@ -54,11 +54,11 @@ def test_balanced_leaves_headroom_while_user_is_active():
     assert 0.5 < d.duty < 1.0 and d.level == "normal"
 
 
-def test_fullscreen_game_pauses_unless_full_mode():
-    m = Metrics(fullscreen=True, idle_s=0)
-    assert decide("balanced", m).duty == 0
-    assert decide("gentle", m).duty == 0
-    assert decide("full", m).duty == 1.0
+def test_only_running_out_of_memory_stops_indexing():
+    busy = Metrics(cpu_others=95, gpu_others=95, idle_s=0)  # a game, say
+    assert decide("balanced", busy).duty > 0 and decide("gentle", busy).duty > 0  # slower, never stopped
+    assert decide("balanced", Metrics(ram_free_gb=0.5, idle_s=AWAY)).duty == 0
+    assert decide("full", Metrics(vram_free_gb=0.2, vram_total_gb=8.0)).duty == 0
 
 
 def test_busy_cpu_and_gpu_throttle_balanced():
