@@ -67,8 +67,9 @@ class WatchIn(BaseModel):
     watch: bool
 
 
-class PathIn(BaseModel):
-    path: str
+class ExampleIn(BaseModel):
+    reason: str
+    index: int
 
 
 class SettingsIn(BaseModel):
@@ -589,15 +590,15 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
         subprocess.Popen(f'explorer /select,"{where[0] if where else path}"')  # an archive: show the archive
         return {"ok": True}
 
-    @app.post("/api/reveal-path")
-    def reveal_path(body: PathIn):
-        """Show a file the index doesn't hold (one that isn't searched, say) in Explorer. Only
-        inside the indexed folders; for a file inside an archive, the archive."""
-        path = body.path
-        if '"' in path or not any(is_inside(path, f["path"]) for f in store.folders()):
+    @app.post("/api/folders/{folder_id}/reveal")
+    def reveal_example(folder_id: int, body: ExampleIn):
+        """Show in Explorer one of the files a folder's details name for a reason (files the index
+        doesn't hold). The page says which one; the path comes from the scan's own report."""
+        examples = store.details(folder_id)["report"].get(body.reason, {}).get("examples", [])
+        if not 0 <= body.index < len(examples):
             fail(404, "file_not_found")
-        where = archive.split(path)
-        target = where[0] if where else path
+        where = archive.split(examples[body.index])
+        target = where[0] if where else examples[body.index]  # in an archive: show the archive
         if not os.path.exists(target):
             fail(404, "file_not_found")
         subprocess.Popen(f'explorer /select,"{target}"')

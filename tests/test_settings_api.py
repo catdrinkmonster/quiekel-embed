@@ -122,3 +122,19 @@ def test_folder_details_say_why_files_are_not_searched(client):
     assert d["errors"] == []
     assert client.get("/api/status").json()["folders"][0]["unsearched"] == 3
     assert client.get("/api/folders/999/details").status_code == 404
+
+
+def test_files_left_out_are_shown_by_where_the_details_name_them(client, tmp_path, monkeypatch):
+    import subprocess
+
+    store = client.backend.store
+    folder = store.add_folder(str(tmp_path))
+    video = tmp_path / "urlaub.mp4"
+    video.write_bytes(b"x")
+    store.mark_scanned(folder, {"media": {"n": 1, "examples": [str(video)], "exts": {".mp4": 1}}})
+    opened = []
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, *a, **k: opened.append(cmd))
+    reveal = lambda reason, index: client.post(f"/api/folders/{folder}/reveal",  # noqa: E731
+                                               json={"reason": reason, "index": index}, headers=H).status_code
+    assert reveal("media", 0) == 200 and opened == [f'explorer /select,"{video}"']
+    assert reveal("media", 1) == reveal("type", 0) == reveal("media", -1) == 404  # only what the details name
