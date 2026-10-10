@@ -16,7 +16,7 @@
     <nav class="nav">
       <a href="#/search" data-page="search" data-icon="search" data-i18n-tip="nav.search"></a>
       <a href="#/map" data-page="map" data-icon="cube" id="nav-map"></a>
-      <a href="#/folders" data-page="folders" data-icon="folder" data-i18n-tip="nav.folders"><span class="count" id="nav-count"></span></a>
+      <a href="#/folders" data-page="folders" data-icon="folder" data-i18n-tip="nav.folders"><span class="nav-badge" id="nav-badge" hidden></span></a>
     </nav>
 
     <div class="rail-foot">
@@ -238,17 +238,20 @@
       <span class="folder-icon big" data-icon="folder"></span>
       <div class="fm-title"><h3 id="fm-name"></h3><p id="fm-path"></p></div>
     </div>
-    <div class="fm-numbers" id="fm-numbers"></div>
-    <div class="fm-problems" id="fm-problems" hidden>
-      <div class="fm-problems-head">
-        <span class="fm-label" data-i18n="folder.unreadable_title"></span>
-        <button class="icon-btn small" id="fm-retry" data-icon="refresh" data-i18n-tip="folder.retry"></button>
+    <div class="fm-body">
+      <div class="fm-summary" id="fm-summary"></div>
+      <div class="fm-stats" id="fm-numbers"></div>
+      <div class="fm-section" id="fm-problems" hidden>
+        <div class="fm-section-head">
+          <span class="fm-label" data-i18n="folder.unreadable_title"></span>
+          <button class="icon-btn small" id="fm-retry" data-icon="refresh" data-i18n-tip="folder.retry"></button>
+        </div>
+        <div class="fm-list" id="fm-list"></div>
       </div>
-      <div class="fm-list" id="fm-list"></div>
-    </div>
-    <div class="fm-problems" id="fm-skips" hidden>
-      <div class="fm-problems-head"><span class="fm-label" data-i18n="folder.unsearched_title"></span></div>
-      <div class="fm-list" id="fm-reasons"></div>
+      <div class="fm-section" id="fm-skips" hidden>
+        <div class="fm-section-head"><span class="fm-label" data-i18n="folder.unsearched_title"></span></div>
+        <div class="fm-list" id="fm-reasons"></div>
+      </div>
     </div>
   </div>
 </div>

@@ -92,6 +92,7 @@ const ICONS = {
   mail: '<rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.5 7 12 13l8.5-6"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  bang: '<path d="M12 5.5v8M12 18v.5"/>',
   camera: '<path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.3l1.4-2h5.6l1.4 2h2.3A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.5" r="3.5"/>',
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.3-.9.8-.9 1.4v.3M12 16.6v.2"/>',
 };
@@ -445,6 +446,7 @@ function route() {
   closeScopeMenu();
   if (state.page === "search") $("q").focus();
   if (state.page === "map") openMap();
+  if (state.page === "folders" && state.last) showProblemsBadge(state.last.folders); // seen: the badge goes
 }
 
 window.addEventListener("hashchange", route);
@@ -590,6 +592,29 @@ function renderActivity({ model, progress: p, folders, resources }, phase) {
 
 // ---------- folders ----------
 
+// The folders badge says only that something new needs a look (files that couldn't be read), and
+// goes away once the folders were looked at. How many problems were already seen stays here.
+const BADGE_SEEN = "quiekel.problemsSeen";
+
+function problemsSeen() {
+  try { return Number(localStorage.getItem(BADGE_SEEN)) || 0; } catch { return 0; }
+}
+
+function setProblemsSeen(n) {
+  try { localStorage.setItem(BADGE_SEEN, String(n)); } catch {}
+}
+
+function showProblemsBadge(folders) {
+  const problems = folders.reduce((a, f) => a + f.errors, 0);
+  if (state.page === "folders" || problems < problemsSeen()) setProblemsSeen(problems);
+  const badge = $("nav-badge");
+  const show = problems > problemsSeen();
+  if (show === !badge.hidden) return;
+  badge.hidden = !show;
+  badge.replaceChildren(show ? icon("bang") : "");
+  setTip(badge.parentElement, show ? `${t("nav.folders")}: ${t("nav.problems")}` : t("nav.folders"));
+}
+
 const PHASE_STAT = {
   paused: ["pause", "activity.paused"],
   waiting: ["hourglass", "activity.waiting"],
@@ -603,12 +628,27 @@ function stat(name, text, tip, cls = "", onclick = null) {
   return el;
 }
 
+// The folder being worked on: a small ring that fills up as it's indexed (and turns while files
+// are still being looked for); paused or waiting, its icon.
+function phaseStat(phase, p) {
+  if (phase !== "indexing" && phase !== "scanning") {
+    return stat(PHASE_STAT[phase][0], "", t(PHASE_STAT[phase][1]), `phase ${phase}`);
+  }
+  const share = phase === "indexing" && p.total ? Math.min(1, (p.done || 0) / p.total) : null;
+  const ring = h("span", { class: `ring-mini${share == null ? " busy" : ""}` });
+  ring.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle class="t" cx="10" cy="10" r="7.5"/>'
+    + `<circle class="a" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray="${share == null ? 28 : Math.max(2, share * 100)} 100"/></svg>`;
+  const el = h("span", { class: "stat phase" }, ring, share == null ? "" : pct(share * 100));
+  setTip(el, t(PHASE_STAT[phase][1]));
+  return el;
+}
+
 function renderFolders(folders, progress, phase) {
   const active = phase ? progress.folder : null;
-  const key = JSON.stringify([folders, active, phase, Math.floor(Date.now() / 60000)]);
+  const key = JSON.stringify([folders, active, phase, progress.done, progress.total, Math.floor(Date.now() / 60000)]);
   const hadFolders = state.hasFolders;
   state.hasFolders = folders.length > 0;
-  $("nav-count").textContent = folders.length || "";
+  showProblemsBadge(folders);
   if (hadFolders !== state.hasFolders && !$("q").value.trim() && !state.similar) renderEmpty();
   if (key === state.foldersKey) return;
   state.foldersKey = key;
@@ -634,8 +674,7 @@ function renderFolders(folders, progress, phase) {
         stat("doc", fmt(f.indexed), t("folders.col.files")),
         stat("image", fmt(f.images), t("folders.col.images")),
         f.errors ? stat("alert", fmt(f.errors), tp("folders.unreadable", f.errors), "bad", () => openFolderInfo(f)) : null,
-        here ? stat(PHASE_STAT[phase][0], "", t(PHASE_STAT[phase][1]), `phase ${phase}`)
-          : stat("clock", ago(f.last_scan_at), t("folders.col.scanned"))),
+        here ? phaseStat(phase, progress) : stat("clock", ago(f.last_scan_at), t("folders.col.scanned"))),
       h("div", { class: "folder-actions" },
         // The folder being worked on can be paused right here (it's the same pause as in the rail).
         here ? iconButton(paused ? "play" : "pause", t(paused ? "activity.resume" : "activity.pause"),
@@ -703,23 +742,33 @@ function reasonRow(r) {
       more > 0 ? h("p", { class: "help-note" }, t("why.more", { n: fmt(more) })) : null));
 }
 
+// The folder at a glance: how many of its files can be searched, one bar for what's what, and a
+// few numbers.
+function renderFolderSummary(f) {
+  const parts = [["ok", f.indexed, "folder.ready"], ["wait", f.pending, "folder.waiting"],
+    ["skip", f.unsearched, "folder.unsearched"], ["bad", f.unreadable, "folder.unreadable"]].filter(([, n]) => n > 0);
+  const when = h("span", { class: "fm-when" }, icon("clock"), ago(f.last_scan_at));
+  setTip(when, t("folders.col.scanned"));
+  $("fm-summary").replaceChildren(
+    h("div", { class: "fm-headline" }, h("div", {}, h("b", {}, fmt(f.indexed)), h("span", {}, t("folder.ready_long"))), when),
+    h("div", { class: "fm-bar" }, ...parts.map(([cls, n]) => h("i", { class: cls, style: `flex-grow: ${n}` }))),
+    h("div", { class: "fm-legend" }, ...parts.map(([cls, n, key]) => h("span", { class: cls }, h("i"), h("b", {}, fmt(n)), " ", t(key)))),
+  );
+  const cell = (ic, key, value) => h("div", { class: "fm-stat" }, h("span", {}, icon(ic), t(key)), h("b", {}, value));
+  $("fm-numbers").replaceChildren(
+    cell("doc", "folder.docs", fmt(Math.max(0, f.indexed - f.images))),
+    cell("image", "folders.col.images", fmt(f.images)),
+    cell("text", "folder.passages", fmt(f.chunks)),
+    cell("archive", "folder.size", bytes(f.bytes || 0)),
+  );
+}
+
 async function openFolderInfo(f) {
   hideTip();
   state.folderInfo = f.id;
   $("fm-name").textContent = baseName(f.path);
   $("fm-path").textContent = f.path;
-  const number = (name, value, label, cls = "") => h("div", { class: `fm-number ${cls}` }, icon(name),
-    h("b", {}, value), h("span", {}, label));
-  $("fm-numbers").replaceChildren(
-    number("doc", fmt(f.indexed), t("folder.ready")),
-    number("image", fmt(f.images), t("folders.col.images")),
-    number("text", fmt(f.chunks), t("folder.passages")),
-    number("archive", bytes(f.bytes || 0), t("folder.size")),
-    ...(f.pending ? [number("hourglass", fmt(f.pending), t("folder.waiting"))] : []),
-    ...(f.unsearched ? [number("skip", fmt(f.unsearched), t("folder.unsearched"))] : []),
-    ...(f.unreadable ? [number("alert", fmt(f.unreadable), tp("folders.unreadable", f.unreadable).replace(/^\S+\s/, ""), "bad")] : []),
-    number("clock", ago(f.last_scan_at), t("folders.col.scanned")),
-  );
+  renderFolderSummary(f);
   $("fm-problems").hidden = $("fm-skips").hidden = true;
   $("fm-list").replaceChildren();
   $("fm-reasons").replaceChildren();
