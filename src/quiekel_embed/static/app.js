@@ -86,6 +86,14 @@ const ICONS = {
   dots: '<path d="M6 6h1M11.5 6h1M17 6h1M6 11.5h1M11.5 11.5h1M17 11.5h1M6 17h1M11.5 17h1M17 17h1"/>',
   bug: '<path d="M8.5 7.5a3.5 3.5 0 0 1 7 0"/><rect x="7" y="7.5" width="10" height="12.5" rx="5"/><path d="M12 11v9M7 12.5H3.5M20.5 12.5H17M7 16.5l-3 1.5M17 16.5l3 1.5M7.6 9 4.5 7M16.4 9l3.1-2"/>',
   archive: '<rect x="3.5" y="4.5" width="17" height="4.5" rx="1.2"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9M10 13h4"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3M12 14.5v2"/>',
+  film: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M7.5 5v14M16.5 5v14M3.5 9.5h4M3.5 14.5h4M16.5 9.5h4M16.5 14.5h4"/>',
+  app: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 8.5h17M6.5 6.5h.01M9 6.5h.01"/>',
+  mail: '<rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.5 7 12 13l8.5-6"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  camera: '<path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.3l1.4-2h5.6l1.4 2h2.3A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.5" r="3.5"/>',
+  help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.3-.9.8-.9 1.4v.3M12 16.6v.2"/>',
 };
 
 // The map's auto-rotate button: a cube on a turntable, with an orbit arrow around its base. While
@@ -652,8 +660,45 @@ const problemText = (error) => (error?.startsWith("!") ? t(`problem.${error.slic
 
 // ---------- a folder's details ----------
 //
-// Its numbers, and the files that couldn't be read. A new unreadable file shows as a red mark on
-// the folder once: looking here counts as seen. "Try again" reads them anew (a rescan does too).
+// Its numbers, the files that couldn't be read, and everything that isn't searched, by reason. A
+// new unreadable file shows as a red mark on the folder once: looking here counts as seen. "Try
+// again" reads them anew (a rescan does too).
+
+const WHY_ICON = {
+  type: "help", off: "eyeOff", media: "film", program: "app", mailbox: "mail", hidden: "eyeOff",
+  office_temp: "hourglass", program_folder: "folder", link: "link", too_many: "archive", encrypted: "lock",
+  split_archive: "archive", needs_windows: "monitor", nested_deep: "archive", nested_off: "archive",
+  nested_large: "archive", odd_name: "alert", inline_image: "image", empty: "doc", too_large: "maximize",
+  tiny_image: "image", binary: "code", no_text: "text", password: "lock", not_image: "archive",
+};
+// What the scan couldn't open goes with the files that couldn't be read, said of each one.
+const SCAN_FAILED = { no_access_dir: "problem.no_access", unreadable_dir: "problem.unreadable_dir",
+  damaged_archive: "problem.damaged_archive" };
+const revealPath = (path) => post("/api/reveal-path", { path }).catch((e) => toast(e.message, "alert"));
+
+function fileRow(path, why, reveal, isNew = false) {
+  const name = baseName(path);
+  return h("div", { class: `fm-file${isNew ? " new" : ""}` },
+    h("span", { class: "fm-file-text" }, h("b", {}, name), why ? h("span", { class: "fm-why" }, why) : null,
+      h("span", { class: "fm-where" }, path.slice(0, -name.length - 1))),
+    iconButton("folder", t("result.reveal"), reveal, "small"));
+}
+
+// One reason: what it is and how many; opened, which types and a few of the files.
+function reasonRow(r) {
+  const label = r.key ? t(`why.${r.key}`) : r.raw;
+  const more = r.n - r.files.length;
+  const exts = Object.entries(r.exts || {}).sort((a, b) => b[1] - a[1]).slice(0, 40)
+    .map(([ext, n]) => h("span", { class: "type-chip static" }, ext || t("why.no_ext"), h("small", {}, fmt(n))));
+  return h("details", { class: "fm-reason" },
+    h("summary", {}, icon(WHY_ICON[r.key] || "skip"),
+      h("span", { class: "fm-file-text" }, h("b", {}, label), r.key ? h("span", { class: "fm-what" }, t(`why.${r.key}_d`)) : null),
+      h("span", { class: "fm-count" }, fmt(r.n)), icon("chevronDown")),
+    h("div", { class: "fm-reason-body" },
+      exts.length ? h("div", { class: "tm-chips" }, ...exts) : null,
+      ...r.files.map((file) => fileRow(file.path, "", () => (file.id ? revealFile({ file_id: file.id }) : revealPath(file.path)))),
+      more > 0 ? h("p", { class: "help-note" }, t("why.more", { n: fmt(more) })) : null));
+}
 
 async function openFolderInfo(f) {
   hideTip();
@@ -668,28 +713,38 @@ async function openFolderInfo(f) {
     number("text", fmt(f.chunks), t("folder.passages")),
     number("archive", bytes(f.bytes || 0), t("folder.size")),
     ...(f.pending ? [number("hourglass", fmt(f.pending), t("folder.waiting"))] : []),
-    ...(f.skipped ? [number("skip", fmt(f.skipped), t("folder.skipped"))] : []),
+    ...(f.unsearched ? [number("skip", fmt(f.unsearched), t("folder.unsearched"))] : []),
     ...(f.unreadable ? [number("alert", fmt(f.unreadable), tp("folders.unreadable", f.unreadable).replace(/^\S+\s/, ""), "bad")] : []),
     number("clock", ago(f.last_scan_at), t("folders.col.scanned")),
   );
-  $("fm-problems").hidden = !f.unreadable;
+  $("fm-problems").hidden = $("fm-skips").hidden = true;
   $("fm-list").replaceChildren();
+  $("fm-reasons").replaceChildren();
   $("folder-modal").hidden = false;
-  if (!f.unreadable) return;
+  let d;
   try {
-    const rows = await api(`/api/folders/${f.id}/errors`);
-    if (state.folderInfo !== f.id) return;
-    $("fm-list").replaceChildren(...rows.map((r) => {
-      const row = h("div", { class: `fm-file${r.seen ? "" : " new"}` },
-        h("span", { class: "fm-file-text" }, h("b", {}, baseName(r.path)), h("span", { class: "fm-why" }, problemText(r.error)),
-          h("span", { class: "fm-where" }, r.path.slice(0, -baseName(r.path).length - 1))),
-        iconButton("folder", t("result.reveal"), () => revealFile({ file_id: r.id }), "small"));
-      return row;
-    }));
-    if (f.errors) post(`/api/folders/${f.id}/errors/seen`).then(refresh).catch(() => {}); // the red mark has done its job
+    d = await api(`/api/folders/${f.id}/details`);
   } catch (e) {
     toast(e.message, "alert");
+    return;
   }
+  if (state.folderInfo !== f.id) return;
+  const failed = [
+    ...d.errors.map((r) => fileRow(r.path, problemText(r.error), () => revealFile({ file_id: r.id }), !r.seen)),
+    ...Object.entries(d.report).filter(([key]) => key in SCAN_FAILED)
+      .flatMap(([key, r]) => r.examples.map((path) => fileRow(path, t(SCAN_FAILED[key]), () => revealPath(path)))),
+  ];
+  $("fm-problems").hidden = !failed.length;
+  $("fm-list").replaceChildren(...failed);
+  const reasons = [
+    ...Object.entries(d.report).filter(([key]) => !(key in SCAN_FAILED))
+      .map(([key, r]) => ({ key, n: r.n, exts: r.exts, files: r.examples.map((path) => ({ path })) })),
+    ...d.skipped.map((s) => ({ key: s.reason?.startsWith("!") ? s.reason.slice(1) : null, raw: s.reason, n: s.n,
+      files: s.examples })),
+  ].sort((a, b) => b.n - a.n);
+  $("fm-skips").hidden = !reasons.length;
+  $("fm-reasons").replaceChildren(...reasons.map(reasonRow));
+  if (f.errors) post(`/api/folders/${f.id}/errors/seen`).then(refresh).catch(() => {}); // the red mark has done its job
 }
 
 function closeFolderInfo() {
@@ -704,6 +759,96 @@ $("fm-retry").addEventListener("click", () => {
   post(`/api/folders/${id}/rescan`).then(() => { toast(t("folder.retrying"), "refresh"); closeFolderInfo(); refresh(); })
     .catch((e) => toast(e.message, "alert"));
 });
+
+// ---------- Settings → File types ----------
+//
+// Every type the app reads, by group: click one to switch it off or on. Types it doesn't know
+// can be added: they're read as plain text. And the rules for archives, emails and hidden files.
+
+const TYPE_ICON = { doc: "doc", mail: "mail", text: "text", code: "code", image: "image", raw: "camera", archive: "archive" };
+const TYPE_RULES = [["attachments", "mail"], ["nested_archives", "archive"], ["big_archives", "archive"],
+  ["hidden_files", "eyeOff"], ["program_folders", "folder"]];
+const SHOWN_TYPES = 18; // a long group shows this many until it's opened up
+
+async function openTypes() {
+  hideTip();
+  try {
+    state.types = await api("/api/filetypes");
+  } catch (e) {
+    toast(e.message, "alert");
+    return;
+  }
+  state.typesOpen = {};
+  renderTypes();
+  $("types-modal").hidden = false;
+}
+
+const closeTypes = () => { $("types-modal").hidden = true; };
+
+function renderTypes() {
+  const m = state.types;
+  const off = new Set(m.off);
+  const groups = m.groups.map(({ key, exts }) => {
+    const on = exts.filter((ext) => !off.has(ext)).length;
+    const all = h("input", { type: "checkbox", class: "switch", "aria-label": t(`types.group.${key}`) });
+    all.checked = on > 0;
+    all.addEventListener("change", () => saveTypes({
+      types_off: all.checked ? m.off.filter((ext) => !exts.includes(ext)) : [...new Set([...m.off, ...exts])] }));
+    const open = state.typesOpen[key] || exts.length <= SHOWN_TYPES + 2;
+    const chips = (open ? exts : exts.slice(0, SHOWN_TYPES)).map((ext) => h("button", {
+      type: "button", class: `type-chip${off.has(ext) ? " off" : ""}`, "aria-pressed": String(!off.has(ext)),
+      onclick: () => saveTypes({ types_off: off.has(ext) ? m.off.filter((e) => e !== ext) : [...m.off, ext] }),
+    }, ext));
+    if (!open) {
+      chips.push(h("button", { type: "button", class: "type-chip more",
+        onclick: () => { state.typesOpen[key] = true; renderTypes(); } }, t("types.more", { n: fmt(exts.length - SHOWN_TYPES) })));
+    }
+    return h("section", { class: "tm-group" },
+      h("div", { class: "tm-head" }, icon(TYPE_ICON[key]), h("b", {}, t(`types.group.${key}`)),
+        h("span", { class: "tm-count" }, t("types.count", { on: fmt(on), all: fmt(exts.length) })), all),
+      h("div", { class: "tm-chips" }, ...chips));
+  });
+
+  const input = h("input", { class: "input", id: "tm-add-input", placeholder: ".xyz", spellcheck: "false", maxlength: "17",
+    "aria-label": t("types.add") });
+  const add = () => { if (input.value.trim()) saveTypes({ types_added: [...m.added, input.value.trim()] }, true); };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
+  const added = h("section", { class: "tm-group" },
+    h("div", { class: "tm-head" }, icon("plus"), h("b", {}, t("types.added_title")), h("span", { class: "tm-count" }, t("types.added_hint"))),
+    h("div", { class: "tm-chips" },
+      ...m.added.map((ext) => h("span", { class: "type-chip added" }, ext,
+        iconButton("close", t("types.remove"), () => saveTypes({ types_added: m.added.filter((e) => e !== ext) }), "tiny"))),
+      h("span", { class: "tm-add" }, input, iconButton("plus", t("types.add"), add))));
+
+  const rules = TYPE_RULES.map(([key, ic]) => {
+    const sw = h("input", { type: "checkbox", class: "switch", "aria-label": t(`types.rule.${key}`) });
+    sw.checked = !!m.rules[key];
+    sw.addEventListener("change", () => saveTypes({ [key]: sw.checked }));
+    return h("label", { class: "tm-rule" }, icon(ic),
+      h("span", { class: "fm-file-text" }, h("b", {}, t(`types.rule.${key}`)), h("span", { class: "fm-what" }, t(`types.rule.${key}_d`))), sw);
+  });
+  $("tm-body").replaceChildren(...groups, added,
+    h("section", { class: "tm-group" }, h("div", { class: "tm-head" }, icon("settings"), h("b", {}, t("types.rules_title"))),
+      h("div", { class: "tm-rules" }, ...rules)),
+    h("p", { class: "help-note" }, t("types.note")));
+  $("tm-reset").disabled = !m.off.length && !m.added.length && TYPE_RULES.every(([key]) => m.rules[key] === m.defaults[key]);
+}
+
+async function saveTypes(change, adding = false) {
+  try {
+    await post("/api/settings", change);
+    state.types = await api("/api/filetypes");
+    renderTypes();
+    if (adding) $("tm-add-input").focus();
+    state.settingsKey = "";
+    refresh();
+  } catch (e) { toast(e.message, "alert"); }
+}
+
+$("types-open").addEventListener("click", openTypes);
+$("tm-close").addEventListener("click", closeTypes);
+$("types-modal").addEventListener("click", (e) => { if (e.target.id === "types-modal") closeTypes(); });
+$("tm-reset").addEventListener("click", () => saveTypes({ types_off: [], types_added: [], ...state.types.defaults }));
 
 async function removeFolder(f) {
   const yes = await confirmDialog({
@@ -777,8 +922,10 @@ function renderSettings({ settings, resources, model }) {
     }
     $("free-gpu").checked = !!settings.free_gpu_idle;
     $("free-gpu").setAttribute("aria-label", t("settings.free_gpu"));
-    $("search-zips").checked = settings.search_zips !== false;
-    $("search-zips").setAttribute("aria-label", t("settings.zips"));
+    const changed = [settings.types_off.length && t("types.summary_off", { n: fmt(settings.types_off.length) }),
+      settings.types_added.length && t("types.summary_added", { n: fmt(settings.types_added.length) })].filter(Boolean);
+    $("types-summary").textContent = changed.length ? changed.join(" · ") : t("types.all_on");
+    setTip($("types-open"), t("types.edit"));
     $("autostart-row").hidden = settings.autostart == null;
     $("autostart").checked = !!settings.autostart;
     $("autostart").setAttribute("aria-label", t("settings.autostart"));
@@ -854,7 +1001,6 @@ for (const b of $("modes").querySelectorAll("button")) {
   b.addEventListener("click", () => saveSettings({ perf_mode: b.dataset.mode }));
 }
 $("free-gpu").addEventListener("change", (e) => saveSettings({ free_gpu_idle: e.target.checked }));
-$("search-zips").addEventListener("change", (e) => saveSettings({ search_zips: e.target.checked }));
 $("autostart").addEventListener("change", (e) => saveSettings({ autostart: e.target.checked }));
 $("check-updates").addEventListener("change", (e) => saveSettings({ check_updates: e.target.checked }));
 $("language").addEventListener("change", (e) => saveSettings({ language: e.target.value }));
@@ -2126,6 +2272,10 @@ document.addEventListener("keydown", (e) => {
   }
   if (!$("folder-modal").hidden) {
     if (e.key === "Escape") { e.preventDefault(); closeFolderInfo(); }
+    return;
+  }
+  if (!$("types-modal").hidden) {
+    if (e.key === "Escape") { e.preventDefault(); closeTypes(); }
     return;
   }
   if (!$("confirm-modal").hidden) { // Enter presses the focused button by itself

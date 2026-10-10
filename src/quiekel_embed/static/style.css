@@ -598,12 +598,32 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .fm-file-text b { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 .fm-why { font-size: 12.5px; color: var(--red); }
 .fm-where { font: 11px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-what { font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+/* Not searched: one row per reason, opened for its types and a few files */
+.fm-reason + .fm-reason { border-top: 1px solid var(--border); }
+.fm-reason summary {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; list-style: none;
+}
+.fm-reason summary::-webkit-details-marker { display: none; }
+.fm-reason summary:hover { background: var(--well); }
+.fm-reason summary > svg.i { flex: none; width: 18px; height: 18px; color: var(--faint); }
+.fm-reason summary > svg.i:last-child { width: 16px; height: 16px; transition: transform .15s; }
+.fm-reason[open] summary > svg.i:last-child { transform: rotate(180deg); }
+.fm-count { font: 700 14px var(--display); color: var(--ink); font-variant-numeric: tabular-nums; }
+.fm-reason-body { padding: 0 0 6px 40px; display: flex; flex-direction: column; }
+.fm-reason-body .tm-chips { padding: 2px 12px 8px 0; }
+.fm-reason-body .fm-file { padding-left: 0; }
+.fm-reason-body .fm-file + .fm-file { border-top-style: dashed; }
 
 /* ---- settings ---- */
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 20px; margin-bottom: 16px; }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; padding: 8px 0; }
 .set-row + .set-row { border-top: 1px solid var(--border); }
 label.set-row { cursor: pointer; }
+.set-link { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.set-link .set-controls { color: var(--muted); }
+.set-link:hover .set-controls { color: var(--ink); }
+.types-summary { font-size: 13px; font-weight: 600; }
 .set-label { display: inline-flex; align-items: center; gap: 12px; font-weight: 600; color: var(--ink); }
 .set-label > span:first-child svg.i { width: 20px; height: 20px; color: var(--muted); }
 .set-controls { display: inline-flex; align-items: center; gap: 12px; }
@@ -717,6 +737,33 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .info-btn svg.i { width: 15px; height: 15px; }
 .info-btn:hover { color: var(--ink); background: var(--hover); }
 .help-body { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+/* Settings → File types */
+.modal-card.types { width: min(680px, 100%); }
+.tm-body { margin-top: 16px; display: flex; flex-direction: column; gap: 16px; overflow: auto; padding-right: 4px; }
+.tm-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+.tm-head > svg.i { width: 18px; height: 18px; color: var(--muted); }
+.tm-head b { color: var(--ink); }
+.tm-count { flex: 1; font-size: 12.5px; color: var(--faint); }
+.tm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.type-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 6px;
+  font: 500 12px var(--mono); color: var(--ink); background: var(--well); border: 1px solid var(--border-strong);
+  cursor: pointer;
+}
+button.type-chip:hover { border-color: var(--faint); }
+.type-chip.off { color: var(--faint); background: none; border-style: dashed; border-color: var(--border); text-decoration: line-through; }
+.type-chip.more { font-family: var(--sans); color: var(--muted); background: none; border-style: dashed; }
+.type-chip.added { padding-right: 2px; background: var(--card); }
+.type-chip.static { cursor: default; background: var(--card); border-color: var(--border); }
+.type-chip small { color: var(--faint); font-size: 11px; }
+.type-chip .icon-btn.tiny { width: 20px; height: 20px; padding: 0; border: 0; box-shadow: none; background: none; }
+.type-chip .icon-btn.tiny svg.i { width: 13px; height: 13px; }
+.tm-add { display: inline-flex; align-items: center; gap: 6px; }
+.tm-add .input { width: 92px; height: 30px; padding: 0 9px; font: 12.5px var(--mono); }
+.tm-rules { border: 1px solid var(--border); border-radius: 8px; }
+.tm-rule { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; }
+.tm-rule + .tm-rule { border-top: 1px solid var(--border); }
+.tm-rule > svg.i { flex: none; width: 18px; height: 18px; color: var(--faint); }
 .help-row { display: grid; grid-template-columns: 20px 1fr; gap: 12px; align-items: start; }
 .help-row svg.i { width: 20px; height: 20px; color: var(--muted); margin-top: 1px; }
 .help-row p { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--text); }

@@ -48,6 +48,15 @@ CREATE TABLE IF NOT EXISTS files (
     indexed_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS files_folder ON files(folder_id);
+-- Archives and emails as last looked into: unchanged ones aren't opened again.
+CREATE TABLE IF NOT EXISTS containers (
+    path TEXT PRIMARY KEY COLLATE NOCASE,
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    size INTEGER NOT NULL,
+    mtime REAL NOT NULL,
+    types TEXT NOT NULL,
+    report TEXT NOT NULL
+);
 -- Keyword search over file names (+ their folders) and passage text.
 -- rowid = file_id << 10 | chunk
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
@@ -55,6 +64,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 );
 """
 
+# Skipped files' reasons before 0.9, in words; now as keys the app puts in words itself.
+SKIP_KEYS = {
+    "empty file": "!empty", "image too large": "!too_large", "document too large": "!too_large",
+    "text file too large": "!too_large", "too large": "!too_large", "image too small": "!tiny_image",
+    "binary file": "!binary", "no text": "!no_text", "password protected": "!password",
+    "an archive, not an image": "!not_image",
+}
 FTS_SHIFT = 10  # up to 1024 chunks per file in the keyword index
 PREFILTER_MAX = 30_000  # on disk: bigger folders are filtered after the vector search instead
 COMPACT_EVERY = 200  # saves between compactions of the vector table (each save adds a piece)…
@@ -230,6 +246,12 @@ class Store:
         # (added in 0.8) unreadable files whose warning you hid
         if "muted" not in {r[1] for r in self._db.execute("PRAGMA table_info(files)")}:
             self._db.execute("ALTER TABLE files ADD COLUMN muted INTEGER NOT NULL DEFAULT 0")
+        # (added in 0.9) why the last scan left files out, and the reasons as keys
+        if "report" not in {r[1] for r in self._db.execute("PRAGMA table_info(folders)")}:
+            self._db.execute("ALTER TABLE folders ADD COLUMN report TEXT")
+            for old, key in SKIP_KEYS.items():
+                self._db.execute("UPDATE files SET error = ? WHERE status = 'skipped' AND error = ?", (key, old))
+            self._db.commit()
 
         self._table = None  # the vector table: opened on first use (see `table`)
         self._open_lock = threading.Lock()
@@ -274,6 +296,7 @@ class Store:
             self._reset_vectors = True  # (the table is dropped when it's opened)
             self._db.execute("DELETE FROM files")
             self._db.execute("DELETE FROM chunks_fts")
+            self._db.execute("DELETE FROM containers")
             (config.DATA_DIR / "map.npz").unlink(missing_ok=True)  # its files are gone
         self.meta_set("index", current)
 
@@ -342,7 +365,7 @@ class Store:
                 return [dict(f) for f in self._folders_cache[1]]
             rows = self._db.execute(
                 """
-                SELECT f.id, f.path, f.watch, f.added_at, f.last_scan_at,
+                SELECT f.id, f.path, f.watch, f.added_at, f.last_scan_at, f.report,
                        COUNT(x.id) AS files,
                        COALESCE(SUM(x.status = 'indexed'), 0) AS indexed,
                        COALESCE(SUM(x.status = 'pending'), 0) AS pending,
@@ -356,7 +379,13 @@ class Store:
                 GROUP BY f.id ORDER BY f.path
                 """
             ).fetchall()
-            result = [dict(r) for r in rows]
+            result = []
+            for r in rows:
+                f = dict(r)
+                report = json.loads(f.pop("report") or "{}")
+                # Everything that isn't searched: skipped files, and what the scan left out.
+                f["unsearched"] = f["skipped"] + sum(v["n"] for v in report.values())
+                result.append(f)
             self._folders_cache = (self._version, result)
         return [dict(f) for f in result]
 
@@ -395,13 +424,59 @@ class Store:
             self._db.commit()
             self._changed()
 
-    def mark_scanned(self, folder_id: int):
+    def mark_scanned(self, folder_id: int, report: dict | None = None):
+        """A scan finished; `report`: why files were left out (see filetypes.Report)."""
         with self._lock:
             self._db.execute(
-                "UPDATE folders SET last_scan_at = ? WHERE id = ?", (time.time(), folder_id)
+                "UPDATE folders SET last_scan_at = ?, report = COALESCE(?, report) WHERE id = ?",
+                (time.time(), json.dumps(report) if report is not None else None, folder_id),
             )
             self._db.commit()
             self._changed()
+
+    def containers(self, folder_id: int) -> dict[str, dict]:
+        """The archives and emails in a folder as last looked into, by normcase'd path."""
+        import os
+
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT path, size, mtime, types, report FROM containers WHERE folder_id = ?", (folder_id,)
+            ).fetchall()
+        return {os.path.normcase(r["path"]): {"path": r["path"], "size": r["size"], "mtime": r["mtime"],
+                                              "types": r["types"], "report": json.loads(r["report"])}
+                for r in rows}
+
+    def save_containers(self, folder_id: int, rows: list[dict], replace: bool = True):
+        """Remember what was found in archives and emails; `replace`: these are all of the folder's."""
+        with self._lock:
+            if replace:
+                self._db.execute("DELETE FROM containers WHERE folder_id = ?", (folder_id,))
+            self._db.executemany(
+                "INSERT INTO containers (path, folder_id, size, mtime, types, report) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(path) DO UPDATE SET folder_id = excluded.folder_id, size = excluded.size, "
+                "mtime = excluded.mtime, types = excluded.types, report = excluded.report",
+                [(r["path"], folder_id, r["size"], r["mtime"], r["types"], json.dumps(r["report"])) for r in rows],
+            )
+            self._db.commit()
+
+    def details(self, folder_id: int, examples: int = 5) -> dict:
+        """Why a folder's files aren't searched: what its last scan left out, and the files that
+        were skipped, by reason (a few of each)."""
+        with self._lock:
+            row = self._db.execute("SELECT report FROM folders WHERE id = ?", (folder_id,)).fetchone()
+            counts = self._db.execute(
+                "SELECT error, COUNT(*) AS n FROM files WHERE folder_id = ? AND status = 'skipped' "
+                "GROUP BY error ORDER BY n DESC", (folder_id,)
+            ).fetchall()
+            skipped = []
+            for c in counts:
+                files = self._db.execute(
+                    "SELECT id, path FROM files WHERE folder_id = ? AND status = 'skipped' AND error IS ? "
+                    "ORDER BY indexed_at DESC LIMIT ?", (folder_id, c["error"], examples)
+                ).fetchall()
+                skipped.append({"reason": c["error"], "n": c["n"],
+                                "examples": [{"id": f["id"], "path": f["path"]} for f in files]})
+        return {"report": json.loads(row["report"] or "{}") if row else {}, "skipped": skipped}
 
     # ---- files ---------------------------------------------------------
 
@@ -578,7 +653,7 @@ class Store:
             self.optimize()
 
     def remove_paths(self, paths: list[str]):
-        """Forget files, and everything below any path that was a directory."""
+        """Forget files, and everything below any path that was a directory (or an archive)."""
         with self._lock:
             ids = []
             for p in paths:
@@ -589,6 +664,9 @@ class Store:
                     (p, len(prefix), prefix),
                 ).fetchall()
                 ids.extend(r["id"] for r in rows)
+                self._db.execute("DELETE FROM containers WHERE path = ? OR substr(path, 1, ?) = ? COLLATE NOCASE",
+                                 (p, len(prefix), prefix))
+            self._db.commit()
         if ids:
             self.remove_file_ids(ids)
 
@@ -805,8 +883,10 @@ class Settings:
 
     # Update checks are off until you turn them on: nothing goes online that you didn't ask for.
     DEFAULTS = {"perf_mode": "balanced", "free_gpu_idle": True, "check_updates": False, "language": "auto",
-                "theme": "auto", "search_zips": True, "view_files": "cards", "view_images": "grid",
-                "memory": "fast"}
+                "theme": "auto", "view_files": "cards", "view_images": "grid", "memory": "fast",
+                # Settings -> File types (see filetypes.py)
+                "types_off": [], "types_added": [], "attachments": True, "nested_archives": True,
+                "big_archives": False, "hidden_files": False, "program_folders": False}
 
     def __init__(self, store: Store):
         self._store = store
@@ -815,6 +895,9 @@ class Settings:
             raw = store.meta_get(f"setting.{key}")
             if raw is not None:
                 self._values[key] = json.loads(raw)
+        # Before 0.9, one switch said whether to look inside ZIP files.
+        if store.meta_get("setting.search_zips") == "false" and store.meta_get("setting.types_off") is None:
+            self.update(types_off=[".zip"])
 
     def get(self, key: str):
         return self._values[key]
