@@ -2,7 +2,7 @@
 
 The worker runs at Windows "background" priority (low CPU, disk and memory
 priority) and asks the resource governor how fast it may go after every unit of
-work. When there is nothing to do, or a game is running, it hands the GPU back.
+work. When there is nothing to do, or video memory runs out, it hands the GPU back.
 """
 
 import collections
@@ -179,8 +179,8 @@ class Indexer:
 
     def _pace(self, work_s: float):
         """After each unit of work: let the governor slow us down (handing the GPU back
-        if it pauses us for a game), honour a user pause, and if we're mid-embedding,
-        make sure the model is back on the GPU before the next batch."""
+        if it pauses us because video memory ran out), honour a user pause, and if we're
+        mid-embedding, make sure the model is back on the GPU before the next batch."""
         self.governor.pace(
             work_s,
             should_stop=self._paused.is_set,
@@ -192,8 +192,6 @@ class Indexer:
 
     def _gpu_ok_now(self) -> bool:
         m = self.governor.metrics
-        if self.settings.get("free_gpu_idle") and m.fullscreen and self.settings.get("perf_mode") != "full":
-            return False
         return m.vram_free_gb is None or m.vram_free_gb >= GPU_NEEDED_GB
 
     def _wait_if_paused(self):
@@ -215,12 +213,9 @@ class Indexer:
         # Handing the GPU back moves the model into RAM; with "lean" memory it leaves instead.
         let_go = e.unload if lean else e.release_gpu
         m = self.governor.metrics
-        free_idle = self.settings.get("free_gpu_idle")
-        if free_idle and m.fullscreen and self.settings.get("perf_mode") != "full":
-            let_go("a game or fullscreen app is running")
-        elif m.vram_free_gb is not None and m.vram_free_gb < 0.3:
+        if m.vram_free_gb is not None and m.vram_free_gb < 0.3:
             let_go("GPU memory almost full")
-        elif free_idle and unused:
+        elif self.settings.get("free_gpu_idle") and unused:
             let_go("nothing to index")
 
     def wake_model(self):
@@ -270,7 +265,7 @@ class Indexer:
         while not self.embedder.ready:
             self._set(state="loading-model")
             try:
-                # During a game (or with little video memory) load onto the CPU instead.
+                # With little video memory, load onto the CPU instead.
                 self.embedder.load(prefer_gpu=self._gpu_ok_now())
             except Exception:
                 self._set(state="model-error", message=self.embedder.error)
@@ -494,8 +489,8 @@ class Indexer:
                     break
 
     def _take(self, ready: queue.Queue):
-        """The next file from the reader. While waiting for it (the reader waits out pauses and
-        fullscreen apps), hand the GPU back to a game just as during embedding."""
+        """The next file from the reader. While waiting for it (the reader waits out pauses),
+        hand the GPU back when video memory runs out, just as during embedding."""
         while True:
             try:
                 return ready.get(timeout=0.5)
@@ -539,7 +534,7 @@ class Indexer:
             return False
 
         for path, size, mtime in files:
-            # Nothing to read ahead for while indexing waits (paused, a fullscreen app, …).
+            # Nothing to read ahead for while indexing waits (paused, memory full, …).
             while not stop.is_set() and (self._paused.is_set() or self.governor.decision.duty <= 0):
                 time.sleep(0.25)
             if stop.is_set() or folder_id in self._cancelled:

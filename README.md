@@ -19,7 +19,7 @@
 - **Meaning, not just keywords.** Ask in your own words, in any of 100+ languages: the question above is English, the letter it found is German.
 - **Almost any file.** Documents, emails with their attachments, text and code, photos found by what they show, even inside ZIP, 7z and RAR archives.
 - **Private.** The AI model runs on your own graphics card (or CPU). Your files and searches never leave your PC.
-- **Stays out of your way.** It keeps your folders up to date in the background and backs off for games and busy apps.
+- **Stays out of your way.** It keeps your folders up to date in the background and slows down while your other apps need the PC.
 
 | Photos, found by what they show | A map of your files |
 |---|---|

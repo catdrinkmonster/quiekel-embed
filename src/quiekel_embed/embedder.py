@@ -1,7 +1,7 @@
 """EmbeddingGemma 2 wrapper. One model instance shared by indexing and search.
 
 The model normally lives on the GPU. It can move to the CPU to give video memory
-back (while a fullscreen app runs, or when there is nothing to index); searches keep working
+back (when video memory runs low, or when there is nothing to index); searches keep working
 there. Batches shrink automatically when video memory is tight.
 """
 

@@ -80,7 +80,6 @@ const ICONS = {
   ram: '<rect x="3" y="6.5" width="18" height="10" rx="1.5"/><path d="M7.5 10v3M12 10v3M16.5 10v3M6.5 16.5v2.5M10 16.5v2.5M14 16.5v2.5M17.5 16.5v2.5"/>',
   leaf: '<path d="M5 19.5C4.5 11 9.5 5 19.5 4.5 19.5 14 14 19.5 5 19.5z"/><path d="M5 19.5 13.5 11"/>',
   bolt: '<path d="M13.5 3 5.5 13.5h6l-1 7.5 8-10.5h-6z"/>',
-  game: '<path d="M7.5 7.5h9a5 5 0 0 1 0 10c-1.6 0-2.4-1.5-4.5-1.5s-2.9 1.5-4.5 1.5a5 5 0 0 1 0-10z"/><path d="M7.5 11v3M6 12.5h3M15.5 11.5v.2M17.5 13.5v.2"/>',
   battery: '<rect x="2.5" y="7.5" width="16.5" height="9" rx="2"/><path d="M21.5 10.5v3M6 10.5v3"/>',
   away: '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/><path d="M15 4.5h3.5L15 8.5h3.5"/>',
   dots: '<path d="M6 6h1M11.5 6h1M17 6h1M6 11.5h1M11.5 11.5h1M17 11.5h1M6 17h1M11.5 17h1M17 17h1"/>',
@@ -1029,10 +1028,10 @@ function meter(name, used, tip, unknown = t("settings.na")) {
   setTip($(`meter-${name}`), tip);
 }
 
-// Where the model runs, plus "a fullscreen app is running" or "you're away", as small chips.
+// Where the model runs, plus "you're away", as small chips.
 function renderDevice(model, m) {
-  const away = !m.fullscreen && m.idle_s >= 180;
-  const key = JSON.stringify([model.status, model.on_gpu, model.cuda, model.gpu_name, m.fullscreen, away, i18n.lang]);
+  const away = m.idle_s >= 180;
+  const key = JSON.stringify([model.status, model.on_gpu, model.cuda, model.gpu_name, away, i18n.lang]);
   if (key === state.deviceKey) return;
   state.deviceKey = key;
   const chips = [];
@@ -1044,7 +1043,6 @@ function renderDevice(model, m) {
     const k = { loading: "model.loading", downloading: "model.downloading", error: "model.error" }[model.status] || "model.not_loaded";
     chips.push(stat("hourglass", "", t("settings.model_state", { state: t(k) })));
   }
-  if (m.fullscreen) chips.push(stat("maximize", "", t("settings.game_running")));
   if (away) chips.push(stat("moon", "", t("settings.away")));
   $("device").replaceChildren(...chips);
 }
@@ -1999,7 +1997,6 @@ function speedHelp() {
   const rows = [
     ["mouse", t("help.sit_working"), [0.25, 0.75, 1].map(pace)],
     ["away", t("help.sit_away"), [0.5, 1, 1].map(pace)],
-    ["game", t("help.sit_fullscreen"), [0, 0, 1].map(pace)],
     ["battery", t("help.sit_battery"), [0, 0.25, 1].map(pace)],
     ["gauge", t("help.sit_busy"), [range(t("help.slower_early")), range(t("help.slower_late")), pace(1)]],
   ];
