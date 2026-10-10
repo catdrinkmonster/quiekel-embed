@@ -674,7 +674,9 @@ const WHY_ICON = {
 // What the scan couldn't open goes with the files that couldn't be read, said of each one.
 const SCAN_FAILED = { no_access_dir: "problem.no_access", unreadable_dir: "problem.unreadable_dir",
   damaged_archive: "problem.damaged_archive" };
-const revealPath = (path) => post("/api/reveal-path", { path }).catch((e) => toast(e.message, "alert"));
+// A file the scan left out, by where its details name it (the server knows the path).
+const revealExample = (reason, index) => post(`/api/folders/${state.folderInfo}/reveal`, { reason, index })
+  .catch((e) => toast(e.message, "alert"));
 
 function fileRow(path, why, reveal, isNew = false) {
   const name = baseName(path);
@@ -696,7 +698,8 @@ function reasonRow(r) {
       h("span", { class: "fm-count" }, fmt(r.n)), icon("chevronDown")),
     h("div", { class: "fm-reason-body" },
       exts.length ? h("div", { class: "tm-chips" }, ...exts) : null,
-      ...r.files.map((file) => fileRow(file.path, "", () => (file.id ? revealFile({ file_id: file.id }) : revealPath(file.path)))),
+      ...r.files.map((file, i) => fileRow(file.path, "",
+        () => (file.id ? revealFile({ file_id: file.id }) : revealExample(r.key, i)))),
       more > 0 ? h("p", { class: "help-note" }, t("why.more", { n: fmt(more) })) : null));
 }
 
@@ -732,7 +735,7 @@ async function openFolderInfo(f) {
   const failed = [
     ...d.errors.map((r) => fileRow(r.path, problemText(r.error), () => revealFile({ file_id: r.id }), !r.seen)),
     ...Object.entries(d.report).filter(([key]) => key in SCAN_FAILED)
-      .flatMap(([key, r]) => r.examples.map((path) => fileRow(path, t(SCAN_FAILED[key]), () => revealPath(path)))),
+      .flatMap(([key, r]) => r.examples.map((path, i) => fileRow(path, t(SCAN_FAILED[key]), () => revealExample(key, i)))),
   ];
   $("fm-problems").hidden = !failed.length;
   $("fm-list").replaceChildren(...failed);
