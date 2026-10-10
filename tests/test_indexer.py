@@ -147,8 +147,8 @@ def test_files_inside_zips_are_indexed_like_a_folder(make_indexer, tmp_path):
     paths = set(indexer.store.file_signatures(fid))
     assert str(zpath) + "\\Belege\\bescheid.txt" in paths and str(zpath) + "\\Belege\\brief.txt" not in paths
 
-    # Switched off in Settings: the next scan forgets what's inside archives.
-    indexer.settings.update(search_zips=False)
+    # Switched off in Settings -> File types: the next scan forgets what's inside ZIP files.
+    indexer.settings.update(types_off=[".zip"])
     indexer._scan_folder(fid)
     assert set(indexer.store.file_signatures(fid)) == {str(folder / "plain.txt")}
 
@@ -228,3 +228,119 @@ def test_lean_memory_lets_the_model_go_entirely_for_a_game(make_indexer):
     ix.settings.update(memory="lean")
     ix._manage_device(working=False)
     assert e.unloaded and not e.released  # lean: out of memory altogether
+
+
+def hide(path):
+    import ctypes
+
+    ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x2)  # FILE_ATTRIBUTE_HIDDEN
+
+
+def test_every_file_left_out_comes_with_its_reason(make_indexer, tmp_path, monkeypatch):
+    import zipfile
+
+    from quiekel_embed import archive
+
+    indexer = make_indexer()
+    folder = tmp_path / "docs"
+    (folder / "node_modules" / "lib").mkdir(parents=True)
+    (folder / "node_modules" / "lib" / "index.js").write_text("module.exports = 1", encoding="utf-8")
+    for name in ("brief.txt", ".env", "~$brief.docx", "urlaub.mp4", "setup.exe", "daten.xyz", "postfach.pst"):
+        (folder / name).write_bytes(b"x" * 10)
+    (folder / "versteckt.txt").write_text("hidden", encoding="utf-8")
+    hide(folder / "versteckt.txt")
+    with zipfile.ZipFile(folder / "backup.zip", "w") as z:
+        for i in range(5):
+            z.writestr(f"f{i}.txt", "x")
+    monkeypatch.setattr(archive, "MAX_ENTRIES", 4)
+    fid = indexer.store.add_folder(str(folder))
+
+    indexer._scan_folder(fid)
+    assert set(indexer.store.file_signatures(fid)) == {str(folder / "brief.txt")}
+    report = indexer.store.details(fid)["report"]
+    assert {k: v["n"] for k, v in report.items()} == {
+        "program_folder": 1, "hidden": 2, "office_temp": 1, "media": 1, "program": 1, "type": 1, "mailbox": 1,
+        "too_many": 1}
+    assert report["media"]["exts"] == {".mp4": 1} and report["type"]["examples"] == [str(folder / "daten.xyz")]
+    assert indexer.store.folders()[0]["unsearched"] == 9
+
+
+def test_file_types_can_be_switched_off_and_added(make_indexer, tmp_path):
+    indexer = make_indexer()
+    folder = tmp_path / "docs"
+    folder.mkdir()
+    (folder / "notiz.txt").write_text("eine Notiz", encoding="utf-8")
+    (folder / "daten.json").write_text('{"a": 1}', encoding="utf-8")
+    (folder / "spiel.xyz").write_text("Spielstand: Level 3", encoding="utf-8")
+    fid = indexer.store.add_folder(str(folder))
+    indexer.settings.update(types_off=[".json"], types_added=[".xyz"])
+
+    indexer._scan_folder(fid)
+    found = indexer.store.file_signatures(fid)
+    assert set(found) == {str(folder / "notiz.txt"), str(folder / "spiel.xyz")}
+    assert found[str(folder / "spiel.xyz")][3] == "indexed"  # read as plain text
+    assert indexer.store.details(fid)["report"]["off"]["exts"] == {".json": 1}
+
+
+def test_hidden_files_and_program_folders_when_wanted(make_indexer, tmp_path):
+    indexer = make_indexer()
+    folder = tmp_path / "docs"
+    (folder / "build").mkdir(parents=True)
+    (folder / "build" / "notes.md").write_text("build notes", encoding="utf-8")
+    (folder / ".notes.md").write_text("dot notes", encoding="utf-8")
+    fid = indexer.store.add_folder(str(folder))
+    indexer._scan_folder(fid)
+    assert not indexer.store.file_signatures(fid)
+    indexer.settings.update(hidden_files=True, program_folders=True)
+    indexer._scan_folder(fid)
+    assert set(indexer.store.file_signatures(fid)) == {str(folder / "build" / "notes.md"), str(folder / ".notes.md")}
+
+
+def test_emails_and_their_attachments_are_both_searched(make_indexer, tmp_path):
+    import samples
+
+    indexer = make_indexer()
+    folder = tmp_path / "mail"
+    folder.mkdir()
+    msg = folder / "Angebot.msg"
+    msg.write_bytes(samples.outlook_msg("Angebot Dach", "Siehe Anhang", attachments=[("preise.txt", b"Ziegel " * 700)]))
+    fid = indexer.store.add_folder(str(folder))
+
+    indexer._scan_folder(fid)
+    found = indexer.store.file_signatures(fid)
+    assert {p: v[3] for p, v in found.items()} == {str(msg): "indexed", str(msg) + "\\preise.txt": "indexed"}
+    indexer.settings.update(attachments=False)
+    indexer._scan_folder(fid)
+    assert set(indexer.store.file_signatures(fid)) == {str(msg)}
+
+
+def test_unchanged_archives_are_not_opened_again(make_indexer, tmp_path, monkeypatch):
+    import os
+    import zipfile
+
+    from quiekel_embed import archive
+
+    indexer = make_indexer()
+    folder = tmp_path / "docs"
+    folder.mkdir()
+    zpath = folder / "fotos.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        z.writestr("a.txt", "Strand")
+        z.writestr("b.exe", "kein Dokument")
+    fid = indexer.store.add_folder(str(folder))
+    opened = []
+    walk = archive.walk
+    monkeypatch.setattr(archive, "walk", lambda path, *a, **k: (opened.append(path), walk(path, *a, **k))[1])
+
+    indexer._scan_folder(fid)
+    indexer._scan_folder(fid)
+    assert opened == [str(zpath)]  # the second scan knew what's inside
+    assert set(indexer.store.file_signatures(fid)) == {str(zpath) + "\\a.txt"}
+    assert indexer.store.details(fid)["report"]["program"]["n"] == 1  # (and why the rest isn't searched)
+    st = zpath.stat()
+    os.utime(zpath, (st.st_atime, st.st_mtime + 10))
+    indexer._scan_folder(fid)
+    assert opened == [str(zpath)] * 2
+    indexer.settings.update(types_off=[".txt"])  # other types: looked into again
+    indexer._scan_folder(fid)
+    assert opened == [str(zpath)] * 3 and not indexer.store.file_signatures(fid)

@@ -8,7 +8,7 @@ def settings(client):
 def test_defaults_ask_before_going_online(client):
     s = settings(client)
     assert s["check_updates"] is False  # update checks are opt-in
-    assert s["search_zips"] is True
+    assert (s["types_off"], s["types_added"], s["attachments"], s["big_archives"]) == ([], [], True, False)
     assert (s["view_files"], s["view_images"]) == ("cards", "grid")
 
 
@@ -93,3 +93,32 @@ def test_unreadable_files_warn_once_and_stay_listed(client):
     assert client.post(f"/api/folders/{folder}/rescan", headers=H).status_code == 200
     assert folders()["errors"] == 0  # trying again doesn't bring the warning back
     assert client.post("/api/folders/999/errors/seen", headers=H).status_code == 404
+
+
+def test_file_types_menu(client):
+    menu = client.get("/api/filetypes").json()
+    groups = {g["key"]: g["exts"] for g in menu["groups"]}
+    assert ".odt" in groups["doc"] and ".msg" in groups["mail"] and ".7z" in groups["archive"]
+    assert menu["rules"] == menu["defaults"] and menu["off"] == menu["added"] == []
+
+    r = client.post("/api/settings", json={"types_off": [".JSON", "txt"], "types_added": ["XYZ"],
+                                           "big_archives": True}, headers=H)
+    assert r.status_code == 200
+    s = r.json()
+    assert (s["types_off"], s["types_added"], s["big_archives"]) == ([".json", ".txt"], [".xyz"], True)
+    bad = client.post("/api/settings", json={"types_added": ["../evil"]}, headers=H)
+    assert bad.status_code == 400 and bad.json()["detail"]["key"] == "err.unknown_type"
+
+
+def test_folder_details_say_why_files_are_not_searched(client):
+    store = client.backend.store
+    folder = store.add_folder(r"C:\docs")
+    store.save_files([{"folder_id": folder, "path": r"C:\docs\leer.txt", "size": 0, "mtime": 1.0, "kind": "text",
+                       "status": "skipped", "chunks": 0, "error": "!empty"}], [])
+    store.mark_scanned(folder, {"media": {"n": 2, "examples": [r"C:\docs\a.mp4"], "exts": {".mp4": 2}}})
+    d = client.get(f"/api/folders/{folder}/details").json()
+    assert d["report"]["media"]["n"] == 2
+    assert [(s["reason"], s["n"], s["examples"][0]["path"]) for s in d["skipped"]] == [("!empty", 1, r"C:\docs\leer.txt")]
+    assert d["errors"] == []
+    assert client.get("/api/status").json()["folders"][0]["unsearched"] == 3
+    assert client.get("/api/folders/999/details").status_code == 404

@@ -147,10 +147,10 @@
           <span class="set-label" id="free-gpu-label"><span data-icon="chip"></span><span data-i18n="settings.free_gpu_short"></span></span>
           <input type="checkbox" class="switch" id="free-gpu">
         </label>
-        <label class="set-row">
-          <span class="set-label" id="zips-label"><span data-icon="archive"></span><span data-i18n="settings.zips"></span></span>
-          <input type="checkbox" class="switch" id="search-zips">
-        </label>
+        <button type="button" class="set-row set-link" id="types-open">
+          <span class="set-label"><span data-icon="doc"></span><span data-i18n="settings.types"></span></span>
+          <span class="set-controls"><span class="types-summary" id="types-summary"></span><span data-icon="chevronRight"></span></span>
+        </button>
         <label class="set-row" id="autostart-row" hidden>
           <span class="set-label"><span data-icon="power"></span><span data-i18n="settings.autostart"></span></span>
           <input type="checkbox" class="switch" id="autostart">
@@ -245,6 +245,24 @@
         <button class="icon-btn small" id="fm-retry" data-icon="refresh" data-i18n-tip="folder.retry"></button>
       </div>
       <div class="fm-list" id="fm-list"></div>
+    </div>
+    <div class="fm-problems" id="fm-skips" hidden>
+      <div class="fm-problems-head"><span class="fm-label" data-i18n="folder.unsearched_title"></span></div>
+      <div class="fm-list" id="fm-reasons"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="types-modal" hidden>
+  <div class="modal-card types" role="dialog" aria-modal="true" aria-labelledby="tm-title">
+    <button class="icon-btn small modal-x" id="tm-close" data-icon="close" data-i18n-tip="common.close"></button>
+    <div class="modal-head">
+      <img class="logo" src="/static/pig.svg" alt="">
+      <div><h3 id="tm-title" data-i18n="types.title"></h3><p class="help-intro" data-i18n="types.intro"></p></div>
+    </div>
+    <div class="tm-body" id="tm-body"></div>
+    <div class="modal-actions">
+      <button class="icon-btn" id="tm-reset" data-icon="refresh" data-i18n-tip="types.reset"></button>
     </div>
   </div>
 </div>

@@ -24,10 +24,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import archive, config, i18n, shortcuts
+from . import archive, config, filetypes, i18n, shortcuts
 from .embedder import Embedder
-from .extract import load_image, max_bytes
+from .extract import has_preview, max_bytes, picture
 from .filemap import FileMap
+from .filetypes import Types
 from .governor import MODES, Governor
 from .indexer import Indexer, is_inside
 from .search import KINDS, fts_query, fuse, query_terms
@@ -49,12 +50,12 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Cross-Origin-Opener-Policy": "same-origin",
 }
-# "Open" on these would run them; open them in an editor instead.
-# Opening these would run them: they open in an editor instead. Web pages are fine: the
-# browser keeps them in its sandbox.
+# Opening these would run them (or, for .reg, change Windows): they open in an editor instead.
+# Web pages are fine: the browser keeps them in its sandbox.
 RUNNABLE_EXTS = {
-    ".bat", ".cmd", ".ps1", ".psm1", ".js", ".mjs", ".jse", ".vbs", ".vbe", ".wsf", ".wsh",
-    ".py", ".pyw", ".sh", ".lua", ".rb", ".php", ".pl", ".r", ".hta",
+    ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".js", ".mjs", ".cjs", ".jse", ".vbs", ".vbe", ".wsf",
+    ".wsh", ".py", ".pyw", ".sh", ".bash", ".zsh", ".fish", ".lua", ".rb", ".php", ".pl", ".r", ".hta",
+    ".reg", ".ahk", ".au3", ".tcl",
 }
 
 
@@ -66,6 +67,10 @@ class WatchIn(BaseModel):
     watch: bool
 
 
+class PathIn(BaseModel):
+    path: str
+
+
 class SettingsIn(BaseModel):
     perf_mode: str | None = None
     language: str | None = None
@@ -73,10 +78,17 @@ class SettingsIn(BaseModel):
     free_gpu_idle: bool | None = None
     check_updates: bool | None = None
     autostart: bool | None = None
-    search_zips: bool | None = None
     view_files: str | None = None
     view_images: str | None = None
     memory: str | None = None
+    # Settings -> File types
+    types_off: list[str] | None = None
+    types_added: list[str] | None = None
+    attachments: bool | None = None
+    nested_archives: bool | None = None
+    big_archives: bool | None = None
+    hidden_files: bool | None = None
+    program_folders: bool | None = None
 
 
 class ThemeIn(BaseModel):
@@ -237,9 +249,21 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
                 if view not in VIEWS:
                     fail(400, "unknown_view", view=view)
                 settings.update(**{key: view})
-        if body.search_zips is not None and body.search_zips != settings.get("search_zips"):
-            settings.update(search_zips=body.search_zips)
-            for f in store.folders():  # pick up, or forget, what's inside archives
+        before = Types.of(settings).fingerprint()
+        for key in ("types_off", "types_added"):
+            values = getattr(body, key)
+            if values is not None:
+                if len(values) > 500:
+                    fail(400, "too_many_types")
+                bad = [v for v in values if not filetypes.clean_ext(v)]
+                if bad:
+                    fail(400, "unknown_type", type=str(bad[0])[:20])
+                settings.update(**{key: sorted({filetypes.clean_ext(v) for v in values})})
+        for key in filetypes.RULES:
+            if getattr(body, key) is not None:
+                settings.update(**{key: getattr(body, key)})
+        if Types.of(settings).fingerprint() != before:
+            for f in store.folders():  # pick up, or forget, what's searched now
                 indexer.enqueue_scan(f["id"])
         if body.autostart is not None:
             if not hooks.app_mode:
@@ -369,6 +393,19 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
     def folder_errors(folder_id: int):
         return store.errors(folder_id)
 
+    @app.get("/api/folders/{folder_id}/details")
+    def folder_details(folder_id: int):
+        """What isn't searched in a folder, and why: what its last scan left out, the files that
+        were skipped, and the ones that couldn't be read."""
+        if not store.folder(folder_id):
+            fail(404, "unknown_folder")
+        return {**store.details(folder_id), "errors": store.errors(folder_id)}
+
+    @app.get("/api/filetypes")
+    def file_types():
+        """Settings -> File types: every type there is, and what was changed."""
+        return filetypes.menu(Types.of(settings))
+
     @app.post("/api/pause")
     def pause():
         indexer.pause()
@@ -397,7 +434,7 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
             out.append({
                 **r, "path": f.path, "name": p.name, "dir": str(p.parent), "kind": f.kind,
                 "mtime": f.mtime, "size": f.size,
-                "preview": f.kind == "image" or p.suffix.lower() == ".pdf",
+                "preview": has_preview(p.name, f.kind),
             })
         return out
 
@@ -463,7 +500,7 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
         return {
             "vector": [round(float(x), 4) for x in mean_vector(file_id)],
             "file": {"mtime": f.mtime, "size": f.size, "kind": f.kind,
-                     "preview": f.kind == "image" or f.path.lower().endswith(".pdf"),
+                     "preview": has_preview(Path(f.path).name, f.kind),
                      "passage": store.first_passage(file_id)[:600]},
         }
 
@@ -504,24 +541,14 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
                 yield copy
 
     def rendered(file_id: int, size: int, quality: int):
-        """JPEG preview of an image or the first page of a PDF, cached on disk."""
+        """JPEG preview of an image, or of a document's first page, cached on disk."""
         f = indexed_file(file_id)
         config.THUMBS_DIR.mkdir(parents=True, exist_ok=True)
         out = config.THUMBS_DIR / f"{file_id}-{int(f.mtime)}-{size}.jpg"
         if not out.exists():
             try:
                 with readable(f) as path:
-                    if path.suffix.lower() == ".pdf":
-                        import pymupdf
-                        from PIL import Image
-
-                        with pymupdf.open(path) as doc:
-                            page = doc[0]
-                            zoom = size / max(page.rect.width, page.rect.height)
-                            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-                        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-                    else:
-                        img = load_image(path, size)
+                    img = picture(path, size)
                 img.save(out, "JPEG", quality=quality)
             except Exception as e:
                 log.info("No preview for %s: %s", f.path, e)
@@ -560,6 +587,20 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
         path = indexed_file(file_id).path
         where = archive.split(path)
         subprocess.Popen(f'explorer /select,"{where[0] if where else path}"')  # an archive: show the archive
+        return {"ok": True}
+
+    @app.post("/api/reveal-path")
+    def reveal_path(body: PathIn):
+        """Show a file the index doesn't hold (one that isn't searched, say) in Explorer. Only
+        inside the indexed folders; for a file inside an archive, the archive."""
+        path = body.path
+        if '"' in path or not any(is_inside(path, f["path"]) for f in store.folders()):
+            fail(404, "file_not_found")
+        where = archive.split(path)
+        target = where[0] if where else path
+        if not os.path.exists(target):
+            fail(404, "file_not_found")
+        subprocess.Popen(f'explorer /select,"{target}"')
         return {"ok": True}
 
     @app.exception_handler(Exception)

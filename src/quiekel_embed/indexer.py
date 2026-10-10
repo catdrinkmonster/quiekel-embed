@@ -19,13 +19,15 @@ from watchdog.observers import Observer
 
 from . import archive, config
 from .embedder import Embedder, GpuBusy
-from .extract import SkipFile, extract, kind_of, max_bytes, problem
+from .extract import SkipFile, extract, max_bytes, problem
+from .filetypes import Report, Types
 from .governor import Governor, set_background_priority
 from .store import Settings, Store
 
 log = logging.getLogger(__name__)
 
-_HIDDEN = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0) | getattr(stat, "FILE_ATTRIBUTE_SYSTEM", 0)
+_HIDDEN = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0)
+_SYSTEM = getattr(stat, "FILE_ATTRIBUTE_SYSTEM", 0)
 IDLE_RELEASE_S = 300  # hand the GPU back after this long without indexing work
 GPU_NEEDED_GB = 1.2  # free video memory needed to put the model on the GPU
 # Files read and decoded ahead, so the GPU never waits for the CPU: a whole group of images
@@ -35,20 +37,44 @@ PREFETCH_FILES = 32
 PREFETCH_TIGHT = 8
 
 
-def is_ignored_name(name: str) -> bool:
-    return name.startswith((".", "~$")) or name.lower() in config.IGNORED_DIRS
-
-
-def is_hidden(entry: os.DirEntry) -> bool:
+def attributes(entry: os.DirEntry) -> tuple[bool, bool]:
+    """(hidden, system), as Windows marks them."""
     try:
-        return bool(entry.stat(follow_symlinks=False).st_file_attributes & _HIDDEN)
+        attrs = entry.stat(follow_symlinks=False).st_file_attributes
     except (AttributeError, OSError):
-        return False
+        return False, False
+    return bool(attrs & _HIDDEN), bool(attrs & _SYSTEM)
+
+
+def skipped_part(types: Types, parts) -> str | None:
+    """Why a path's folders or name rule it out (inside an archive, or from a file event)."""
+    *folders, name = parts
+    for folder in folders:
+        why = types.skip_dir(folder, False, False)
+        if why:
+            return why
+    return types.skip_file(name, False, False)
+
+
+def by_container(signatures: dict) -> dict[str, list]:
+    """The known files inside containers, by container: path -> [(path, size, mtime)]."""
+    out: dict[str, list] = {}
+    for path, (_, size, mtime, _status) in signatures.items():
+        parts = path.split("\\")
+        for k in range(1, len(parts)):
+            if archive.container_type(parts[k - 1]):
+                out.setdefault(os.path.normcase("\\".join(parts[:k])), []).append((path, size, mtime))
+                break
+    return out
 
 
 def is_inside(path: str, root: str) -> bool:
     path, root = os.path.normcase(path), os.path.normcase(root.rstrip("\\/"))
     return path == root or path.startswith(root + os.sep)
+
+
+def file_name(path: str) -> str:
+    return path.rsplit("\\", 1)[-1]
 
 
 def search_name(path: str, root: str) -> str:
@@ -270,8 +296,17 @@ class Indexer:
                 self._set(state="error", message=f"{type(e).__name__}: {e}")
                 time.sleep(2)
 
-    def _walk(self, root: str, folder_id: int):
-        """Yield (path, size, mtime) for indexable files below root."""
+    def types(self) -> Types:
+        """What's searched, as Settings -> File types say."""
+        return Types.of(self.settings)
+
+    def _walk(self, root: str, folder_id: int, report: Report | None = None, types: Types | None = None,
+              containers: "_Containers | None" = None):
+        """Yield (path, size, mtime) for the files below root that are searched, also inside
+        archives and emails; note in `report` why everything else isn't."""
+        report = report if report is not None else Report()
+        types = types or self.types()
+        containers = containers or _Containers(types)
         stack = [root]
         while stack:
             if folder_id in self._cancelled:
@@ -280,30 +315,44 @@ class Indexer:
             try:
                 with os.scandir(d) as it:
                     entries = list(it)
+            except PermissionError:
+                report.add("no_access_dir", d)
+                continue
             except OSError:
+                report.add("unreadable_dir", d)
                 continue
             for e in entries:
-                if is_ignored_name(e.name) or is_hidden(e):
-                    continue
                 try:
                     if e.is_symlink() or getattr(e, "is_junction", lambda: False)():
+                        report.add("link", e.path)  # it could lead anywhere, or in circles
                         continue
-                    if e.is_dir(follow_symlinks=False):
-                        if not is_inside(e.path, str(config.DATA_DIR)):
-                            stack.append(e.path)
-                    elif kind_of(Path(e.name)):
-                        st = e.stat(follow_symlinks=False)
-                        yield e.path, st.st_size, st.st_mtime
-                    elif archive.is_archive(e.name) and self.settings.get("search_zips"):
-                        yield from self._archive_files(e.path)
+                    is_dir = e.is_dir(follow_symlinks=False)
                 except OSError:
                     continue
-
-    def _archive_files(self, path: str):
-        """(path, size, mtime) for the indexable files inside an archive, as if it were a folder."""
-        for inner, parts, size, mtime in archive.entries(path):
-            if kind_of(Path(parts[-1])) and not any(is_ignored_name(part) for part in parts):
-                yield inner, size, mtime
+                hidden, system = attributes(e)
+                if is_dir:
+                    why = types.skip_dir(e.name, hidden, system)
+                    if why:
+                        report.add(why, e.path)
+                    elif not is_inside(e.path, str(config.DATA_DIR)):
+                        stack.append(e.path)
+                    continue
+                why = types.skip_file(e.name, hidden, system)
+                if why:
+                    report.add(why, e.path)
+                    continue
+                kind, inside = types.kind(e.name), types.inside(e.name)
+                if not kind and not inside:
+                    report.add_type(types.why_not(e.name), e.path)
+                    continue
+                try:
+                    st = e.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if kind:
+                    yield e.path, st.st_size, st.st_mtime
+                if inside:
+                    yield from containers.files(e.path, st.st_size, st.st_mtime, report)
 
     def _scan_folder(self, folder_id: int):
         folder = self.store.folder(folder_id)
@@ -316,10 +365,13 @@ class Indexer:
             time.sleep(2)
             return
 
+        types = self.types()
         known = self.store.file_signatures(folder_id)
         known_ci = {os.path.normcase(p): v for p, v in known.items()}
+        containers = _Containers(types, self.store.containers(folder_id), by_container(known))
+        report = Report()
         seen, todo = set(), []
-        for n, (path, size, mtime) in enumerate(self._walk(root, folder_id), 1):
+        for n, (path, size, mtime) in enumerate(self._walk(root, folder_id, report, types, containers), 1):
             key = os.path.normcase(path)
             seen.add(key)
             sig = known_ci.get(key)
@@ -335,63 +387,72 @@ class Indexer:
         if gone:
             self.store.remove_file_ids(gone)
         # Everything found is searchable by name right away; by content as indexing gets to it.
-        self.store.add_pending(folder_id, [(p, size, mtime, kind_of(Path(p)) or "text", search_name(p, root))
+        self.store.add_pending(folder_id, [(p, size, mtime, types.kind(file_name(p)) or "text", search_name(p, root))
                                            for p, size, mtime in todo])
-        self._index_files(folder_id, root, todo)
+        self._index_files(folder_id, root, todo, types)
         if folder_id not in self._cancelled:
-            self.store.mark_scanned(folder_id)
+            self.store.save_containers(folder_id, list(containers.seen.values()))
+            self.store.mark_scanned(folder_id, report.data)
             if todo or gone:
                 self.store.optimize()
 
     def _handle_paths(self, paths: list[str]):
         folders = [f for f in self.store.folders() if f["watch"]]
+        types = self.types()
         removed, by_folder = [], {}
         for p in dict.fromkeys(paths):
             folder = next((f for f in folders if is_inside(p, f["path"])), None)
             if folder is None or is_inside(p, str(config.DATA_DIR)):
                 continue
             rel = Path(os.path.relpath(p, folder["path"]))
-            if any(is_ignored_name(part) for part in rel.parts):
+            if rel.parts and skipped_part(types, rel.parts):
                 continue
+            files = by_folder.setdefault(folder["id"], (folder["path"], []))[1]
             if not os.path.exists(p):
                 removed.append(p)
             elif os.path.isdir(p):
                 # A folder appeared (e.g. moved in): index everything below it.
-                by_folder.setdefault(folder["id"], (folder["path"], []))[1].extend(
-                    f for f in self._walk(p, folder["id"]) if self._changed(f)
-                )
-            elif archive.is_archive(p) and self.settings.get("search_zips"):
-                # An archive changed: index what's new or changed inside, forget what's gone.
-                inner = list(self._archive_files(p))
-                keep = {os.path.normcase(f[0]) for f in inner}
-                prefix = os.path.normcase(p) + "\\"
-                stale = [v[0] for q, v in self.store.file_signatures(folder["id"]).items()
-                         if os.path.normcase(q).startswith(prefix) and os.path.normcase(q) not in keep]
-                if stale:
-                    self.store.remove_file_ids(stale)
-                by_folder.setdefault(folder["id"], (folder["path"], []))[1].extend(
-                    f for f in inner if self._changed(f)
-                )
-            elif kind_of(Path(p)):
+                files.extend(f for f in self._walk(p, folder["id"], types=types) if self._changed(f))
+            else:
+                name = file_name(p)
+                kind, inside = types.kind(name), types.inside(name)
+                if not kind and not inside:
+                    continue
                 try:
                     st = os.stat(p)
                 except OSError:
                     continue
-                f = (p, st.st_size, st.st_mtime)
-                if self._changed(f):
-                    by_folder.setdefault(folder["id"], (folder["path"], []))[1].append(f)
+                attrs = getattr(st, "st_file_attributes", 0)
+                if types.skip_file(name, bool(attrs & _HIDDEN), bool(attrs & _SYSTEM)):
+                    continue
+                if kind and self._changed((p, st.st_size, st.st_mtime)):
+                    files.append((p, st.st_size, st.st_mtime))
+                if inside:
+                    # An archive or an email changed: index what's new or changed inside it, and
+                    # forget what's gone.
+                    containers = _Containers(types)
+                    inner = list(containers.files(p, st.st_size, st.st_mtime, Report()))
+                    keep = {os.path.normcase(f[0]) for f in inner}
+                    prefix = os.path.normcase(p) + "\\"
+                    stale = [v[0] for q, v in self.store.file_signatures(folder["id"]).items()
+                             if os.path.normcase(q).startswith(prefix) and os.path.normcase(q) not in keep]
+                    if stale:
+                        self.store.remove_file_ids(stale)
+                    files.extend(f for f in inner if self._changed(f))
+                    self.store.save_containers(folder["id"], list(containers.seen.values()), replace=False)
         if removed:
             self.store.remove_paths(removed)
         for folder_id, (root, files) in by_folder.items():
-            self._index_files(folder_id, root, files)
+            self._index_files(folder_id, root, files, types)
 
     def _changed(self, f) -> bool:
         sig = self.store.signature(f[0])
         return sig is None or sig[1] != f[1] or abs(sig[2] - f[2]) > 1e-3
 
-    def _index_files(self, folder_id: int, root: str, files: list):
+    def _index_files(self, folder_id: int, root: str, files: list, types: Types | None = None):
         if not files:
             return
+        types = types or self.types()
         total = len(files)
         self._set(state="indexing", folder=root, done=0, total=total, current="")
         self._recent.clear()
@@ -399,7 +460,7 @@ class Indexer:
         # the GPU isn't left waiting between groups: a steady load instead of bursts.
         ready: queue.Queue = queue.Queue(maxsize=PREFETCH_FILES)
         stop = threading.Event()
-        threading.Thread(target=self._extract_ahead, args=(folder_id, root, files, ready, stop),
+        threading.Thread(target=self._extract_ahead, args=(folder_id, root, files, types, ready, stop),
                          name="extract", daemon=True).start()
         group = _Group()
         try:
@@ -444,10 +505,12 @@ class Indexer:
             if self.governor.decision.duty <= 0:
                 self._manage_device(working=True)
 
-    def _extract_ahead(self, folder_id: int, root: str, files: list, ready: queue.Queue, stop: threading.Event):
+    def _extract_ahead(self, folder_id: int, root: str, files: list, types: Types, ready: queue.Queue,
+                       stop: threading.Event):
         """The reading side of the pipeline: files in, (entry, chunks) out, in order."""
         try:
-            self._read_all(folder_id, root, files, ready, stop)
+            with archive.session():  # archives stay open while their files are read one by one
+                self._read_all(folder_id, root, files, types, ready, stop)
         except Exception:
             log.exception("Reading ahead failed")
         # "No more files", even after an error, or the indexer would wait forever (unless it
@@ -459,7 +522,8 @@ class Indexer:
             except queue.Full:
                 pass
 
-    def _read_all(self, folder_id: int, root: str, files: list, ready: queue.Queue, stop: threading.Event):
+    def _read_all(self, folder_id: int, root: str, files: list, types: Types, ready: queue.Queue,
+                  stop: threading.Event):
         set_background_priority(self.settings.get("perf_mode") != "full")
 
         def hand_over(item) -> bool:
@@ -481,31 +545,38 @@ class Indexer:
             if stop.is_set() or folder_id in self._cancelled:
                 break
             started = time.perf_counter()
-            item = self._read(folder_id, root, path, size, mtime)
+            item = self._read(folder_id, root, path, size, mtime, types)
             # Reading is paced like embedding, so a busy PC gets its CPU back too.
             self.governor.pace(time.perf_counter() - started, should_stop=lambda: stop.is_set() or self._paused.is_set())
             if not hand_over(item):
                 break
 
-    def _read(self, folder_id: int, root: str, path: str, size: int, mtime: float) -> tuple[dict, list]:
+    def _read(self, folder_id: int, root: str, path: str, size: int, mtime: float,
+              types: Types) -> tuple[dict, list]:
+        name = file_name(path)
+        kind = types.kind(name) or "text"
         entry = {
             "folder_id": folder_id, "path": path, "size": size, "mtime": mtime,
-            "kind": kind_of(Path(path)), "status": "indexed", "chunks": 0, "error": None,
+            "kind": kind, "status": "indexed", "chunks": 0, "error": None,
             "search_name": search_name(path, root),
         }
         try:
-            if archive.SUFFIX + "\\" in path.lower():
-                limit = max_bytes(entry["kind"])
+            if not os.path.exists(path) and archive.split(path) is not None:  # inside an archive or an email
+                limit = max_bytes(kind, name)
                 if size > limit:
-                    raise SkipFile("too large")
+                    raise SkipFile("too_large")
                 with archive.extracted(path, limit) as copy:
-                    ex = extract(copy, size, title=embed_title(path, root))
+                    ex = extract(copy, size, title=embed_title(path, root), kind=kind)
             else:
-                ex = extract(Path(path), size, title=embed_title(path, root))
+                ex = extract(Path(path), size, title=embed_title(path, root), kind=kind)
             entry["kind"] = ex.kind
             return entry, ex.chunks
         except SkipFile as e:
-            entry.update(status="skipped", error=str(e))
+            entry.update(status="skipped", error=f"!{e}")
+        except archive.Encrypted:
+            entry.update(status="skipped", error="!password")
+        except archive.TooLarge:
+            entry.update(status="skipped", error="!too_large")
         except Exception as e:
             entry.update(status="error", error=problem(e))
         return entry, []
@@ -526,7 +597,7 @@ class Indexer:
                 single.add(entry, chunks)
                 one = self._embed(single)
                 if one is None:
-                    entry.update(status="error", chunks=0, error="embedding failed")
+                    entry.update(status="error", chunks=0, error="!embed_failed")
                 else:
                     rows.extend(one)
         self.store.save_files(group.entries, rows)
@@ -606,6 +677,42 @@ class _Group:
                     "kind": entry["kind"], "text": snippet, "vector": v.tolist(),
                 })
         return rows
+
+
+class _Containers:
+    """Looking into archives and emails while walking a folder. One that hasn't changed since the
+    last scan isn't opened again: what's inside it is known, and so is why the rest isn't searched
+    (opening every email at every start would take minutes in a big mail folder)."""
+
+    def __init__(self, types: Types, saved: dict | None = None, members: dict | None = None):
+        self.types = types
+        self.fingerprint = types.fingerprint()
+        self.saved = saved or {}  # normcase(path) -> what the last scan found
+        self.members = members or {}  # normcase(path) -> [(path, size, mtime)] known inside it
+        self.seen: dict[str, dict] = {}  # normcase(path) -> what this scan found
+
+    def files(self, path: str, size: int, mtime: float, report: Report):
+        key = os.path.normcase(path)
+        old = self.saved.get(key)
+        if old and old["size"] == size and abs(old["mtime"] - mtime) <= 1e-3 and old["types"] == self.fingerprint:
+            report.merge(old["report"])
+            self.seen[key] = old
+            yield from self.members.get(key, ())
+            return
+        types, found = self.types, Report()
+        for item in archive.walk(path, mtime, types.inside, types.rules["nested_archives"], types.max_entries):
+            if item.problem:
+                found.add(item.problem, item.path)
+                continue
+            why = skipped_part(types, item.path[len(path) + 1:].split("\\"))
+            if why:
+                found.add(why, item.path)
+            elif types.kind(item.name):
+                yield item.path, item.size, item.mtime
+            elif not types.inside(item.name):
+                found.add_type(types.why_not(item.name), item.path)
+        report.merge(found.data)
+        self.seen[key] = {"path": path, "size": size, "mtime": mtime, "types": self.fingerprint, "report": found.data}
 
 
 class Watcher(FileSystemEventHandler):
