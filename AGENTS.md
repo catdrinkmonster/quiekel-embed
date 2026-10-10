@@ -16,14 +16,17 @@ Notes for anyone changing this repository, people and coding agents alike.
 
 ## Working on the code
 
-- Python 3.13 via [uv](https://docs.astral.sh/uv/): `uv sync`, then `uv run pytest -q`.
+- Python 3.13 via [uv](https://docs.astral.sh/uv/): `uv sync --group directml`, then `uv run pytest -q`.
+- Two AI engines: PyTorch (group `nvidia`, the default) and ONNX Runtime with DirectML (group
+  `directml`). The installer installs one, by the graphics card; `--group directml` on top of the
+  default gives a working copy both, and `QUIEKEL_EMBED_ENGINE=torch|onnx` picks one.
 - Run the app with `uv run quiekel-embed-app`, or `uv run quiekel-embed` for the browser version.
 - Every UI text lives in `src/quiekel_embed/static/i18n.json`: every key in English, German,
   French and Spanish.
-- Tests must pass. CI runs all of them on Windows for every pull request, with PyTorch's CPU build
-  (the machines have no NVIDIA card).
-- The app stays gentle on the PC: no windows or focus changes over fullscreen apps, and GPU work
-  waits while one runs.
+- Tests must pass. CI runs all of them on Windows for every pull request: with both engines
+  (PyTorch's CPU build, the machines have no NVIDIA card), and as installed without PyTorch.
+- The app stays gentle on the PC: no windows or focus changes over fullscreen apps. Indexing slows
+  down for busy apps as the speed setting says, and only waits when memory runs out.
 
 ## Shipping
 

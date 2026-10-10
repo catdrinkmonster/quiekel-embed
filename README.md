@@ -34,8 +34,14 @@ irm https://github.com/catdrinkmonster/quiekel-embed/raw/main/install.ps1 | iex
 ```
 
 It sets up what's missing (uv, and Git if needed), puts **Quiekel Embed** on your Desktop and starts
-it. It downloads about 4.5 GB (the AI model included) and needs about 6.5 GB of disk. An NVIDIA
-graphics card makes it much faster but isn't required. To update, run the line again.
+it, with the AI engine that fits your graphics card:
+
+| Graphics card | Engine | Download (with the AI model) |
+|---|---|---|
+| NVIDIA | PyTorch with CUDA, the fastest | about 4.5 GB |
+| AMD, Intel, or none | ONNX Runtime with DirectML; without a graphics card, on the processor (slower) | about 1.2 GB |
+
+To update, run the line again.
 
 <details>
 <summary>Install by hand, or uninstall</summary>
@@ -48,6 +54,9 @@ cd "$env:LOCALAPPDATA\Programs\Quiekel Embed"
 uv sync --locked
 uv run quiekel-embed-shortcuts
 ```
+
+That's the engine for NVIDIA cards. For any other card, put `directml` into a file `engine.txt`
+there (updates follow it) and install with `uv sync --locked --no-group nvidia --group directml`.
 
 To uninstall, quit Quiekel from its tray icon, then:
 
