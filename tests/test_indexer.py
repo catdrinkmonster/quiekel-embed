@@ -171,6 +171,50 @@ def test_found_files_are_searchable_by_name_before_they_are_indexed(make_indexer
     assert indexer.store.folders()[0]["pending"] == 0
 
 
+def test_the_watcher_notes_changes_at_once_while_indexing_waits(make_indexer, tmp_path):
+    import os
+
+    indexer = make_indexer()
+    folder = tmp_path / "docs"
+    files = notes(folder, 3)
+    fid = indexer.store.add_folder(str(folder))
+    indexer._scan_folder(fid)
+    indexer.pause()  # (or busy with a big folder: the watcher doesn't wait for it)
+    new = folder / "einkaufsliste.txt"
+    new.write_text("Milch, Eier, Mehl", encoding="utf-8")
+    os.remove(files[1][0])
+
+    indexer.enqueue_paths([str(new), files[1][0]])
+    known = indexer.store.file_signatures(fid)
+    assert known[str(new)][3] == "pending" and files[1][0] not in known  # right away
+    assert [h["file_id"] for h in indexer.store.keyword_search('"einkaufsliste"*', 10)] == [known[str(new)][0]]
+    assert indexer.store.folders()[0]["pending"] == 1
+
+    indexer.resume()
+    while not indexer.jobs.empty():  # what the indexer does in turn
+        indexer._do(*indexer.jobs.get())
+    assert indexer.store.file_signatures(fid)[str(new)][3] == "indexed"
+    assert indexer.store.folders()[0]["pending"] == 0
+
+
+def test_a_file_back_before_its_turn_stays(make_indexer, tmp_path):
+    import os
+
+    indexer = make_indexer()
+    folder = tmp_path / "docs"
+    files = notes(folder, 2)
+    fid = indexer.store.add_folder(str(folder))
+    indexer._scan_folder(fid)
+    path = files[1][0]
+    os.rename(path, path + ".bak")
+    indexer.enqueue_paths([path])  # deleted...
+    os.rename(path + ".bak", path)
+    indexer.enqueue_paths([path])  # ...and back, before the indexer got to either
+    while not indexer.jobs.empty():
+        indexer._do(*indexer.jobs.get())
+    assert indexer.store.file_signatures(fid)[path][3] == "indexed"
+
+
 def test_files_that_failed_are_tried_again_on_the_next_scan(make_indexer, tmp_path):
     indexer = make_indexer()
     folder = tmp_path / "docs"

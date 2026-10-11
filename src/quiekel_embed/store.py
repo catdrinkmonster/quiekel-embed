@@ -553,12 +553,13 @@ class Store:
             if fts:
                 self._changed()
 
-    def signature(self, path: str) -> tuple[int, int, float] | None:
+    def signature(self, path: str) -> tuple[int, int, float, str] | None:
+        """(id, size, mtime, status) of a known file."""
         with self._lock:
             row = self._db.execute(
-                "SELECT id, size, mtime FROM files WHERE path = ?", (path,)
+                "SELECT id, size, mtime, status FROM files WHERE path = ?", (path,)
             ).fetchone()
-        return (row["id"], row["size"], row["mtime"]) if row else None
+        return (row["id"], row["size"], row["mtime"], row["status"]) if row else None
 
     def errors(self, folder_id: int, limit: int = 500) -> list[dict]:
         """A folder's unreadable files, newest first; "seen": its warning was looked at."""
