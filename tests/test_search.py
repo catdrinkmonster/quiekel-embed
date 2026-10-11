@@ -126,9 +126,9 @@ def test_settings_persist(store):
 
     s = Settings(store)
     assert s.get("perf_mode") == "balanced"
-    s.update(perf_mode="gentle", free_gpu_idle=False)
+    s.update(perf_mode="gentle", view_files="list")
     again = Settings(store)
-    assert again.get("perf_mode") == "gentle" and again.get("free_gpu_idle") is False
+    assert again.get("perf_mode") == "gentle" and again.get("view_files") == "list"
 
 
 def save_vectors(store, folder_id, path, kind, vectors):

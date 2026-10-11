@@ -26,7 +26,7 @@ Notes for anyone changing this repository, people and coding agents alike.
 - Tests must pass. CI runs all of them on Windows for every pull request: with both engines
   (PyTorch's CPU build, the machines have no NVIDIA card), and as installed without PyTorch.
 - The app stays gentle on the PC: no windows or focus changes over fullscreen apps. Indexing slows
-  down for busy apps as the speed setting says, and only waits when memory runs out.
+  down for busy apps as the Performance setting says, and only waits when memory runs out.
 
 ## Shipping
 

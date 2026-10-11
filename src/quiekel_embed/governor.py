@@ -25,8 +25,18 @@ from . import i18n
 
 log = logging.getLogger(__name__)
 
-MODES = ("gentle", "balanced", "full")  # names and descriptions live in i18n.json
+MODES = ("gentle", "balanced", "full")  # Light, Balanced, Maximum: the names live in i18n.json
 DEFAULT_MODE = "balanced"
+
+
+def lean(mode: str) -> bool:
+    """Light: search data stays on disk, and the model leaves memory when it isn't used."""
+    return mode == "gentle"
+
+
+def keeps_gpu(mode: str) -> bool:
+    """Maximum: keeps the graphics card even when there's nothing to index."""
+    return mode == "full"
 AWAY_AFTER_S = 180  # no keyboard/mouse input for this long counts as "away"
 
 

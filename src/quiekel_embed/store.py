@@ -2,7 +2,7 @@
 
 Searches don't scan the vector table on disk: every passage's vector is also kept in memory
 (`_Vectors`, about 1 KB per passage), which turns a search into a few milliseconds of matrix
-maths. The "lean" memory setting turns that off; searches then go to the table on disk.
+maths. Light performance turns that off; searches then go to the table on disk.
 """
 
 import gc
@@ -120,7 +120,7 @@ def _arrow_rows(rows) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, n
                 np.zeros((0, config.EMBED_DIM), np.float32))
     kinds = np.array([KIND_CODES.get(k, 9) for k in rows.column("kind").to_pylist()], np.int8)
     # NumPy's own copy: memory Arrow allocated isn't given back to Windows once its thread
-    # has ended, while big NumPy arrays are (the "lean" setting relies on that).
+    # has ended, while big NumPy arrays are (Light performance relies on that).
     vecs = rows.column("vector").combine_chunks().flatten().to_numpy(zero_copy_only=False)
     return (rows.column("file_id").to_numpy().astype(np.int64), rows.column("chunk").to_numpy().astype(np.int32),
             kinds, rows.column("folder_id").to_numpy().astype(np.int64),
@@ -303,8 +303,8 @@ class Store:
     # ---- vectors in memory -------------------------------------------------
 
     def keep_vectors_in_memory(self, keep: bool):
-        """The "fast" memory setting keeps them (and fills them now, in the background);
-        "lean" lets them go and searches the table on disk."""
+        """Balanced and Maximum performance keep them (and fill them now, in the background);
+        Light lets them go and searches the table on disk."""
         self._keep_vectors = keep
         if keep:
             threading.Thread(target=self.load_vectors, name="vectors", daemon=True).start()
@@ -882,8 +882,8 @@ class Settings:
     """User settings, kept in the meta table."""
 
     # Update checks are off until you turn them on: nothing goes online that you didn't ask for.
-    DEFAULTS = {"perf_mode": "balanced", "free_gpu_idle": True, "check_updates": False, "language": "auto",
-                "theme": "auto", "view_files": "cards", "view_images": "grid", "memory": "fast",
+    DEFAULTS = {"perf_mode": "balanced", "check_updates": False, "language": "auto",
+                "theme": "auto", "view_files": "cards", "view_images": "grid",
                 # Settings -> File types (see filetypes.py)
                 "types_off": [], "types_added": [], "attachments": True, "nested_archives": True,
                 "big_archives": False, "hidden_files": False, "program_folders": False}

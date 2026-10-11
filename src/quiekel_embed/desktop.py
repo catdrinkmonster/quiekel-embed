@@ -157,8 +157,6 @@ class Tray:
                          checked=lambda _, m=mode: self._mode() == m)
                     for mode in MODES
                 ])),
-                item(lambda _: tr("tray.free_gpu"), self._toggle_free_gpu, enabled=ready,
-                     checked=lambda _: bool(self.backend and self.backend.settings.get("free_gpu_idle"))),
                 item(lambda _: tr("tray.autostart"), self._toggle_autostart,
                      checked=lambda _: shortcuts.autostart_enabled()),
                 pystray.Menu.SEPARATOR,
@@ -211,12 +209,6 @@ class Tray:
         else:
             indexer.pause()
         self.icon.update_menu()
-
-    def _toggle_free_gpu(self):
-        if self.backend:
-            s = self.backend.settings
-            s.update(free_gpu_idle=not s.get("free_gpu_idle"))
-            self.icon.update_menu()
 
     def _toggle_autostart(self):
         try:

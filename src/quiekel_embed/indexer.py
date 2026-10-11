@@ -21,7 +21,7 @@ from . import archive, config
 from .embedder import Embedder, GpuBusy
 from .extract import SkipFile, extract, max_bytes, problem
 from .filetypes import Report, Types
-from .governor import Governor, set_background_priority
+from .governor import Governor, keeps_gpu, lean, set_background_priority
 from .store import Settings, Store
 
 log = logging.getLogger(__name__)
@@ -200,26 +200,28 @@ class Indexer:
             time.sleep(0.5)
 
     def _manage_device(self, working: bool):
+        """What stays loaded with nothing to do, by the Performance setting: Light lets the model go,
+        Balanced gives the graphics card back, Maximum keeps it."""
         e = self.embedder
         if not e.ready:
             return
         unused = not working and time.monotonic() - max(self._last_work, e.last_used) > IDLE_RELEASE_S
-        lean = self.settings.get("memory") == "lean"
-        if unused and lean:
+        mode = self.settings.get("perf_mode")
+        if unused and lean(mode):
             e.unload("not used for a while")  # wakes up again for the next search or new file
             return
-        if not (e.cuda and e.on_gpu):
+        if not e.on_gpu:
             return
-        # Handing the GPU back moves the model into RAM; with "lean" memory it leaves instead.
-        let_go = e.unload if lean else e.release_gpu
+        # Handing the GPU back moves the model into RAM (ONNX Runtime lets go of it); Light lets go.
+        let_go = e.unload if lean(mode) else e.release_gpu
         m = self.governor.metrics
         if m.vram_free_gb is not None and m.vram_free_gb < 0.3:
             let_go("GPU memory almost full")
-        elif self.settings.get("free_gpu_idle") and unused:
+        elif unused and not keeps_gpu(mode):
             let_go("nothing to index")
 
     def wake_model(self):
-        """Load the model again after it went to sleep (lean memory setting), in the background."""
+        """Load the model again after it went to sleep (Light performance), in the background."""
         e = self.embedder
         if e.ready or e.status != "asleep" or self._waking.is_set():
             return

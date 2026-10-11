@@ -188,7 +188,7 @@ class Embedder:
             raise
 
     def unload(self, why: str):
-        """Let go of the model entirely (the "lean" memory setting, when it isn't used): its
+        """Let go of the model entirely (Light performance, when it isn't used): its
         video memory and RAM are freed. The next search or file to index loads it again."""
         if not self.ready:
             return
