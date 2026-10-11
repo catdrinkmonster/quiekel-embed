@@ -224,3 +224,59 @@ def test_broken_files_are_named_in_words(tmp_path):
     assert problem(Damaged("email")) == "!damaged_email"
     locked = PermissionError(13, "The process cannot access the file", None, 32)
     assert problem(locked) == "!in_use"
+
+
+def test_layered_paintings_are_seen_by_their_finished_picture(tmp_path):
+    for name in ("Drache.kra", "Skizze.ora"):  # Krita, OpenRaster: ZIPs with the merged picture inside
+        painting = tmp_path / name
+        with zipfile.ZipFile(painting, "w") as z:
+            z.writestr("mimetype", "application/x-krita")
+            z.writestr("mergedimage.png", samples.png((640, 480)))
+            z.writestr("preview.png", samples.png((256, 192)))
+        ex = extract(painting, painting.stat().st_size)
+        assert ex.kind == "image" and ex.chunks[0].image.size == (640, 480)
+        assert picture(painting, 320).size == (320, 240)
+    broken = tmp_path / "kaputt.kra"
+    broken.write_bytes(b"PK\x03\x04 not really")
+    with pytest.raises(Damaged):
+        extract(broken, broken.stat().st_size)
+
+
+def test_illustrator_drawings_are_read_as_the_pdfs_they_are(tmp_path):
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "Logo for the Schmidt bakery")
+    ai = tmp_path / "Logo.ai"
+    doc.save(ai)
+    assert "Schmidt bakery" in text_of(ai)
+    assert has_preview(ai.name, "doc") and picture(ai, 200).width > 0
+
+
+def test_files_without_an_extension_are_looked_at(tmp_path):
+    from quiekel_embed.filetypes import Types
+
+    photo = tmp_path / "441380981_837794958383993_n"  # how some exports name their photos
+    photo.write_bytes(samples.jpeg((640, 480), (200, 80, 40)))
+    note = tmp_path / "Einkaufsliste"
+    note.write_text("Milch, Eier, Mehl", encoding="utf-8")
+    blob = tmp_path / "cache_0001"
+    blob.write_bytes(bytes(range(256)) * 4)
+    types = Types()
+    assert types.kind(photo.name, str(photo)) == "image" and types.kind(note.name, str(note)) == "text"
+    assert types.kind(blob.name, str(blob)) is None and types.kind(photo.name) is None  # (the name alone says nothing)
+    assert extract(photo, photo.stat().st_size, kind="image").chunks[0].image.size == (640, 480)
+
+
+def test_what_isnt_searched_is_named_for_what_it_is():
+    from quiekel_embed.filetypes import Types
+
+    t = Types()
+    assert t.skip_dir("data", False, False, parent="Android") == "program_folder"  # apps' own data in a phone's copy
+    assert t.skip_dir("media", False, False, parent="Android") is None  # what apps saved for you
+    assert t.skip_dir("data", False, False, parent="Projekte") is None
+    assert Types(program_folders=True).skip_dir("data", False, False, parent="Android") is None
+    assert t.skip_file("Drache.kra~", False, False) == t.skip_file("Brief.docx.bak", False, False) == "backup"
+    assert [t.why_not(n) for n in ("Held.prefab", "Held.meta", "Held.fbx", "Plakat.eps")] == ["program", "program",
+                                                                                            "media", "type"]
+    assert t.kind("tick.mcfunction") == "code" and t.kind("pack.mcmeta") == "code"

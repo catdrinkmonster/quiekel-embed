@@ -48,6 +48,8 @@ CODE_EXTS = {
     ".css", ".scss", ".sass", ".less", ".styl", ".vue", ".svelte", ".astro", ".jsp", ".asp",
     ".aspx", ".cshtml", ".razor", ".haml", ".slim", ".pug", ".hbs", ".mustache", ".ejs", ".njk",
     ".jinja", ".j2", ".twig", ".liquid", ".tpl",
+    # games: Minecraft's data packs
+    ".mcfunction", ".mcmeta",
 }
 TEXT_EXTS = PROSE_EXTS | CODE_EXTS
 # Some files are known by their name alone.
@@ -68,6 +70,8 @@ DOC_EXTS = {
     ".odt", ".ott", ".fodt", ".ods", ".ots", ".fods", ".odp", ".otp", ".fodp", ".odg", ".otg", ".fodg",
     # e-books and other page formats
     ".epub", ".mobi", ".fb2", ".xps", ".oxps", ".cbz",
+    # Illustrator drawings (saved PDF-compatible, as Illustrator does by default)
+    ".ai",
     # emails and saved web pages
     ".eml", ".msg", ".mht", ".mhtml",
 }
@@ -76,17 +80,22 @@ RAW_EXTS = {
     ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng", ".orf", ".rw2", ".raf",
     ".pef", ".srw", ".x3f", ".3fr", ".iiq", ".mrw", ".kdc", ".dcr", ".erf", ".mef", ".mos", ".rwl",
 }
+# Paintings saved with their layers (Krita, OpenRaster): searched by the finished picture inside.
+LAYERED_EXTS = {".kra", ".ora"}
 IMAGE_EXTS = {
     ".jpg", ".jpeg", ".jfif", ".jpe", ".png", ".apng", ".webp", ".avif", ".bmp", ".dib", ".gif",
     ".tif", ".tiff", ".heic", ".heif", ".jp2", ".j2k", ".jpf", ".jpx", ".psd", ".tga", ".pcx",
     ".qoi", ".svg",
-} | RAW_EXTS
+} | RAW_EXTS | LAYERED_EXTS
 
 # Why other files aren't searched, by kind (see the folder's details in the app).
 MEDIA_EXTS = {
     ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wma", ".aiff", ".aif",
     ".mid", ".midi", ".amr", ".ape", ".mka", ".mp4", ".m4v", ".mkv", ".avi", ".mov", ".wmv", ".webm",
     ".flv", ".mpg", ".mpeg", ".m2ts", ".mts", ".3gp", ".vob", ".ogv", ".asf", ".rm", ".rmvb",
+    # 3D models, and games' sound banks
+    ".fbx", ".glb", ".gltf", ".blend", ".stl", ".3ds", ".dae", ".max", ".c4d", ".ma", ".mb", ".usd",
+    ".usda", ".usdc", ".usdz", ".ply", ".3mf", ".bnk",
 }
 PROGRAM_EXTS = {
     ".exe", ".dll", ".msi", ".msix", ".msixbundle", ".appx", ".appxbundle", ".sys", ".drv", ".ocx",
@@ -95,8 +104,15 @@ PROGRAM_EXTS = {
     ".nupkg", ".whl", ".crx", ".xpi", ".lnk", ".url", ".ttf", ".otf", ".ttc", ".woff", ".woff2",
     ".fon", ".eot", ".vhd", ".vhdx", ".vmdk", ".img", ".dmg", ".bin", ".dat", ".tmp", ".cache",
     ".db", ".sqlite", ".sqlite3", ".mdb", ".accdb", ".ldf", ".mdf", ".dmp", ".etl", ".evtx",
+    # apps' and game projects' own data (Unity, Godot, app databases), keys and certificates
+    ".meta", ".prefab", ".anim", ".controller", ".overridecontroller", ".unity", ".asset", ".mat",
+    ".physicmaterial", ".mask", ".playable", ".shadergraph", ".shadersubgraph", ".import", ".uid",
+    ".ldb", ".obb", ".pak", ".db-journal", ".db-wal", ".db-shm", ".sqlite3-journal",
+    ".pfx", ".p12", ".cer", ".crt", ".der", ".pem",
 }
 MAILBOX_EXTS = {".pst", ".ost", ".nst", ".olm", ".mbox"}
+# Older versions apps keep (so are names that end in ~): the file itself is searched instead.
+BACKUP_EXTS = {".bak", ".old", ".orig"}
 
 # Folder names that are never worth indexing.
 IGNORED_DIRS = {

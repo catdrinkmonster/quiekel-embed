@@ -215,6 +215,22 @@ def test_a_file_back_before_its_turn_stays(make_indexer, tmp_path):
     assert indexer.store.file_signatures(fid)[path][3] == "indexed"
 
 
+def test_a_phone_copy_leaves_out_the_apps_own_data(make_indexer, tmp_path):
+    from quiekel_embed.filetypes import Report
+
+    indexer = make_indexer()
+    phone = tmp_path / "Phone copy"
+    cache = phone / "Android" / "data" / "com.example.music" / "cache"
+    cache.mkdir(parents=True)
+    (cache / "cover").write_text("not for searching", encoding="utf-8")
+    saved = phone / "Android" / "media" / "com.example.chat"
+    saved.mkdir(parents=True)
+    (saved / "note.txt").write_text("saved from a chat", encoding="utf-8")
+    report = Report()
+    assert [p for p, *_ in indexer._walk(str(phone), 0, report)] == [str(saved / "note.txt")]
+    assert report.data["program_folder"]["n"] == 1
+
+
 def test_files_that_failed_are_tried_again_on_the_next_scan(make_indexer, tmp_path):
     indexer = make_indexer()
     folder = tmp_path / "docs"
