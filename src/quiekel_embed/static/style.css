@@ -54,6 +54,8 @@
   --kind-text: #7048e8;
   --kind-code: #f54e00;
   --kind-images: #f2547f;
+  --match-s: 72%;  /* the match ring's colours: red to green at this saturation and lightness */
+  --match-l: 44%;
   /* for the map's canvas, which needs plain numbers */
   --ink-rgb: 21, 21, 21;
   --card-rgb: 255, 255, 255;
@@ -97,6 +99,8 @@
   --badge-fg: #151618;
   --overlay: rgba(0, 0, 0, .72);
   --overlay-soft: rgba(0, 0, 0, .45);
+  --match-s: 62%;
+  --match-l: 56%;
   --focus-ring: rgba(255, 109, 46, .25);
   --yellow-bg: #3a2f12;
   --yellow-line: #6b5419;
@@ -400,14 +404,12 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .result:hover .actions, .result.selected .actions, .result .actions:focus-within { opacity: 1; }
 
 .match { display: inline-flex; align-items: center; gap: 6px; flex: none; cursor: help; }
-.bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 13px; }
-.bars i { width: 4px; border-radius: 1.5px; background: var(--border); }
-.bars i:nth-child(1) { height: 5px; }
-.bars i:nth-child(2) { height: 9px; }
-.bars i:nth-child(3) { height: 13px; }
-.bars.q1 i:nth-child(1) { background: var(--faint); }
-.bars.q2 i:nth-child(-n+2) { background: var(--blue); }
-.bars.q3 i { background: var(--green); }
+/* How well it matches: filled that far, red (0) through yellow to green (120) */
+.match-ring { display: inline-grid; flex: none; }
+.match-ring svg { width: 17px; height: 17px; transform: rotate(-90deg); }
+.match-ring circle { fill: none; stroke-width: 3.2; }
+.match-ring .t { stroke: var(--border); }
+.match-ring .a { stroke: hsl(var(--hue) var(--match-s) var(--match-l)); stroke-linecap: round; }
 .aa {
   font: 800 10px/16px var(--sans); padding: 0 4px; border-radius: 4px;
   background: var(--well); color: var(--muted); border: 1px solid var(--border);
@@ -493,7 +495,10 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mc-head { display: flex; align-items: flex-start; gap: 2px; }
 .mc-head .chip-x { flex: none; color: var(--muted); }
 .mc-head .chip-x:hover { color: var(--ink); background: var(--hover); }
-.mc-name { flex: 1; min-width: 0; padding: 1px 6px 0 0; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; line-height: 1.3; }
+.mc-name {
+  flex: 1; min-width: 0; padding: 1px 6px 0 0; font-weight: 700; color: var(--ink); line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .mc-dir {
   display: block; max-width: 100%; margin-top: 2px; padding: 0; border: 0; background: none; cursor: pointer; text-align: left;
   font: 11px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -529,23 +534,21 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 }
 .skeleton { display: block; border-radius: 4px; }
 .sk-dot { width: 8px; height: 8px; border-radius: 50%; }
-.sk-line { height: 8px; grid-column: 2 / 5; max-width: 100%; }
-.mc-rel.placeholder { cursor: default; min-height: 25px; }
+.sk-line { height: 8px; grid-column: 2 / 4; max-width: 100%; }
+.mc-rel.placeholder { cursor: default; }
 .mc-rel.placeholder:hover { background: none; }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .skeleton, .mc-preview.loading, .mc-print.loading { animation: none; } }
-.mc-related { display: flex; flex-direction: column; gap: 1px; margin-bottom: 8px; }
+/* Room for five rows, whether they're placeholders, fewer files or all five: the card keeps its size. */
+.mc-related { display: flex; flex-direction: column; gap: 1px; margin-bottom: 8px; min-height: 134px; }
 .mc-related:empty { display: none; }
 .mc-rel {
-  cursor: pointer; display: grid; grid-template-columns: auto minmax(0, 1fr) auto 36px; align-items: center; gap: 7px;
-  padding: 4px 6px; border: 0; border-radius: 6px; background: none; text-align: left; font-size: 12px; color: var(--text);
+  cursor: pointer; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px;
+  height: 26px; flex: none; padding: 0 6px; border: 0; border-radius: 6px; background: none; text-align: left; font-size: 12px; color: var(--text);
 }
 .mc-rel:hover { background: var(--well); color: var(--ink); }
 .mc-dot { width: 8px; height: 8px; border-radius: 50%; }
 .mc-rel-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mc-rel-num { font: 600 11px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-.mc-rel-bar { height: 5px; border-radius: 999px; background: var(--well); overflow: hidden; }
-.mc-rel-bar b { display: block; height: 100%; border-radius: 999px; background: var(--faint); }
 .mc-foot { display: flex; align-items: center; gap: 6px; }
 .map-card .actions { margin: 0; justify-content: flex-start; }
 
@@ -632,6 +635,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .fm-reason + .fm-reason { border-top: 1px solid var(--border); }
 .fm-reason summary {
   display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; list-style: none;
+  min-height: 46px; /* the same with or without a button in the row */
 }
 .fm-reason summary::-webkit-details-marker { display: none; }
 .fm-reason summary:hover { background: var(--well); }
