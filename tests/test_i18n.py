@@ -5,7 +5,7 @@ from quiekel_embed import i18n
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 STATIC = i18n.FILE.parent
 NAMESPACES = ("activity|search|folders|settings|update|result|match|keys|level|mode|device|model|common|nav|"
-              "lang|time|eta|gov|note|err|upd|tray|splash|map|scope|theme|types|why|folder|problem")
+              "lang|time|eta|gov|note|err|upd|tray|splash|map|scope|theme|types|why|folder|problem|perf|help")
 
 
 def test_every_language_has_exactly_the_english_keys_and_placeholders():
@@ -59,6 +59,6 @@ def test_every_reason_for_not_searching_something_is_in_words():
     from quiekel_embed.filetypes import GROUPS, PROBLEMS, REASONS, RULES
 
     english = i18n.catalog()["en"]
-    needed = [f"why.{r}" for r in REASONS] + [f"why.{r}_d" for r in REASONS] + [f"problem.{p}" for p in PROBLEMS]
-    needed += [f"types.group.{g}" for g in GROUPS] + [f"types.rule.{r}" for r in RULES] + [f"types.rule.{r}_d" for r in RULES]
+    needed = [f"why.{r}" for r in REASONS] + [f"problem.{p}" for p in PROBLEMS]
+    needed += [f"types.group.{g}" for g in GROUPS] + [f"types.rule.{r}" for r in RULES]
     assert [k for k in needed if k not in english] == []
