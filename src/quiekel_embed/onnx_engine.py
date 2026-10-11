@@ -107,11 +107,35 @@ def picture_ids(soft_tokens: int) -> list[int]:
 
 # ---- the model ------------------------------------------------------------------------------
 
+# A Reshape attribute, as it's stored: name "allowzero", value 1. DirectML refuses Reshape with
+# allowzero=1 ("The parameter is incorrect"), and here it changes nothing (no target size is
+# zero), so the copy DirectML gets says 0, the default. Same length: nothing else moves.
+_ALLOWZERO = b"\x0a\x09allowzero\x18\x01"
+
+
+def for_directml(path: Path) -> Path:
+    """The graph as DirectML takes it: a copy next to the original that uses the same weights file."""
+    graph = path.read_bytes()
+    if _ALLOWZERO not in graph:
+        return path
+    fixed = path.with_name(path.stem + "_directml.onnx")
+    if not fixed.exists():
+        tmp = fixed.with_suffix(".tmp")
+        tmp.write_bytes(graph.replace(_ALLOWZERO, _ALLOWZERO[:-1] + b"\x00"))
+        tmp.replace(fixed)
+    return fixed
+
 
 class OnnxModel:
     """Takes the place of the SentenceTransformer in Embedder: preprocess(), then embed()."""
 
     prompts = {"SearchQuery": QUERY_PROMPT}
+    # One picture at a time: its encoder attends over all 2,520 patches (about 150 MB per picture),
+    # and DirectML sees the same shape every time.
+    image_batch = 1
+    # DirectML prepares its work anew for every new input shape (about 0.2 s): texts are padded to
+    # steps of this many tokens, so only a few shapes ever come up. (Padding is masked out.)
+    STEP = 64
 
     def __init__(self, gpu: bool, device_id: int = 0):
         import onnxruntime as ort
@@ -137,6 +161,8 @@ class OnnxModel:
         import onnxruntime as ort
 
         path = self.folder / "onnx" / f"{part}_{self._flavour}.onnx"
+        if self.gpu:
+            path = for_directml(path)
         return ort.InferenceSession(str(path), self._options, providers=self._providers)
 
     @property
@@ -168,6 +194,8 @@ class OnnxModel:
             pictures = pictures.astype(np.float32, copy=False)
         ids = features["ids"]
         longest = max(len(i) for i in ids)
+        if self.gpu:
+            longest = -(-longest // self.STEP) * self.STEP
         input_ids = np.full((len(ids), longest), PAD, np.int64)
         mask = np.zeros((len(ids), longest), np.int64)
         for row, i in enumerate(ids):

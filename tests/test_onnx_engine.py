@@ -45,6 +45,7 @@ class FakeTokenizer:
 @pytest.fixture
 def model():
     m = object.__new__(onnx_engine.OnnxModel)  # no model files needed
+    m.gpu = False
     m.tokenizer = FakeTokenizer()
     m.text = FakeSession(lambda feeds: np.tile(np.arange(1, 769, dtype=np.float32), (len(feeds["input_ids"]), 1)))
     m._vision = FakeSession(lambda feeds: np.ones((int((feeds["pixel_position_ids"][..., 0] >= 0).sum()) // 9, 512),
@@ -60,6 +61,28 @@ def test_texts_are_padded_and_the_output_cut_and_normalized(model):
     assert feeds["attention_mask"].tolist() == [[1] * 7 + [0, 0], [1] * 9]
     assert feeds["image_features"].shape == (0, 512)
     assert out.shape == (2, config.EMBED_DIM) and np.allclose(np.linalg.norm(out, axis=1), 1.0)
+
+
+def test_on_directml_texts_come_in_a_few_lengths_only(model):
+    model.gpu = True  # (it prepares its work anew for every new length)
+    out = model.embed(model.preprocess(["ab", "abcd"], prompt="q: "))
+    feeds = model.text.feeds[0]
+    assert feeds["input_ids"].shape == (2, model.STEP)
+    assert feeds["attention_mask"].sum(axis=1).tolist() == [7, 9]
+    assert np.allclose(np.linalg.norm(out, axis=1), 1.0)
+
+
+def test_directml_gets_a_copy_of_the_graph_it_can_run(tmp_path):
+    zero = onnx_engine._ALLOWZERO[:-1] + bytes(1)
+    graph = tmp_path / "model_fp16.onnx"
+    graph.write_bytes(b"head" + onnx_engine._ALLOWZERO + b"middle" + onnx_engine._ALLOWZERO + b"tail")
+    fixed = onnx_engine.for_directml(graph)
+    assert fixed == tmp_path / "model_fp16_directml.onnx"  # next to the weights it shares
+    assert fixed.read_bytes() == b"head" + zero + b"middle" + zero + b"tail"
+    assert onnx_engine.for_directml(fixed) == fixed  # nothing left to change
+    plain = tmp_path / "vision_encoder_fp16.onnx"
+    plain.write_bytes(b"no reshape with allowzero")
+    assert onnx_engine.for_directml(plain) == plain
 
 
 def test_pictures_go_through_the_vision_encoder_first(model):

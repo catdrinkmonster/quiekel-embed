@@ -374,7 +374,8 @@ class Embedder:
 
     def images(self, images: list) -> np.ndarray:
         self.last_used = time.monotonic()
-        return self._embed([{"image": im} for im in images], config.IMAGE_BATCH)
+        batch = getattr(self._model, "image_batch", config.IMAGE_BATCH)  # (the ONNX engine: one at a time)
+        return self._embed([{"image": im} for im in images], batch)
 
     def query(self, text: str) -> np.ndarray:
         self.last_used = time.monotonic()
