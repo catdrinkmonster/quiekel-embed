@@ -29,7 +29,7 @@ from .embedder import Embedder
 from .extract import has_preview, max_bytes, picture
 from .filemap import FileMap
 from .filetypes import Types
-from .governor import MODES, Governor
+from .governor import MODES, Governor, lean
 from .indexer import Indexer, is_inside
 from .search import KINDS, fts_query, fuse, query_terms
 from .store import Settings, Store
@@ -76,12 +76,10 @@ class SettingsIn(BaseModel):
     perf_mode: str | None = None
     language: str | None = None
     theme: str | None = None
-    free_gpu_idle: bool | None = None
     check_updates: bool | None = None
     autostart: bool | None = None
     view_files: str | None = None
     view_images: str | None = None
-    memory: str | None = None
     # Settings -> File types
     types_off: list[str] | None = None
     types_added: list[str] | None = None
@@ -98,7 +96,6 @@ class ThemeIn(BaseModel):
 
 THEMES = ("auto", "light", "dark")
 VIEWS = ("cards", "list", "grid")  # how results are shown: with passages, one line each, thumbnails
-MEMORIES = ("lean", "fast")  # what's kept in memory for searching (see store.py and the indexer)
 
 
 def fail(status: int, code: str, **params):
@@ -185,7 +182,7 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
     me = psutil.Process()
 
     def memory_view() -> dict:
-        """What the app holds in memory, for the memory setting's explanation."""
+        """What the app holds in memory, for the Performance setting's explanation."""
         vectors = store.vectors
         return {"app_mb": round(me.memory_info().rss / 1e6),
                 "vectors_mb": round(vectors.rows * config.EMBED_DIM * 4 / 1e6, 1) if vectors.ready else 0}
@@ -226,8 +223,11 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
         if body.perf_mode is not None:
             if body.perf_mode not in MODES:
                 fail(400, "unknown_mode", mode=body.perf_mode)
+            was_lean = lean(settings.get("perf_mode"))
             settings.update(perf_mode=body.perf_mode)
             governor.refresh()  # apply right away
+            if lean(body.perf_mode) != was_lean:  # Light keeps the search data on disk
+                store.keep_vectors_in_memory(not lean(body.perf_mode))
         if body.language is not None:
             if body.language != "auto" and body.language not in i18n.languages():
                 fail(400, "unknown_language", lang=body.language)
@@ -236,15 +236,8 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
             if body.theme not in THEMES:
                 fail(400, "unknown_theme", theme=body.theme)
             settings.update(theme=body.theme)
-        if body.free_gpu_idle is not None:
-            settings.update(free_gpu_idle=body.free_gpu_idle)
         if body.check_updates is not None:
             settings.update(check_updates=body.check_updates)
-        if body.memory is not None:
-            if body.memory not in MEMORIES:
-                fail(400, "unknown_memory", memory=body.memory)
-            settings.update(memory=body.memory)
-            store.keep_vectors_in_memory(body.memory == "fast")
         for key in ("view_files", "view_images"):
             view = getattr(body, key)
             if view is not None:
@@ -451,7 +444,7 @@ def create_app(b: Backend, hooks: Hooks) -> FastAPI:
         limit = min(limit, 100)
         if not q:
             return {"results": [], "semantic": embedder.ready}
-        indexer.wake_model()  # if it went to sleep (lean memory setting); this search uses keywords
+        indexer.wake_model()  # if it went to sleep (Light performance); this search uses keywords
         try:
             query_vec = embedder.query(q) if embedder.ready else None
         except AttributeError:  # it went to sleep this very moment
@@ -632,7 +625,7 @@ def build_server(hooks: Hooks) -> tuple[uvicorn.Server, Backend]:
     updater = Updater(lambda: settings.get("check_updates"))
     backend = Backend(store, settings, governor, embedder, indexer, updater)
     app = create_app(backend, hooks)
-    store.keep_vectors_in_memory(settings.get("memory") == "fast")  # read in the background
+    store.keep_vectors_in_memory(not lean(settings.get("perf_mode")))  # read in the background
     indexer.start()
     server = uvicorn.Server(
         uvicorn.Config(app, host=config.HOST, port=config.PORT, log_level="warning",

@@ -965,14 +965,6 @@ function renderSettings({ settings, resources, model }) {
       b.setAttribute("aria-checked", on);
       setTip(b, t(`mode.${mode}`));
     }
-    for (const b of $("memories").querySelectorAll("button")) {
-      const on = b.dataset.memory === settings.memory;
-      b.classList.toggle("active", on);
-      b.setAttribute("aria-checked", on);
-      setTip(b, t(`memory.${b.dataset.memory}`));
-    }
-    $("free-gpu").checked = !!settings.free_gpu_idle;
-    $("free-gpu").setAttribute("aria-label", t("settings.free_gpu"));
     const changed = [settings.types_off.length && t("types.summary_off", { n: fmt(settings.types_off.length) }),
       settings.types_added.length && t("types.summary_added", { n: fmt(settings.types_added.length) })].filter(Boolean);
     $("types-summary").textContent = changed.length ? changed.join(" · ") : t("types.all_on");
@@ -1048,13 +1040,9 @@ function renderDevice(model, m) {
   $("device").replaceChildren(...chips);
 }
 
-for (const b of $("memories").querySelectorAll("button")) {
-  b.addEventListener("click", () => saveSettings({ memory: b.dataset.memory }));
-}
 for (const b of $("modes").querySelectorAll("button")) {
   b.addEventListener("click", () => saveSettings({ perf_mode: b.dataset.mode }));
 }
-$("free-gpu").addEventListener("change", (e) => saveSettings({ free_gpu_idle: e.target.checked }));
 $("autostart").addEventListener("change", (e) => saveSettings({ autostart: e.target.checked }));
 $("check-updates").addEventListener("change", (e) => saveSettings({ check_updates: e.target.checked }));
 $("language").addEventListener("change", (e) => saveSettings({ language: e.target.value }));
@@ -1110,22 +1098,16 @@ for (const b of $("themes").querySelectorAll("button")) {
 
 // ---------- updates ----------
 
-function renderUpdate({ update: u, settings }) {
+function renderUpdate({ update: u }) {
   state.update = u;
   $("version").textContent = `v${u.current}`;
   setTip($("brand"), `Quiekel Embed v${u.current}`);
 
-  const [name, cls, text] = u.latest ? ["update", "available", t("update.available", { version: u.latest.version })]
-    : u.error ? ["alert", "bad", t(u.error.key, u.error.params)]
-    : u.last_check ? ["check", "ok", t("update.up_to_date", { ago: ago(u.last_check) })]
-    : ["clock", "", t(settings.check_updates ? "update.soon" : "update.off")];
-  const st = $("update-state");
-  if (st.dataset.state !== name) {
-    st.dataset.state = name;
-    st.replaceChildren(icon(name));
-  }
-  st.className = `update-state ${cls}`;
-  setTip(st, text);
+  // What the last check found goes with the button that checks (a new version also gets a badge).
+  const found = u.latest ? t("update.available", { version: u.latest.version })
+    : u.error ? t(u.error.key, u.error.params)
+    : u.last_check ? t("update.up_to_date", { ago: ago(u.last_check) }) : "";
+  setTip($("check-now"), found ? `${t("update.check")}\n${found}` : t("update.check"));
 
   $("update-badge").hidden = !u.latest;
   if (u.latest) setTip($("update-badge"), t("update.sticker", { version: u.latest.version }));
@@ -1159,7 +1141,6 @@ function openUpdateModal() {
 const closeUpdateModal = () => { $("update-modal").hidden = true; };
 
 $("update-badge").addEventListener("click", openUpdateModal);
-$("update-state").addEventListener("click", () => { if (state.update?.latest) openUpdateModal(); });
 $("um-later").addEventListener("click", closeUpdateModal);
 $("um-github").addEventListener("click", () => post("/api/update/open").catch((e) => toast(e.message, "alert")));
 $("update-modal").addEventListener("click", (e) => { if (e.target.id === "update-modal") closeUpdateModal(); });
@@ -1192,7 +1173,8 @@ $("check-now").addEventListener("click", async () => {
     const u = await post("/api/update/check");
     state.update = u;
     if (u.latest) openUpdateModal();
-    else if (!u.error) toast(t("update.latest", { version: u.current }), "check");
+    else if (u.error) toast(t(u.error.key, u.error.params), "alert");
+    else toast(t("update.latest", { version: u.current }), "check");
     refresh();
   } catch (e) {
     toast(e.message, "alert");
@@ -1989,40 +1971,32 @@ function compare(columns, current, rows, note) {
     ...(note ? [h("p", { class: "help-note" }, note)] : [])];
 }
 
-// Speed: how fast indexing runs in each situation (the governor's rules, governor.py).
-function speedHelp() {
+// Performance: how hard indexing works in each situation (the governor's rules, governor.py), and
+// what's kept ready for searching (store.py, and the indexer's _manage_device).
+function performanceHelp() {
   const pace = (duty) => h("span", { class: "pace" },
     h("span", { class: "pace-bar" }, h("i", { style: `width: ${Math.round(duty * 100)}%` })),
     duty ? pct(Math.round(duty * 100)) : t("help.paused"));
   const range = (text) => h("span", { class: "pace" }, h("span", { class: "pace-bar" }, h("i", { style: "width: 25%" })), text);
+  const s = state.last;
+  const passages = (s?.folders || []).reduce((a, f) => a + f.chunks, 0);
+  const mb = Math.max(1, Math.round(s?.memory?.vectors_mb || passages * 0.001024));
+  const ram = t("help.mem_data_fast", { mb: fmt(mb), n: fmt(passages) });
   const rows = [
     ["mouse", t("help.sit_working"), [0.25, 0.75, 1].map(pace)],
     ["away", t("help.sit_away"), [0.5, 1, 1].map(pace)],
     ["battery", t("help.sit_battery"), [0, 0.25, 1].map(pace)],
     ["gauge", t("help.sit_busy"), [range(t("help.slower_early")), range(t("help.slower_late")), pace(1)]],
+    ["search", t("help.mem_search"), [t("help.mem_search_lean"), t("help.mem_search_fast"), t("help.mem_search_fast")]],
+    ["ram", t("help.mem_data"), [t("help.mem_data_lean"), ram, ram]],
+    ["chip", t("help.mem_model"), [t("help.mem_model_lean"), t("help.mem_model_given"), t("help.mem_model_kept")]],
   ];
   const modes = [["gentle", t("mode.gentle"), "speed1"], ["balanced", t("mode.balanced"), "speed2"], ["full", t("mode.full"), "speed3"]];
-  openHelp(t("settings.speed"), t("help.speed_intro"), ...compare(modes, state.last?.settings.perf_mode, rows, t("help.speed_note")));
+  const note = `${t("help.speed_note")} ${t("help.mem_note", { mb: fmt(s?.memory?.app_mb || 0) })}`;
+  openHelp(t("settings.speed"), t("help.speed_intro"), ...compare(modes, s?.settings.perf_mode, rows, note));
 }
 
-// Memory: what's kept ready for searching, with this index's numbers.
-function memoryHelp() {
-  const s = state.last;
-  const passages = (s?.folders || []).reduce((a, f) => a + f.chunks, 0);
-  const mb = s?.memory?.vectors_mb || Math.round(passages * 1.024) / 1000;
-  const gb = (2.7).toLocaleString(i18n.lang);
-  const rows = [
-    ["search", t("help.mem_search"), [t("help.mem_search_lean"), t("help.mem_search_fast")]],
-    ["ram", t("help.mem_data"), [t("help.mem_data_lean"), t("help.mem_data_fast", { mb: fmt(Math.max(1, Math.round(mb))), n: fmt(passages) })]],
-    ["chip", t("help.mem_model"), [t("help.mem_model_lean"), t("help.mem_model_fast", { gb })]],
-  ];
-  const note = t("help.mem_note", { mb: fmt(s?.memory?.app_mb || 0) });
-  openHelp(t("settings.memory"), t("help.memory_intro"),
-    ...compare([["lean", t("memory.lean"), "leaf"], ["fast", t("memory.fast"), "bolt"]], s?.settings.memory, rows, note));
-}
-
-$("speed-info").addEventListener("click", (e) => { e.preventDefault(); speedHelp(); });
-$("memory-info").addEventListener("click", (e) => { e.preventDefault(); memoryHelp(); });
+$("speed-info").addEventListener("click", (e) => { e.preventDefault(); performanceHelp(); });
 for (const b of $("mc-tabs").querySelectorAll("button")) b.addEventListener("click", () => setCardTab(b.dataset.tab));
 setCardTab("preview");
 

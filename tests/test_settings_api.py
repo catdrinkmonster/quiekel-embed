@@ -37,14 +37,14 @@ def test_the_page_opens_in_the_saved_theme(client):
     assert 'data-theme-mode="dark"' in client.get("/").text
 
 
-def test_memory_setting_keeps_search_data_in_memory_or_not(client):
+def test_light_performance_keeps_search_data_on_disk(client):
     store = client.backend.store
-    assert settings(client)["memory"] == "fast"
-    assert client.post("/api/settings", json={"memory": "lean"}, headers=H).status_code == 200
-    assert settings(client)["memory"] == "lean" and not store.vectors.ready and not store._keep_vectors
-    r = client.post("/api/settings", json={"memory": "huge"}, headers=H)
-    assert r.status_code == 400 and r.json()["detail"]["key"] == "err.unknown_memory"
-    assert client.post("/api/settings", json={"memory": "fast"}, headers=H).status_code == 200
+    assert settings(client)["perf_mode"] == "balanced" and store._keep_vectors
+    assert client.post("/api/settings", json={"perf_mode": "gentle"}, headers=H).status_code == 200
+    assert not store.vectors.ready and not store._keep_vectors
+    r = client.post("/api/settings", json={"perf_mode": "turbo"}, headers=H)
+    assert r.status_code == 400 and r.json()["detail"]["key"] == "err.unknown_mode"
+    assert client.post("/api/settings", json={"perf_mode": "full"}, headers=H).status_code == 200
     assert store._keep_vectors
     assert "app_mb" in client.get("/api/status").json()["memory"]
 

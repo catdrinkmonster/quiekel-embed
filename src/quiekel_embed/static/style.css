@@ -556,7 +556,6 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .folder-main:hover .folder-name { text-decoration: underline; text-underline-offset: 3px; }
 .folder-main:hover .folder-icon { color: var(--ink); }
 .folder-text { display: flex; flex-direction: column; min-width: 0; }
-.folder.active.indexing, .folder.active.scanning { border-color: var(--orange-line); box-shadow: 0 2px 0 var(--orange-glow); }
 .folder-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--well); color: var(--muted); }
 .folder-icon svg.i { width: 20px; height: 20px; }
 .folder-name { font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
@@ -651,10 +650,6 @@ label.set-row { cursor: pointer; }
 .set-label > span:first-child svg.i { width: 20px; height: 20px; color: var(--muted); }
 .set-controls { display: inline-flex; align-items: center; gap: 12px; }
 .version { font: 500 12px var(--mono); color: var(--faint); }
-.update-state { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--faint); cursor: help; }
-.update-state.ok { color: var(--green); }
-.update-state.bad { color: var(--red); }
-.update-state.available { color: var(--pink-fg); background: var(--pink-bg); cursor: pointer; }
 #language { min-width: 200px; font-weight: 600; }
 #modes button { width: 44px; height: 34px; }
 #modes button svg.i { width: 22px; height: 22px; stroke-width: 2.6; }

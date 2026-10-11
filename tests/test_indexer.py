@@ -201,13 +201,13 @@ def test_a_failing_reader_cannot_hang_indexing(make_indexer, tmp_path, monkeypat
     assert not t.is_alive()
 
 
-def test_lean_memory_lets_the_model_go_when_unused_and_wakes_it_for_work(make_indexer):
+def test_light_lets_the_model_go_when_unused_and_wakes_it_for_work(make_indexer):
     e = FakeEmbedder()
     ix = make_indexer(e)
     e.last_used = ix._last_work = time.monotonic() - 3600  # nothing for an hour
     ix._manage_device(working=False)
-    assert e.unloaded == []  # "fast" (the default) keeps it ready
-    ix.settings.update(memory="lean")
+    assert e.unloaded == []  # Balanced (the default) keeps it ready
+    ix.settings.update(perf_mode="gentle")  # Light
     e.last_used = time.monotonic()  # just searched
     ix._manage_device(working=False)
     assert e.unloaded == []
@@ -218,16 +218,28 @@ def test_lean_memory_lets_the_model_go_when_unused_and_wakes_it_for_work(make_in
     assert e.ready and e.loads == 1
 
 
-def test_lean_memory_lets_the_model_go_entirely_when_video_memory_runs_out(make_indexer):
+def test_light_lets_the_model_go_entirely_when_video_memory_runs_out(make_indexer):
     e = FakeEmbedder(on_gpu=True)
     ix = make_indexer(e)
     ix.governor.metrics.vram_free_gb = 0.2
     ix._manage_device(working=False)
-    assert e.released and not e.unloaded  # fast: into RAM, ready for the next search
+    assert e.released and not e.unloaded  # Balanced: into RAM, ready for the next search
     e.on_gpu, e.released = True, []
-    ix.settings.update(memory="lean")
+    ix.settings.update(perf_mode="gentle")  # Light
     ix._manage_device(working=False)
-    assert e.unloaded and not e.released  # lean: out of memory altogether
+    assert e.unloaded and not e.released  # out of memory altogether
+
+
+def test_maximum_keeps_the_graphics_card_when_theres_nothing_to_do(make_indexer):
+    e = FakeEmbedder(on_gpu=True)
+    ix = make_indexer(e)
+    e.last_used = ix._last_work = time.monotonic() - 3600  # nothing for an hour
+    ix.settings.update(perf_mode="full")
+    ix._manage_device(working=False)
+    assert e.on_gpu and not e.released
+    ix.settings.update(perf_mode="balanced")
+    ix._manage_device(working=False)
+    assert e.released and not e.unloaded
 
 
 def hide(path):
