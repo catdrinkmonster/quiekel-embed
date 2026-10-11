@@ -708,7 +708,7 @@ const problemText = (error) => (error?.startsWith("!") ? t(`problem.${error.slic
 
 const WHY_ICON = {
   type: "help", off: "eyeOff", media: "film", program: "app", mailbox: "mail", hidden: "eyeOff",
-  office_temp: "hourglass", program_folder: "folder", link: "link", too_many: "archive", encrypted: "lock",
+  office_temp: "hourglass", backup: "clock", program_folder: "folder", link: "link", too_many: "archive", encrypted: "lock",
   split_archive: "archive", needs_windows: "monitor", nested_deep: "archive", nested_off: "archive",
   nested_large: "archive", odd_name: "alert", inline_image: "image", empty: "doc", too_large: "maximize",
   tiny_image: "image", binary: "code", no_text: "text", password: "lock", not_image: "archive",

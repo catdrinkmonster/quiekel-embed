@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from . import archive, config
-from .extract import kind_of, why_not
+from .extract import kind_of, sniff, why_not
 
 # The menu's groups, in its order.
 GROUPS = {
@@ -17,7 +17,7 @@ GROUPS = {
         ".xlsx", ".xlsm", ".xltx", ".xltm", ".xls", ".xlt",
         ".pptx", ".pptm", ".ppsx", ".ppsm", ".potx", ".potm", ".ppt", ".pps", ".pot",
         ".odt", ".ott", ".fodt", ".ods", ".ots", ".fods", ".odp", ".otp", ".fodp", ".odg", ".otg", ".fodg",
-        ".epub", ".mobi", ".fb2", ".xps", ".oxps", ".cbz",
+        ".epub", ".mobi", ".fb2", ".xps", ".oxps", ".cbz", ".ai",
     ],
     "mail": [".eml", ".msg", ".mht", ".mhtml"],
     "text": sorted(config.PROSE_EXTS),
@@ -35,10 +35,14 @@ RULES = {
     "program_folders": False,  # node_modules, .git, build, AppData, …
 }
 SYSTEM_DIRS = {"$recycle.bin", "system volume information"}  # never, whatever the rules
-# Every reason the app gives for not searching something (its texts: why.<reason>, why.<reason>_d).
+# Apps' own data in a phone's copy (Android/data, Android/obb), like AppData on Windows. What apps
+# save for you is elsewhere (Android/media, DCIM, Download, …).
+ANDROID_APP_DIRS = {"data", "obb"}
+# Every reason the app gives for not searching something (its texts: why.<reason>, and where the
+# name doesn't say it all, why.<reason>_d).
 REASONS = (
     # what a scan leaves out
-    "type", "off", "media", "program", "mailbox", "hidden", "office_temp", "program_folder", "link",
+    "type", "off", "media", "program", "mailbox", "hidden", "office_temp", "backup", "program_folder", "link",
     "no_access_dir", "unreadable_dir", "too_many", "encrypted", "damaged_archive", "split_archive",
     "needs_windows", "nested_deep", "nested_off", "nested_large", "odd_name", "inline_image",
     # files that were read, and skipped
@@ -73,14 +77,17 @@ class Types:
         return cls(settings.get("types_off"), settings.get("types_added"),
                    **{k: settings.get(k) for k in RULES})
 
-    def kind(self, name: str) -> str | None:
-        """How a file is read ("doc", "text", "code", "image"), or None: it isn't searched."""
+    def kind(self, name: str, path: str | None = None) -> str | None:
+        """How a file is read ("doc", "text", "code", "image"), or None: it isn't searched. A file
+        without an extension is looked at (given its path) for a picture or text inside."""
         ext = _suffix(name)
         if ext in self.off:
             return None
         kind = kind_of(Path(name))
         if kind is None and ext in self.added:
             return "text"
+        if kind is None and not ext and path:
+            return sniff(path)
         return kind
 
     def inside(self, name: str) -> bool:
@@ -93,12 +100,13 @@ class Types:
     def why_not(self, name: str) -> str:
         return "off" if _suffix(name) in self.off else why_not(name)
 
-    def skip_dir(self, name: str, hidden: bool, system: bool) -> str | None:
-        """Why a folder isn't looked into, or None."""
+    def skip_dir(self, name: str, hidden: bool, system: bool, parent: str = "") -> str | None:
+        """Why a folder isn't looked into, or None. parent: the name of the folder it's in."""
         lower = name.lower()
         if system or lower in SYSTEM_DIRS:
             return "hidden"
-        if lower in config.IGNORED_DIRS and not self.rules["program_folders"]:
+        program = lower in config.IGNORED_DIRS or (parent.lower() == "android" and lower in ANDROID_APP_DIRS)
+        if program and not self.rules["program_folders"]:
             return "program_folder"
         if (hidden or name.startswith(".")) and not self.rules["hidden_files"]:
             return "hidden"
@@ -112,6 +120,8 @@ class Types:
             return "hidden"
         if (hidden or name.startswith(".")) and not self.rules["hidden_files"]:
             return "hidden"
+        if name.endswith("~") or _suffix(name) in config.BACKUP_EXTS:
+            return "backup"  # an older version an app keeps next to the file
         return None
 
     @property

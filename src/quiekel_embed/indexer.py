@@ -49,8 +49,8 @@ def attributes(entry: os.DirEntry) -> tuple[bool, bool]:
 def skipped_part(types: Types, parts) -> str | None:
     """Why a path's folders or name rule it out (inside an archive, or from a file event)."""
     *folders, name = parts
-    for folder in folders:
-        why = types.skip_dir(folder, False, False)
+    for parent, folder in zip(["", *folders], folders):
+        why = types.skip_dir(folder, False, False, parent)
         if why:
             return why
     return types.skip_file(name, False, False)
@@ -318,6 +318,7 @@ class Indexer:
             if folder_id in self._cancelled:
                 return
             d = stack.pop()
+            here = os.path.basename(d.rstrip("\\/"))
             try:
                 with os.scandir(d) as it:
                     entries = list(it)
@@ -337,7 +338,7 @@ class Indexer:
                     continue
                 hidden, system = attributes(e)
                 if is_dir:
-                    why = types.skip_dir(e.name, hidden, system)
+                    why = types.skip_dir(e.name, hidden, system, here)
                     if why:
                         report.add(why, e.path)
                     elif not is_inside(e.path, str(config.DATA_DIR)):
@@ -347,7 +348,7 @@ class Indexer:
                 if why:
                     report.add(why, e.path)
                     continue
-                kind, inside = types.kind(e.name), types.inside(e.name)
+                kind, inside = types.kind(e.name, e.path), types.inside(e.name)
                 if not kind and not inside:
                     report.add_type(types.why_not(e.name), e.path)
                     continue
@@ -393,7 +394,7 @@ class Indexer:
         if gone:
             self.store.remove_file_ids(gone)
         # Everything found is searchable by name right away; by content as indexing gets to it.
-        self.store.add_pending(folder_id, [(p, size, mtime, types.kind(file_name(p)) or "text", search_name(p, root))
+        self.store.add_pending(folder_id, [(p, size, mtime, types.kind(file_name(p), p) or "text", search_name(p, root))
                                            for p, size, mtime in todo])
         self._index_files(folder_id, root, todo, types)
         if folder_id not in self._cancelled:
@@ -424,7 +425,7 @@ class Indexer:
                 files.extend(f for f in self._walk(p, folder["id"], types=types) if self._changed(f))
             else:
                 name = file_name(p)
-                kind, inside = types.kind(name), types.inside(name)
+                kind, inside = types.kind(name, p), types.inside(name)
                 if not kind and not inside:
                     continue
                 try:
@@ -455,7 +456,7 @@ class Indexer:
             jobs.append(("remove", removed))
         for folder_id, (root, files) in by_folder.items():
             if files:
-                self.store.add_pending(folder_id, [(p, size, mtime, types.kind(file_name(p)) or "text",
+                self.store.add_pending(folder_id, [(p, size, mtime, types.kind(file_name(p), p) or "text",
                                                     search_name(p, root)) for p, size, mtime in files])
                 jobs.append(("index", (folder_id, root, files)))
         return jobs
@@ -585,7 +586,7 @@ class Indexer:
     def _read(self, folder_id: int, root: str, path: str, size: int, mtime: float,
               types: Types) -> tuple[dict, list]:
         name = file_name(path)
-        kind = types.kind(name) or "text"
+        kind = types.kind(name, path) or "text"
         entry = {
             "folder_id": folder_id, "path": path, "size": size, "mtime": mtime,
             "kind": kind, "status": "indexed", "chunks": 0, "error": None,

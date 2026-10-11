@@ -26,7 +26,9 @@ _QUOTED_PATH = re.compile(r"""['"][A-Za-z]:[\\/][^'"]*['"]""")
 MAX_CHARS = config.CHUNK_CHARS * config.MAX_CHUNKS_PER_FILE  # more text than this is never embedded
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # Office 97-2003 files, Outlook emails, …
 # Read page by page with PyMuPDF; pages without text (scans, comics) are looked at instead.
-PAGED_EXTS = {".pdf", ".epub", ".mobi", ".fb2", ".xps", ".oxps", ".cbz"}
+PAGED_EXTS = {".pdf", ".epub", ".mobi", ".fb2", ".xps", ".oxps", ".cbz", ".ai"}
+# Pictures a file without an extension may hold, by their first bytes (also WebP, HEIC: see sniff).
+_PICTURE_STARTS = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"II*\x00", b"MM\x00*")
 HTML_EXTS = {".html", ".htm", ".xhtml"}
 # Documents that carry a preview picture of themselves.
 THUMBNAIL_EXTS = {".odt", ".ott", ".ods", ".ots", ".odp", ".otp", ".odg", ".otg"}
@@ -68,6 +70,28 @@ def kind_of(path: Path) -> str | None:
     if not ext:
         return config.KNOWN_NAMES.get(path.name.lower())
     return None
+
+
+def sniff(path: str) -> str | None:
+    """What a file without an extension holds, by its first bytes: "image", "text", or None."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return None
+    if (head.startswith(_PICTURE_STARTS) or (head[:4] == b"RIFF" and head[8:12] == b"WEBP")
+            or (head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"mif1", b"avif"))):
+        return "image"
+    if head.startswith((b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")):  # text that says how it's written
+        return "text"
+    if not head or b"\x00" in head:
+        return None
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if e.start < len(head) - 3:  # (only the last character may be cut off)
+            return None
+    return "text"
 
 
 def why_not(name: str) -> str:
@@ -113,8 +137,8 @@ def problem(e: Exception) -> str:
 
 def max_bytes(kind: str | None, name: str = "") -> int:
     """The biggest file of this kind that gets indexed."""
-    if kind == "image" and Path(name).suffix.lower() in config.RAW_EXTS:
-        return config.MAX_RAW_BYTES
+    if kind == "image" and Path(name).suffix.lower() in config.RAW_EXTS | config.LAYERED_EXTS:
+        return config.MAX_RAW_BYTES  # only the picture inside is read
     return {"image": config.MAX_IMAGE_BYTES, "doc": config.MAX_DOC_BYTES}.get(kind, config.MAX_TEXT_BYTES)
 
 
@@ -240,7 +264,7 @@ def read_paged(path: Path) -> tuple[str, list[Image.Image]]:
     """PDF, e-books (EPUB, MOBI, FB2), XPS and comic archives, through PyMuPDF."""
     import pymupdf
 
-    with pymupdf.open(path) as doc:
+    with pymupdf.open(path, filetype=_paged_type(path)) as doc:
         if doc.needs_pass:
             raise SkipFile("password")
         parts = []
@@ -263,11 +287,36 @@ def read_paged(path: Path) -> tuple[str, list[Image.Image]]:
 read_pdf = read_paged
 
 
+def _paged_type(path: Path) -> str | None:
+    """How PyMuPDF should open a file: by its name, except Illustrator's, which are PDFs inside."""
+    return "pdf" if path.suffix.lower() == ".ai" else None
+
+
+def layered_picture(path: Path) -> bytes:
+    """The finished picture a layered painting carries (Krita, OpenRaster): its layers merged."""
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            for name in ("mergedimage.png", "preview.png", "Thumbnails/thumbnail.png"):
+                if name in names:
+                    return z.read(name)
+    except zipfile.BadZipFile:
+        pass
+    raise Damaged("image")
+
+
 def load_image(path: Path, max_side: int = config.MAX_IMAGE_SIDE) -> Image.Image:
     ext = path.suffix.lower()
     if ext == ".svg":
         return _svg(path, max_side)
-    source = io.BytesIO(raw_preview(path)) if ext in config.RAW_EXTS else path
+    if ext in config.RAW_EXTS:
+        source = io.BytesIO(raw_preview(path))
+    elif ext in config.LAYERED_EXTS:
+        source = io.BytesIO(layered_picture(path))
+    else:
+        source = path
     with Image.open(source) as src:
         if min(src.size) < config.MIN_IMAGE_SIDE:
             raise SkipFile("tiny_image")
@@ -366,7 +415,7 @@ def picture(path: Path, size: int) -> Image.Image:
     if ext in PAGED_EXTS or ext == ".svg":
         import pymupdf
 
-        with pymupdf.open(path) as doc:
+        with pymupdf.open(path, filetype=_paged_type(path)) as doc:
             if doc.needs_pass or not doc.page_count:
                 raise ValueError("nothing to show")
             page = doc[0]
