@@ -19,7 +19,7 @@
 - **Meaning, not just keywords.** Ask in your own words, in any of 100+ languages: the question above is English, the letter it found is German.
 - **Almost any file.** Documents, emails with their attachments, text and code, photos found by what they show, even inside ZIP, 7z and RAR archives.
 - **Private.** The AI model runs on your own graphics card (or CPU). Your files and searches never leave your PC.
-- **Stays out of your way.** It keeps your folders up to date in the background and slows down while your other apps need the PC.
+- **Stays out of your way.** It keeps your folders up to date in the background and slows down while your other apps need the PC. One setting, Performance, decides how much it may use.
 
 | Photos, found by what they show | A map of your files |
 |---|---|
@@ -72,14 +72,15 @@ The model stays in the Hugging Face cache (`~\.cache\huggingface`) in case other
 
 | | |
 |---|---|
-| Documents | PDF, Word, Excel and PowerPoint (also 97-2003, templates and macro files), LibreOffice and OpenOffice, RTF, EPUB and other e-books, XPS |
+| Documents | PDF, Word, Excel and PowerPoint (also 97-2003, templates and macro files), LibreOffice and OpenOffice, RTF, EPUB and other e-books, XPS, Illustrator |
 | Emails | Outlook (`.msg`) and standard (`.eml`) emails with their attachments, saved web pages (`.mht`) |
 | Text and code | More than 200 types, from `.txt` and `.md` to `.py`, `.json` and `.sql` |
-| Pictures | JPEG, PNG, HEIC, WebP, AVIF, GIF, TIFF, SVG, PSD and more, and camera raw photos |
+| Pictures | JPEG, PNG, HEIC, WebP, AVIF, GIF, TIFF, SVG, PSD and more, camera raw photos and Krita paintings |
 | Inside archives | ZIP, 7z, RAR, TAR, CAB and ISO, also an archive inside an archive (7z, RAR, CAB and ISO need Windows 11, 2023 or later) |
 
-**Settings → File types** switches types off, adds your own (read as plain text), and decides about
-hidden files and very big archives. A folder's ⓘ shows what wasn't searched, and why.
+Files without an extension are recognized by what's inside them. **Settings → File types** switches
+types off, adds your own (read as plain text), and decides about hidden files, program folders and very
+big archives. A folder's ⓘ shows what wasn't searched, and why.
 
 ## Privacy
 

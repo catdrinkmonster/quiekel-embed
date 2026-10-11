@@ -51,7 +51,7 @@ REASONS = (
 # Why a file couldn't be read (its texts: problem.<key>).
 PROBLEMS = ("no_access", "in_use", "gone", "no_memory", "damaged_image", "damaged_pdf", "damaged_document",
             "damaged_archive", "damaged_email", "embed_failed", "unreadable_dir")
-FORMAT = 1  # bump when what's found inside containers changes: they're looked into again
+FORMAT = 2  # bump when what's found inside containers changes: they're looked into again
 _EXT = re.compile(r"^\.[a-z0-9][a-z0-9_+\-]{0,15}$")
 
 

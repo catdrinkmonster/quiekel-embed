@@ -1,6 +1,6 @@
 [project]
 name = "quiekel-embed"
-version = "0.9.0"
+version = "0.10.0"
 description = "Quiekel Embed: search your own files by meaning, fully local, with EmbeddingGemma 2."
 readme = "README.md"
 license = "MIT"
