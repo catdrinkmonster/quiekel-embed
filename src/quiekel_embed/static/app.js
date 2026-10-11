@@ -34,6 +34,10 @@ const ICONS = {
   play: '<path d="M8 5.5v13l10.5-6.5z"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   hourglass: '<path d="M6.5 4h11M6.5 20h11M8 4v2.5c0 2 1.8 3.6 4 5.5 2.2-1.9 4-3.5 4-5.5V4M8 20v-2.5c0-2 1.8-3.6 4-5.5 2.2 1.9 4 3.5 4 5.5V20"/>',
+  // Bold, with sand: in the status ring it runs down and turns over (style.css, .timer).
+  timer: '<g class="timer"><path class="frame" d="M5.5 3.5h13M5.5 20.5h13M7.5 3.5v2.1c0 2.6 1.8 4.6 4.5 6.4-2.7 1.8-4.5 3.8-4.5 6.4v2.1M16.5 3.5v2.1c0 2.6-1.8 4.6-4.5 6.4 2.7 1.8 4.5 3.8 4.5 6.4v2.1"/>'
+    + '<path class="sand solid" d="M9.3 7.4h5.4L12 10.6z"/><path class="sand bottom solid" d="M12 15.3l3.1 3.7H8.9z"/></g>',
+  minus: '<path d="M7 12h10"/>',
   alert: '<path d="M12 4 21 19.5H3z"/><path d="M12 10v4M12 16.8v.2"/>',
   refresh: '<path d="M20 11.5A8 8 0 1 1 17.7 6"/><path d="M20 4.5V9h-4.5"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1.5 1.5 0 0 0 1.5 1.5h7A1.5 1.5 0 0 0 17 19l1-12M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/>',
@@ -538,7 +542,7 @@ function renderActivity({ model, progress: p, folders, resources }, phase) {
   if (model.status === "downloading") {
     s = { kind: "busy", icon: "download", spin: true, lines: [t("activity.downloading"), t("activity.downloading_sub")] };
   } else if (model.status !== "ready" && model.status !== "error" && !resting) {
-    s = { kind: "busy", icon: "hourglass", spin: true, lines: [t("activity.waking"), t("activity.waking_sub")] };
+    s = { kind: "busy", icon: "timer", lines: [t("activity.waking"), t("activity.waking_sub")] };
   } else if (model.status === "error" || p.state === "model-error") {
     s = {
       kind: "bad", icon: "alert", lines: [t("activity.model_error"), model.error || p.message, t("activity.click_retry")],
@@ -558,7 +562,7 @@ function renderActivity({ model, progress: p, folders, resources }, phase) {
     }
     s = {
       kind: { paused: "paused", waiting: "warn", scanning: "busy", indexing: "busy" }[phase],
-      icon: { paused: "pause", waiting: "hourglass", scanning: "search" }[phase],
+      icon: { paused: "pause", waiting: "timer", scanning: "search" }[phase],
       label: phase === "indexing" ? pct(Math.floor(frac * 100)) : null,
       frac, spin: phase === "scanning", lines,
     };
@@ -717,12 +721,16 @@ const revealExample = (reason, index) => post(`/api/folders/${state.folderInfo}/
   .catch((e) => toast(e.message, "alert"));
 
 function fileRow(path, why, reveal, isNew = false) {
-  const name = baseName(path);
+  const name = h("b", {}, baseName(path));
+  setTip(name, path);
   return h("div", { class: `fm-file${isNew ? " new" : ""}` },
-    h("span", { class: "fm-file-text" }, h("b", {}, name), why ? h("span", { class: "fm-why" }, why) : null,
-      h("span", { class: "fm-where" }, path.slice(0, -name.length - 1))),
+    h("span", { class: "fm-file-text" }, name, why ? h("span", { class: "fm-why" }, why) : null),
     iconButton("folder", t("result.reveal"), reveal, "small"));
 }
+
+// Reasons that Settings → File types can change: their row has a way there.
+const CHANGEABLE = new Set(["type", "off", "hidden", "program_folder", "too_many", "nested_off"]);
+const known = (key) => key in (i18n.catalog.en || {});
 
 // One reason: what it is and how many; opened, which types and a few of the files.
 function reasonRow(r) {
@@ -730,10 +738,16 @@ function reasonRow(r) {
   const more = r.n - r.files.length;
   const exts = Object.entries(r.exts || {}).sort((a, b) => b[1] - a[1]).slice(0, 40)
     .map(([ext, n]) => h("span", { class: "type-chip static" }, ext || t("why.no_ext"), h("small", {}, fmt(n))));
-  return h("details", { class: "fm-reason" },
-    h("summary", {}, icon(WHY_ICON[r.key] || "skip"),
-      h("span", { class: "fm-file-text" }, h("b", {}, label), r.key ? h("span", { class: "fm-what" }, t(`why.${r.key}_d`)) : null),
-      h("span", { class: "fm-count" }, fmt(r.n)), icon("chevronDown")),
+  const summary = h("summary", {}, icon(WHY_ICON[r.key] || "skip"),
+    h("span", { class: "fm-file-text" }, h("b", {}, label)),
+    CHANGEABLE.has(r.key) ? iconButton("settings", t("settings.types"), (e) => {
+      e.preventDefault();
+      closeFolderInfo();
+      openTypes();
+    }) : null,
+    h("span", { class: "fm-count" }, fmt(r.n)), icon("chevronDown"));
+  if (r.key && known(`why.${r.key}_d`)) setTip(summary, t(`why.${r.key}_d`));
+  return h("details", { class: "fm-reason" }, summary,
     h("div", { class: "fm-reason-body" },
       exts.length ? h("div", { class: "tm-chips" }, ...exts) : null,
       ...r.files.map((file, i) => fileRow(file.path, "",
@@ -757,7 +771,6 @@ function renderFolderSummary(f) {
   $("fm-numbers").replaceChildren(
     cell("doc", "folder.docs", fmt(Math.max(0, f.indexed - f.images))),
     cell("image", "folders.col.images", fmt(f.images)),
-    cell("text", "folder.passages", fmt(f.chunks)),
     cell("archive", "folder.size", bytes(f.bytes || 0)),
   );
 }
@@ -865,23 +878,23 @@ function renderTypes() {
   const add = () => { if (input.value.trim()) saveTypes({ types_added: [...m.added, input.value.trim()] }, true); };
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
   const added = h("section", { class: "tm-group" },
-    h("div", { class: "tm-head" }, icon("plus"), h("b", {}, t("types.added_title")), h("span", { class: "tm-count" }, t("types.added_hint"))),
+    h("div", { class: "tm-head" }, icon("plus"), h("b", {}, t("types.added_title"))),
     h("div", { class: "tm-chips" },
       ...m.added.map((ext) => h("span", { class: "type-chip added" }, ext,
         iconButton("close", t("types.remove"), () => saveTypes({ types_added: m.added.filter((e) => e !== ext) }), "tiny"))),
-      h("span", { class: "tm-add" }, input, iconButton("plus", t("types.add"), add))));
+      h("span", { class: "tm-add" }, input, iconButton("plus", `${t("types.add")}\n${t("types.added_hint")}`, add))));
 
   const rules = TYPE_RULES.map(([key, ic]) => {
     const sw = h("input", { type: "checkbox", class: "switch", "aria-label": t(`types.rule.${key}`) });
     sw.checked = !!m.rules[key];
     sw.addEventListener("change", () => saveTypes({ [key]: sw.checked }));
-    return h("label", { class: "tm-rule" }, icon(ic),
-      h("span", { class: "fm-file-text" }, h("b", {}, t(`types.rule.${key}`)), h("span", { class: "fm-what" }, t(`types.rule.${key}_d`))), sw);
+    const row = h("label", { class: "tm-rule" }, icon(ic), h("span", { class: "fm-file-text" }, h("b", {}, t(`types.rule.${key}`))), sw);
+    if (known(`types.rule.${key}_d`)) setTip(row, t(`types.rule.${key}_d`));
+    return row;
   });
   $("tm-body").replaceChildren(...groups, added,
     h("section", { class: "tm-group" }, h("div", { class: "tm-head" }, icon("settings"), h("b", {}, t("types.rules_title"))),
-      h("div", { class: "tm-rules" }, ...rules)),
-    h("p", { class: "help-note" }, t("types.note")));
+      h("div", { class: "tm-rules" }, ...rules)));
   $("tm-reset").disabled = !m.off.length && !m.added.length && TYPE_RULES.every(([key]) => m.rules[key] === m.defaults[key]);
 }
 
@@ -1124,8 +1137,7 @@ function openUpdateModal() {
   if (!u || !u.latest) return;
   const l = u.latest;
   $("um-title").textContent = t("update.modal_title", { version: l.version });
-  $("um-sub").textContent = `v${u.current} → v${l.version}`
-    + (l.published ? ` · ${new Date(l.published).toLocaleDateString(i18n.lang)}` : "");
+  $("um-sub").textContent = l.published ? new Date(l.published).toLocaleDateString(i18n.lang) : "";
   $("um-notes").textContent = plainNotes(l.notes);
   $("um-error").hidden = true;
   const hint = $("um-hint");
@@ -1939,13 +1951,12 @@ function renderRelatedList() {
   $("mc-back").disabled = !map.history.length;
 }
 
-// ---------- explanations: how the map works, what the settings do ----------
+// ---------- explanations: what a setting's options do ----------
 
-function openHelp(title, intro, ...content) {
+function openHelp(title, iconName, ...content) {
   hideTip();
+  $("help-icon").replaceChildren(icon(iconName));
   $("help-title").textContent = title;
-  $("help-intro").textContent = intro || "";
-  $("help-intro").hidden = !intro;
   $("help-body").replaceChildren(...content);
   $("help").hidden = false;
 }
@@ -1954,46 +1965,32 @@ const closeHelp = () => { $("help").hidden = true; };
 $("help-close").addEventListener("click", closeHelp);
 $("help").addEventListener("click", (e) => { if (e.target.id === "help") closeHelp(); });
 
-const MAP_HELP = [["cube", "dots"], ["similar", "close"], ["focus", "squeeze"], ["gauge", "numbers"],
-  ["dots", "print"], ["external", "buttons"], ["mouse", "move"]];
-
-$("mc-info").addEventListener("click", () => openHelp(t("map.how"), "", ...MAP_HELP.map(([name, key]) =>
-  h("div", { class: "help-row" }, icon(name), h("p", {}, h("b", {}, t(`map.help.${key}_t`)), " ", t(`map.help.${key}`))))));
-
 // A table of options side by side; the one in use is marked.
-function compare(columns, current, rows, note) {
+function compare(columns, current, rows) {
   const named = (ic, text) => h("span", { class: "cmp-name" }, icon(ic), h("span", {}, text));
   const head = h("tr", {}, h("th"), ...columns.map(([key, name, ic]) =>
     h("th", { class: key === current ? "current" : "" }, named(ic, name))));
   const body = rows.map(([ic, label, cells]) => h("tr", {}, h("th", {}, named(ic, label)),
     ...cells.map((cell, i) => h("td", { class: columns[i][0] === current ? "current" : "" }, cell))));
-  return [h("table", { class: "compare" }, h("thead", {}, head), h("tbody", {}, ...body)),
-    ...(note ? [h("p", { class: "help-note" }, note)] : [])];
+  return h("table", { class: "compare" }, h("thead", {}, head), h("tbody", {}, ...body));
 }
 
-// Performance: how hard indexing works in each situation (the governor's rules, governor.py), and
-// what's kept ready for searching (store.py, and the indexer's _manage_device).
+// Performance, level by level: how hard indexing works when (the governor's rules, governor.py),
+// and what's kept ready (store.py, the indexer's _manage_device).
 function performanceHelp() {
   const pace = (duty) => h("span", { class: "pace" },
     h("span", { class: "pace-bar" }, h("i", { style: `width: ${Math.round(duty * 100)}%` })),
     duty ? pct(Math.round(duty * 100)) : t("help.paused"));
-  const range = (text) => h("span", { class: "pace" }, h("span", { class: "pace-bar" }, h("i", { style: "width: 25%" })), text);
-  const s = state.last;
-  const passages = (s?.folders || []).reduce((a, f) => a + f.chunks, 0);
-  const mb = Math.max(1, Math.round(s?.memory?.vectors_mb || passages * 0.001024));
-  const ram = t("help.mem_data_fast", { mb: fmt(mb), n: fmt(passages) });
+  const mark = (yes) => h("span", { class: `mark${yes ? " yes" : ""}` }, icon(yes ? "check" : "minus"));
   const rows = [
-    ["mouse", t("help.sit_working"), [0.25, 0.75, 1].map(pace)],
-    ["away", t("help.sit_away"), [0.5, 1, 1].map(pace)],
-    ["battery", t("help.sit_battery"), [0, 0.25, 1].map(pace)],
-    ["gauge", t("help.sit_busy"), [range(t("help.slower_early")), range(t("help.slower_late")), pace(1)]],
-    ["search", t("help.mem_search"), [t("help.mem_search_lean"), t("help.mem_search_fast"), t("help.mem_search_fast")]],
-    ["ram", t("help.mem_data"), [t("help.mem_data_lean"), ram, ram]],
-    ["chip", t("help.mem_model"), [t("help.mem_model_lean"), t("help.mem_model_given"), t("help.mem_model_kept")]],
+    ["mouse", t("perf.working"), [0.25, 0.75, 1].map(pace)],
+    ["away", t("perf.away"), [0.5, 1, 1].map(pace)],
+    ["battery", t("perf.battery"), [0, 0.25, 1].map(pace)],
+    ["search", t("perf.fast_search"), [false, true, true].map(mark)],
+    ["chip", t("perf.frees_gpu"), [true, true, false].map(mark)],
   ];
-  const modes = [["gentle", t("mode.gentle"), "speed1"], ["balanced", t("mode.balanced"), "speed2"], ["full", t("mode.full"), "speed3"]];
-  const note = `${t("help.speed_note")} ${t("help.mem_note", { mb: fmt(s?.memory?.app_mb || 0) })}`;
-  openHelp(t("settings.speed"), t("help.speed_intro"), ...compare(modes, s?.settings.perf_mode, rows, note));
+  const levels = [["gentle", t("mode.gentle"), "speed1"], ["balanced", t("mode.balanced"), "speed2"], ["full", t("mode.full"), "speed3"]];
+  openHelp(t("settings.speed"), "gauge", compare(levels, state.last?.settings.perf_mode, rows));
 }
 
 $("speed-info").addEventListener("click", (e) => { e.preventDefault(); performanceHelp(); });

@@ -52,7 +52,7 @@
           <button type="button" class="chip-x" id="similar-clear" data-icon="close" data-i18n-tip="search.back"></button>
         </div>
         <span class="toolbar-gap"></span>
-        <span class="hint-icon" id="notice" data-icon="hourglass" hidden></span>
+        <span class="hint-icon" id="notice" data-icon="timer" hidden></span>
         <div class="seg" id="views" role="radiogroup">
           <button type="button" data-view="cards" data-icon="rows"></button>
           <button type="button" data-view="list" data-icon="list"></button>
@@ -89,7 +89,6 @@
         <div class="map-card" id="map-card" hidden>
           <div class="mc-head">
             <div class="mc-name" id="mc-name"></div>
-            <button type="button" class="chip-x" id="mc-info" data-icon="info" data-i18n-tip="map.how"></button>
             <button type="button" class="chip-x" id="mc-close" data-icon="close" data-i18n-tip="common.close"></button>
           </div>
           <button type="button" class="mc-dir" id="mc-dir"></button>
@@ -101,7 +100,7 @@
             <div class="mc-preview" id="mc-preview"></div>
             <canvas class="mc-print" id="mc-print" width="160" height="160" hidden></canvas>
           </div>
-          <div class="mc-label" data-i18n="map.closest"></div>
+          <div class="mc-label" data-i18n="map.closest" data-i18n-tip="map.closest_tip"></div>
           <div class="mc-related" id="mc-related"></div>
           <div class="mc-foot">
             <div class="actions" id="mc-actions"></div>
@@ -204,11 +203,12 @@
 
 <div class="modal" id="update-modal" hidden>
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="um-title">
-    <button class="icon-btn small modal-x" id="um-later" data-icon="close" data-i18n-tip="update.later"></button>
     <div class="modal-head">
-      <img class="logo" src="/static/pig.svg" alt="">
-      <div><h3 id="um-title"></h3><p id="um-sub"></p></div>
+      <span class="modal-icon" data-icon="update"></span>
+      <h3 id="um-title"></h3>
+      <button class="icon-btn small" id="um-later" data-icon="close" data-i18n-tip="update.later"></button>
     </div>
+    <p class="modal-sub" id="um-sub"></p>
     <pre class="notes" id="um-notes"></pre>
     <p class="modal-hint" id="um-hint" hidden></p>
     <p class="error" id="um-error" hidden></p>
@@ -221,11 +221,12 @@
 
 <div class="modal" id="folder-modal" hidden>
   <div class="modal-card folder-info" role="dialog" aria-modal="true" aria-labelledby="fm-name">
-    <button class="icon-btn small modal-x" id="fm-close" data-icon="close" data-i18n-tip="common.close"></button>
     <div class="modal-head">
-      <span class="folder-icon big" data-icon="folder"></span>
-      <div class="fm-title"><h3 id="fm-name"></h3><p id="fm-path"></p></div>
+      <span class="modal-icon" data-icon="folder"></span>
+      <h3 id="fm-name"></h3>
+      <button class="icon-btn small" id="fm-close" data-icon="close" data-i18n-tip="common.close"></button>
     </div>
+    <p class="modal-sub" id="fm-path"></p>
     <div class="fm-body">
       <div class="fm-summary" id="fm-summary"></div>
       <div class="fm-stats" id="fm-numbers"></div>
@@ -246,10 +247,10 @@
 
 <div class="modal" id="types-modal" hidden>
   <div class="modal-card types" role="dialog" aria-modal="true" aria-labelledby="tm-title">
-    <button class="icon-btn small modal-x" id="tm-close" data-icon="close" data-i18n-tip="common.close"></button>
     <div class="modal-head">
-      <img class="logo" src="/static/pig.svg" alt="">
-      <div><h3 id="tm-title" data-i18n="types.title"></h3><p class="help-intro" data-i18n="types.intro"></p></div>
+      <span class="modal-icon" data-icon="doc"></span>
+      <h3 id="tm-title" data-i18n="types.title"></h3>
+      <button class="icon-btn small" id="tm-close" data-icon="close" data-i18n-tip="common.close"></button>
     </div>
     <div class="tm-body" id="tm-body"></div>
     <div class="modal-actions">
@@ -260,10 +261,8 @@
 
 <div class="modal" id="confirm-modal" hidden>
   <div class="modal-card confirm" role="alertdialog" aria-modal="true" aria-labelledby="cm-title" aria-describedby="cm-text">
-    <div class="modal-head">
-      <img class="logo" src="/static/pig.svg" alt="">
-      <div><h3 id="cm-title"></h3><p id="cm-text"></p></div>
-    </div>
+    <div class="modal-head"><h3 id="cm-title"></h3></div>
+    <p class="modal-text" id="cm-text"></p>
     <div class="modal-actions">
       <button class="icon-btn" id="cm-cancel" data-icon="close" data-i18n-tip="common.cancel"></button>
       <button class="icon-btn danger-solid" id="cm-ok" data-icon="trash"></button>
@@ -273,10 +272,10 @@
 
 <div class="modal" id="help" hidden>
   <div class="modal-card help" role="dialog" aria-modal="true" aria-labelledby="help-title">
-    <button class="icon-btn small modal-x" id="help-close" data-icon="close" data-i18n-tip="common.close"></button>
     <div class="modal-head">
-      <img class="logo" src="/static/pig.svg" alt="">
-      <div><h3 id="help-title"></h3><p class="help-intro" id="help-intro"></p></div>
+      <span class="modal-icon" id="help-icon"></span>
+      <h3 id="help-title"></h3>
+      <button class="icon-btn small" id="help-close" data-icon="close" data-i18n-tip="common.close"></button>
     </div>
     <div class="help-body" id="help-body"></div>
   </div>
