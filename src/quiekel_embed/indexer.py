@@ -123,8 +123,11 @@ class Indexer:
         self.jobs.put(("scan", folder_id))
 
     def enqueue_paths(self, paths: list[str]):
+        """Changes the watcher saw. They're noted right away, even while indexing is paused or busy
+        (see _note_changes); reading the new content waits its turn."""
         if paths:
-            self.jobs.put(("paths", paths))
+            for job in self._note_changes(paths):
+                self.jobs.put(job)
 
     def remove_folder(self, folder_id: int):
         self._cancelled.add(folder_id)
@@ -284,14 +287,20 @@ class Indexer:
                 continue
             self._apply_priority()
             try:
-                if job == "scan":
-                    self._scan_folder(arg)
-                elif job == "paths":
-                    self._handle_paths(arg)
+                self._do(job, arg)
             except Exception as e:
                 log.exception("Job %s failed", job)
                 self._set(state="error", message=f"{type(e).__name__}: {e}")
                 time.sleep(2)
+
+    def _do(self, job: str, arg):
+        if job == "scan":
+            self._scan_folder(arg)
+        elif job == "index":
+            self._index_noted(*arg)
+        elif job == "remove":
+            # Again, in turn: the job before may have read one of them just before it went.
+            self.store.remove_paths([p for p in arg if not os.path.exists(p)])
 
     def types(self) -> Types:
         """What's searched, as Settings -> File types say."""
@@ -393,7 +402,10 @@ class Indexer:
             if todo or gone:
                 self.store.optimize()
 
-    def _handle_paths(self, paths: list[str]):
+    def _note_changes(self, paths: list[str]) -> list[tuple]:
+        """Write down what the watcher saw, at once: new files are searchable by name and count as
+        waiting, deleted ones disappear. This runs on the watcher's thread, so a paused or busy
+        indexer doesn't hold it up. Returns the jobs that read the new content, in turn."""
         folders = [f for f in self.store.folders() if f["watch"]]
         types = self.types()
         removed, by_folder = [], {}
@@ -437,10 +449,32 @@ class Indexer:
                         self.store.remove_file_ids(stale)
                     files.extend(f for f in inner if self._changed(f))
                     self.store.save_containers(folder["id"], list(containers.seen.values()), replace=False)
+        jobs = []
         if removed:
             self.store.remove_paths(removed)
+            jobs.append(("remove", removed))
         for folder_id, (root, files) in by_folder.items():
-            self._index_files(folder_id, root, files, types)
+            if files:
+                self.store.add_pending(folder_id, [(p, size, mtime, types.kind(file_name(p)) or "text",
+                                                    search_name(p, root)) for p, size, mtime in files])
+                jobs.append(("index", (folder_id, root, files)))
+        return jobs
+
+    def _handle_paths(self, paths: list[str]):
+        """Note changes and read them in one go (the watcher and the indexer do it in turn)."""
+        for job, arg in self._note_changes(paths):
+            self._do(job, arg)
+
+    def _index_noted(self, folder_id: int, root: str, files: list):
+        """Read the files the watcher noted, unless they went away or a scan got to them first."""
+        if folder_id in self._cancelled:
+            return
+        todo = []
+        for path, size, mtime in files:
+            sig = self.store.signature(path)
+            if sig and (sig[3] == "pending" or sig[1] != size or abs(sig[2] - mtime) > 1e-3):
+                todo.append((path, size, mtime))
+        self._index_files(folder_id, root, todo)
 
     def _changed(self, f) -> bool:
         sig = self.store.signature(f[0])
@@ -758,4 +792,7 @@ class Watcher(FileSystemEventHandler):
                 ready = [p for p, t in self._pending.items() if now - t >= self.DEBOUNCE_S]
                 for p in ready:
                     del self._pending[p]
-            self.indexer.enqueue_paths(ready)
+            try:
+                self.indexer.enqueue_paths(ready)
+            except Exception:
+                log.exception("Could not note %d changed paths", len(ready))
