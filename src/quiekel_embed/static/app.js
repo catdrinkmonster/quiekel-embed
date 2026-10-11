@@ -159,8 +159,19 @@ function showTip(el) {
   tipFor = el;
   const box = renderTip(text);
   const r = el.getBoundingClientRect();
-  if (el.closest(".rail")) placeTip(r.right + 10, r.top + r.height / 2 - box.height / 2, box);
+  // Beside it, on the same line: the rail's buttons, and rows in a list (right after their name, so
+  // the tip can't look like it belongs to the row above). Above it: everything else.
+  const beside = el.closest(".rail") ? r.right
+    : "tipAnchor" in el.dataset ? textRight((el.dataset.tipAnchor && el.querySelector(el.dataset.tipAnchor)) || el) : null;
+  if (beside != null) placeTip(beside + 10, r.top + r.height / 2 - box.height / 2, box);
   else placeTip(r.left + r.width / 2 - box.width / 2, r.top - box.height - 8, box, r.bottom + 8);
+}
+
+// Where an element's text ends (not its box, which may be as wide as the row).
+function textRight(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  return range.getBoundingClientRect().right;
 }
 
 // For things that aren't elements, like a point on the map: the tip sits above the cursor.
@@ -280,7 +291,7 @@ function renderKeys() {
       [[{ mouse: "map.drag" }], "map.rotate"],
       [[{ mouse: "map.scroll" }], "map.zoom"],
       [[{ mouse: "map.click" }], "map.inspect"],
-      [["←"], "map.back_short"],
+      [["←", "→"], "map.back_short"],
       [[{ mouse: "map.dblclick" }], "map.reset_short"],
     ]],
   ];
@@ -721,7 +732,7 @@ const revealExample = (reason, index) => post(`/api/folders/${state.folderInfo}/
   .catch((e) => toast(e.message, "alert"));
 
 function fileRow(path, why, reveal, isNew = false) {
-  const name = h("b", {}, baseName(path));
+  const name = h("b", { "data-tip-anchor": "" }, baseName(path));
   setTip(name, path);
   return h("div", { class: `fm-file${isNew ? " new" : ""}` },
     h("span", { class: "fm-file-text" }, name, why ? h("span", { class: "fm-why" }, why) : null),
@@ -738,7 +749,7 @@ function reasonRow(r) {
   const more = r.n - r.files.length;
   const exts = Object.entries(r.exts || {}).sort((a, b) => b[1] - a[1]).slice(0, 40)
     .map(([ext, n]) => h("span", { class: "type-chip static" }, ext || t("why.no_ext"), h("small", {}, fmt(n))));
-  const summary = h("summary", {}, icon(WHY_ICON[r.key] || "skip"),
+  const summary = h("summary", { "data-tip-anchor": "b" }, icon(WHY_ICON[r.key] || "skip"),
     h("span", { class: "fm-file-text" }, h("b", {}, label)),
     CHANGEABLE.has(r.key) ? iconButton("settings", t("settings.types"), (e) => {
       e.preventDefault();
@@ -888,7 +899,8 @@ function renderTypes() {
     const sw = h("input", { type: "checkbox", class: "switch", "aria-label": t(`types.rule.${key}`) });
     sw.checked = !!m.rules[key];
     sw.addEventListener("change", () => saveTypes({ [key]: sw.checked }));
-    const row = h("label", { class: "tm-rule" }, icon(ic), h("span", { class: "fm-file-text" }, h("b", {}, t(`types.rule.${key}`))), sw);
+    const row = h("label", { class: "tm-rule", "data-tip-anchor": "b" }, icon(ic),
+      h("span", { class: "fm-file-text" }, h("b", {}, t(`types.rule.${key}`))), sw);
     if (known(`types.rule.${key}_d`)) setTip(row, t(`types.rule.${key}_d`));
     return row;
   });
@@ -1372,14 +1384,27 @@ function extBadge(r) {
   return h("div", { class: "ext", style: `--c: ${color}` }, ext.slice(0, 4));
 }
 
-// How well a result matches, as signal bars (meaning) and "Aa" (your words); words in the tooltip.
+// How well a result matches its meaning, from 0 to 1. Scores between a search and a file run from
+// about 0.55 (unrelated) to 0.82 (as close as they get), so that's the scale.
+const matchShare = (similarity) => Math.max(0, Math.min(1, (similarity - 0.55) / 0.27));
+
+// A small ring for how well something matches (0 to 1): filled that far, red through yellow to green.
+function matchRing(share) {
+  const ring = h("span", { class: "match-ring", style: `--hue: ${Math.round(share * 120)}` });
+  ring.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle class="t" cx="10" cy="10" r="7.5"/>'
+    + `<circle class="a" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray="${Math.max(4, Math.round(share * 100))} 100"/></svg>`;
+  return ring;
+}
+
+// How well a result matches: the ring (meaning) and "Aa" (your words); the number and the words in
+// the tooltip.
 function matchBadge(r) {
   const parts = [];
   const lines = [];
   if (r.similarity != null) {
-    const n = r.similarity >= 0.72 ? 3 : r.similarity >= 0.64 ? 2 : 1;
-    lines.push(t(["match.possible", "match.good", "match.great"][n - 1]));
-    parts.push(h("span", { class: `bars q${n}` }, h("i"), h("i"), h("i")));
+    const share = matchShare(r.similarity);
+    lines.push(t("match.share", { pct: pct(Math.round(share * 100)) }));
+    parts.push(matchRing(share));
   }
   if (r.exact || r.similarity == null) {
     lines.push(t(r.exact ? "match.all_words_title" : "match.some_words_title"));
@@ -1549,7 +1574,7 @@ const map = {
   points: [], byId: new Map(), total: 0,
   yaw: 0.7, pitch: 0.35, spin: true, spinBefore: null,
   cam: { ...OVERVIEW }, fly: null,
-  hover: null, rowHover: null, selected: null, history: [], related: null, closest: [], vector: null,
+  hover: null, rowHover: null, selected: null, history: [], future: [], related: null, closest: [], vector: null,
   info: null, tab: "preview",
   highlight: null, dim: null, dimValues: null, dimCache: new Map(),
   show: { docs: true, text: true, code: true, images: true },
@@ -1611,6 +1636,7 @@ function setPoints(points, total) {
   map.animStart = performance.now();
   map.dimCache.clear();
   map.history = map.history.filter((id) => map.byId.has(id));
+  map.future = map.future.filter((id) => map.byId.has(id));
   if (map.selected) {
     const again = map.byId.get(map.selected.id);
     if (again) selectPoint(again, { remember: false, fly: false });
@@ -1817,7 +1843,10 @@ async function selectPoint(p, { remember = true, fly = true } = {}) {
   map.spin = false;
   updateSpin();
   const same = map.selected?.id === p.id; // the same file again, e.g. the map was refreshed
-  if (remember && map.selected && !same) map.history.push(map.selected.id);
+  if (remember && map.selected && !same) {
+    map.history.push(map.selected.id);
+    map.future = [];
+  }
   map.selected = p;
   if (fly) flyTo({ tx: p.x, ty: p.y, tz: p.z, zoom: Math.max(map.cam.zoom, FOCUS_ZOOM) });
   if (same) {
@@ -1855,6 +1884,7 @@ function setRelated(p, rel) {
 function clearSelection() {
   map.selected = null;
   map.history = [];
+  map.future = [];
   map.info = null;
   map.related = null;
   map.closest = [];
@@ -1868,21 +1898,33 @@ function clearSelection() {
   }
 }
 
-// Back to the file you looked at before.
-function stepBack() {
-  const p = map.byId.get(map.history.pop());
-  if (p) selectPoint(p, { remember: false });
+// Back to the file you looked at before, and forward again.
+function step(from, to) {
+  const p = map.byId.get(from.pop());
+  if (!p) return;
+  if (map.selected) to.push(map.selected.id);
+  selectPoint(p, { remember: false });
+}
+const stepBack = () => step(map.history, map.future);
+const stepForward = () => step(map.future, map.history);
+
+function updateSteps() {
+  $("mc-back").disabled = !map.history.length;
+  $("mc-forward").disabled = !map.future.length;
 }
 
 function showCard(p) {
   $("map-card").hidden = false;
-  $("mc-name").textContent = p.name;
+  const name = $("mc-name");
+  name.textContent = p.name;
+  setTip(name, p.name);
+  name.dataset.tipCut = "";
   const dir = $("mc-dir");
   dir.textContent = p.dir;
   setTip(dir, t("scope.here"));
   dir.onclick = () => setScope(p.dir);
   $("mc-actions").replaceChildren(...actionButtons({ file_id: p.id, name: p.name }).childNodes);
-  $("mc-back").disabled = !map.history.length;
+  updateSteps();
   // Placeholders until the details arrive: the card keeps its size, so nothing jumps.
   const box = $("mc-preview");
   box.className = "mc-preview loading";
@@ -1931,24 +1973,23 @@ function setCardTab(tab) {
 }
 
 // The closest files, as rows you can hover (rings the dot) and click (goes there), with how
-// similar they are: the number, and a bar for it (unrelated files score around 0.6, close ones 0.9).
+// similar they are as the match ring (two files score from about 0.55, unrelated, to 0.95, alike).
 function renderRelatedList() {
-  const number = (s) => s.toLocaleString(i18n.lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   $("mc-related").replaceChildren(...map.closest.slice(0, 5).map((cl) => {
     const p = map.byId.get(cl.id);
-    const strength = Math.max(0.06, Math.min(1, (cl.s - 0.55) / 0.4));
+    const share = Math.max(0, Math.min(1, (cl.s - 0.55) / 0.4));
+    const ring = matchRing(share);
+    setTip(ring, t("match.share", { pct: pct(Math.round(share * 100)) }));
     const row = h("button", { type: "button", class: "mc-rel", onclick: () => selectPoint(p) },
       h("i", { class: "mc-dot", style: `background: ${KIND_COLOR[p.g]}` }),
-      h("span", { class: "mc-rel-name" }, p.name),
-      h("span", { class: "mc-rel-num" }, number(cl.s)),
-      h("span", { class: "mc-rel-bar" }, h("b", { style: `width: ${Math.round(strength * 100)}%` })));
+      h("span", { class: "mc-rel-name" }, p.name), ring);
     row.addEventListener("pointerenter", () => { map.rowHover = p; startMapLoop(); });
     row.addEventListener("pointerleave", () => { map.rowHover = null; startMapLoop(); });
     setTip(row, p.name);
     row.dataset.tipCut = ".mc-rel-name";
     return row;
   }));
-  $("mc-back").disabled = !map.history.length;
+  updateSteps();
 }
 
 // ---------- explanations: what a setting's options do ----------
@@ -2147,6 +2188,7 @@ async function mapSearch() {
 }
 $("mc-close").addEventListener("click", clearSelection);
 $("mc-back").addEventListener("click", stepBack);
+$("mc-forward").addEventListener("click", stepForward);
 $("map-spin").addEventListener("click", () => { map.spin = !map.spin; map.spinBefore = null; updateSpin(); startMapLoop(); });
 $("map-reset").addEventListener("click", resetMapView);
 $("map-search").addEventListener("submit", (e) => { e.preventDefault(); clearTimeout(mapSearchTimer); mapSearch(); });
@@ -2335,9 +2377,10 @@ document.addEventListener("keydown", (e) => {
     q.select();
     return;
   }
-  if (state.page === "map" && map.selected) { // ← (or Backspace): back to the file before
+  if (state.page === "map" && map.selected) { // ← (or Backspace): back to the file before; →: forward
     if (e.key === "Escape") clearSelection();
     else if (e.key === "ArrowLeft" || e.key === "Backspace") stepBack();
+    else if (e.key === "ArrowRight") stepForward();
     else return;
     e.preventDefault();
     return;
