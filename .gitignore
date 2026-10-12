@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+*.log
+
+# Never commit secrets or local settings
+.env
+.env.*
+*.pem
+*.key
+
+# The AI engine this copy was installed with (see install.ps1)
+engine.txt
+
+# The private Git the installer brings when Windows has none (see install.ps1)
+.mingit/
