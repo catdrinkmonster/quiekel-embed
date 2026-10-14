@@ -8,6 +8,7 @@
 mod archive;
 mod config;
 mod desktop;
+mod diagnostics;
 mod documents;
 mod download;
 mod embedder;

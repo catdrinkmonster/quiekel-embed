@@ -80,6 +80,7 @@ pub struct Backend {
     pub indexer: Arc<Indexer>,
     pub updater: Arc<Updater>,
     pub maps: Arc<FileMap>,
+    pub diagnostics: Arc<crate::diagnostics::Diagnostics>,
 }
 
 /// Start everything but the server: the store, the settings, the governor, the model's side and
@@ -99,7 +100,13 @@ pub fn build_backend(model: &str) -> anyhow::Result<Arc<Backend>> {
     let s = settings.clone();
     let updater = Updater::new(Box::new(move || s.get("auto_update").as_bool().unwrap_or(false)), true);
     let maps = FileMap::new(store.clone());
-    Ok(Arc::new(Backend { store, settings, governor, embedder, indexer, updater, maps }))
+    let diagnostics = crate::diagnostics::Diagnostics::start(
+        embedder.clone(),
+        governor.clone(),
+        indexer.clone(),
+        settings.get("diagnostics").as_bool().unwrap_or(false),
+    );
+    Ok(Arc::new(Backend { store, settings, governor, embedder, indexer, updater, maps, diagnostics }))
 }
 
 /// Indexing, and the search data read into memory: only once the server is up.
@@ -353,7 +360,7 @@ fn body_json<T: for<'de> Deserialize<'de>>(body: &[u8], fields: &[(&str, Ty, boo
     serde_json::from_value(value).map_err(|e| invalid(vec![json!({"type": "value_error", "loc": ["body"], "msg": e.to_string(), "input": null})]))
 }
 
-const SETTINGS_FIELDS: [(&str, Ty, bool); 11] = [
+const SETTINGS_FIELDS: [(&str, Ty, bool); 12] = [
     ("language", Ty::Str, false),
     ("theme", Ty::Str, false),
     ("auto_update", Ty::Bool, false),
@@ -365,6 +372,7 @@ const SETTINGS_FIELDS: [(&str, Ty, bool); 11] = [
     ("problems_seen", Ty::Int, false),
     ("hidden_files", Ty::Bool, false),
     ("program_folders", Ty::Bool, false),
+    ("diagnostics", Ty::Bool, false),
 ];
 
 // ---- the server -----------------------------------------------------------------------------------
@@ -410,6 +418,7 @@ struct SettingsIn {
     problems_seen: Option<i64>,
     hidden_files: Option<bool>,
     program_folders: Option<bool>,
+    diagnostics: Option<bool>,
 }
 
 impl Server {
@@ -503,6 +512,10 @@ impl Server {
         }
         if let Some(v) = body.auto_update {
             let _ = s.update("auto_update", json!(v));
+        }
+        if let Some(v) = body.diagnostics {
+            let _ = s.update("diagnostics", json!(v));
+            self.b.diagnostics.set_on(v);
         }
         if let Some(v) = &body.seen_version {
             if crate::updater::parse_version(v).is_some() {
@@ -777,6 +790,7 @@ impl Server {
                 Ok(r)
             }
             ["api", "status"] if get => Ok(json_reply(&self.status())),
+            ["api", "diagnostics"] if get => Ok(json_reply(&b.diagnostics.view(&b.embedder))),
             ["api", "settings"] if post => self.update_settings(body_json(body, &SETTINGS_FIELDS)?),
             ["api", "update", "check"] if post => {
                 b.updater.check();
@@ -997,7 +1011,7 @@ fn missing(field: &str) -> ApiError {
 fn known_path(parts: &[&str]) -> bool {
     matches!(
         parts,
-        [""] | ["api", "status" | "settings" | "pause" | "resume" | "retry-model" | "search" | "dirs" | "map" | "filetypes" | "show" | "report-bug" | "folders"]
+        [""] | ["api", "status" | "diagnostics" | "settings" | "pause" | "resume" | "retry-model" | "search" | "dirs" | "map" | "filetypes" | "show" | "report-bug" | "folders"]
             | ["api", "update", "check" | "apply" | "open"]
             | ["api", "window", "theme"]
             | ["api", "folders", _]
@@ -1186,7 +1200,8 @@ mod tests {
         let indexer = Indexer::new(store.clone(), embedder.clone(), governor.clone(), settings.clone());
         let updater = Updater::new(Box::new(|| false), false);
         let maps = FileMap::new(store.clone());
-        let b = Arc::new(Backend { store, settings, governor, embedder, indexer, updater, maps });
+        let diagnostics = crate::diagnostics::Diagnostics::start(embedder.clone(), governor.clone(), indexer.clone(), false);
+        let b = Arc::new(Backend { store, settings, governor, embedder, indexer, updater, maps, diagnostics });
         let hooks = Hooks { app_mode: false, pick_folder: Box::new(|_| None), show_window: None, quit_app: None, set_dark: None };
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         Client { server: Server::new(b, hooks), rt, dir }
@@ -1305,6 +1320,15 @@ mod tests {
         assert_eq!(s["auto_update"], false); // (updates are looked for; installed when asked)
         assert_eq!((&s["kinds_off"], &s["hidden_files"], &s["program_folders"]), (&json!([]), &json!(false), &json!(false)));
         assert_eq!((&s["view_files"], &s["view_images"]), (&json!("cards"), &json!("grid")));
+    }
+
+    #[test]
+    fn diagnostics_are_off_until_switched_on() {
+        let c = client();
+        let d = c.get("/api/diagnostics").json();
+        assert!(d["on"] == false && d["samples"].as_array().unwrap().is_empty());
+        assert_eq!(c.post("/api/settings", json!({"diagnostics": true})).status, StatusCode::OK);
+        assert!(c.get("/api/diagnostics").json()["on"] == true && c.settings()["diagnostics"] == true);
     }
 
     #[test]

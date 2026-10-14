@@ -1278,6 +1278,8 @@ pub fn defaults() -> Map<String, Value> {
         "language": "auto", "theme": "auto", "view_files": "cards", "view_images": "grid",
         // Settings -> File types (see filetypes.rs): the kinds switched off, and the rules
         "kinds_off": [], "hidden_files": false, "program_folders": false,
+        // Settings -> Diagnostics: a tab with what the app uses
+        "diagnostics": false,
     });
     match v {
         Value::Object(m) => m,

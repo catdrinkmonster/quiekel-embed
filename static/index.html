@@ -17,6 +17,7 @@
       <a href="#/search" data-page="search" data-icon="search" data-i18n-tip="nav.search"></a>
       <a href="#/folders" data-page="folders" data-icon="folder" data-i18n-tip="nav.folders"><span class="nav-badge" id="nav-badge" hidden></span></a>
       <a href="#/map" data-page="map" data-icon="cube" id="nav-map"></a>
+      <a href="#/diagnostics" data-page="diagnostics" data-icon="pulse" data-i18n-tip="nav.diagnostics" id="nav-diagnostics" hidden></a>
     </nav>
 
     <div class="rail-foot">
@@ -127,6 +128,13 @@
       <div class="folders" id="folders"></div>
     </section>
 
+    <!-- Diagnostics (Settings switches it on): what the app uses, the last ten minutes -->
+    <section class="page page-diagnostics" id="page-diagnostics" hidden>
+      <div class="dg-strip" id="dg-strip"></div>
+      <div class="dg-charts" id="dg-charts"></div>
+      <div class="card dg-time" id="dg-time" hidden></div>
+    </section>
+
     <!-- Settings -->
     <section class="page" id="page-settings" hidden>
       <div class="card">
@@ -171,6 +179,10 @@
           <div class="meter" id="meter-vram"><div class="meter-row"><span>VRAM</span><b id="m-vram">–</b></div><div class="meter-bar"><i id="mb-vram"></i></div></div>
         </div>
         <div class="device" id="device"></div>
+        <label class="set-row" id="diagnostics-row">
+          <span class="set-label"><span data-icon="pulse"></span><span data-i18n="settings.diagnostics"></span></span>
+          <input type="checkbox" class="switch" id="diagnostics-on">
+        </label>
       </div>
 
       <div class="card">

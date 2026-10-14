@@ -68,6 +68,7 @@ const ICONS = {
   arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
   chevronDown: '<path d="M7 10l5 5 5-5"/>',
   chevronUp: '<path d="M7 14l5-5 5 5"/>',
+  pulse: '<path d="M3 12h4l2.5-6 4 12 2.5-6H21"/>',
   gift: '<path d="M4 11h16v9H4zM3 7.5h18V11H3zM12 7.5V20"/><path d="M12 7.5C10.5 4.5 7 4 7 6s3 1.5 5 1.5zm0 0c1.5-3 5-3.5 5-1.5s-3 1.5-5 1.5z"/>',
   up: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   moon: '<path d="M19.5 14.5A8 8 0 1 1 9.5 4.5a6.5 6.5 0 0 0 10 10z"/>',
@@ -457,8 +458,8 @@ setInterval(() => { if (!$("q").value) rotatePlaceholder(); }, 4500);
 
 function route() {
   const page = (location.hash.match(/^#\/(\w+)/) || [])[1];
-  const pages = ["search", "map", "folders", "settings"];
-  state.page = pages.includes(page) ? page : "search";
+  const pages = ["search", "map", "folders", "settings", "diagnostics"];
+  state.page = pages.includes(page) && (page !== "diagnostics" || state.diagnostics) ? page : "search";
   for (const p of pages) $(`page-${p}`).hidden = p !== state.page;
   for (const a of document.querySelectorAll(".nav a")) {
     a.classList.toggle("active", a.dataset.page === state.page);
@@ -467,6 +468,7 @@ function route() {
   closeScopeMenu();
   if (state.page === "search") $("q").focus();
   if (state.page === "map") openMap();
+  if (state.page === "diagnostics") refreshDiagnostics();
   if (state.page === "folders" && state.last) showProblemsBadge(state.last.folders); // seen: the badge goes
 }
 
@@ -965,6 +967,14 @@ function renderSettings({ settings, resources, model }) {
     $("autostart").setAttribute("aria-label", t("settings.autostart"));
     $("auto-update").checked = !!settings.auto_update;
     setTip($("auto-update"), t("settings.auto_update"));
+    $("diagnostics-on").checked = !!settings.diagnostics;
+    setTip($("diagnostics-row"), t("settings.diagnostics_tip"));
+    if (state.diagnostics !== !!settings.diagnostics) {
+      state.diagnostics = !!settings.diagnostics;
+      $("nav-diagnostics").hidden = !state.diagnostics;
+      if (!state.diagnostics && state.page === "diagnostics") goTo("settings");
+      if (state.diagnostics && location.hash.startsWith("#/diagnostics")) route(); // (opened before the settings came)
+    }
     const langs = settings.languages;
     const sel = $("language");
     sel.replaceChildren(
@@ -1034,6 +1044,7 @@ function renderDevice(model) {
 
 $("autostart").addEventListener("change", (e) => saveSettings({ autostart: e.target.checked }));
 $("auto-update").addEventListener("change", (e) => saveSettings({ auto_update: e.target.checked }));
+$("diagnostics-on").addEventListener("change", (e) => saveSettings({ diagnostics: e.target.checked }));
 $("language").addEventListener("change", (e) => saveSettings({ language: e.target.value }));
 
 async function saveSettings(change) {
@@ -1228,6 +1239,92 @@ $("check-now").addEventListener("click", async () => {
     btn.classList.remove("working");
   }
 });
+
+// ---------- diagnostics ----------
+
+// What the app uses, the last ten minutes: small line charts (newest on the right), and where
+// indexing time went. Fetched every two seconds while the tab is open.
+let diagTimer = null;
+
+async function refreshDiagnostics() {
+  clearTimeout(diagTimer);
+  if (state.page !== "diagnostics") return;
+  try {
+    renderDiagnostics(await api("/api/diagnostics"));
+  } catch { /* the next try */ }
+  diagTimer = setTimeout(refreshDiagnostics, 2000);
+}
+
+const DIAG_COLORS = { app: "var(--orange)", model: "var(--blue)", others: "var(--faint)", files: "var(--green)" };
+
+function diagChart(title, lines, unit, top = null) {
+  const W = 300, H = 80;
+  const all = lines.flatMap((l) => l.points);
+  const t1 = Date.now() / 1000, t0 = t1 - 600;
+  const max = top ?? Math.max(1, ...all.map((p) => p[1]));
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.classList.add("dg-svg");
+  for (const l of lines) {
+    if (l.points.length < 2) continue;
+    const pl = document.createElementNS(ns, "polyline");
+    pl.setAttribute("points", l.points.map(([t, v]) => `${((t - t0) / (t1 - t0)) * W},${H - (Math.min(v, max) / max) * (H - 3) - 1.5}`).join(" "));
+    pl.style.stroke = l.color;
+    svg.append(pl);
+  }
+  const last = (l) => (l.points.length ? l.points[l.points.length - 1][1] : null);
+  const legend = h("div", { class: "dg-legend" }, ...lines.map((l) => h("span", {},
+    h("i", { style: `background: ${l.color}` }), l.name, h("b", {}, last(l) == null ? "–" : `${fmt(Math.round(last(l)))}${unit}`))));
+  return h("div", { class: "card dg-chart" }, h("div", { class: "dg-title" }, title), svg, legend);
+}
+
+function renderDiagnostics(d) {
+  const s = d.samples || [];
+  const at = (f) => s.map((x) => { try { const v = f(x); return v == null ? null : [x.t, v]; } catch { return null; } }).filter(Boolean);
+  // Files per second, from the indexer's count (smoothed over 5 seconds).
+  const files = [];
+  for (let i = 5; i < s.length; i++) {
+    const a = s[i - 5].pipeline, b = s[i].pipeline;
+    if (a && b && s[i].t > s[i - 5].t) files.push([s[i].t, Math.max(0, (b.files - a.files) / (s[i].t - s[i - 5].t))]);
+  }
+  const now = files.length ? files[files.length - 1][1] : 0;
+  const lastS = s[s.length - 1];
+  $("dg-strip").replaceChildren(
+    h("div", { class: "dg-headline" }, h("b", {}, fmt(Math.round(now * 10) / 10)), h("span", {}, t("diag.files"))),
+    d.device ? h("span", { class: "chip" }, d.device === "processor" ? t("diag.cpu") : d.device) : "",
+    lastS && lastS.pipeline ? h("span", { class: "chip" }, `${t("diag.readers")}: ${lastS.pipeline.readers}`) : "",
+  );
+  $("dg-charts").replaceChildren(
+    diagChart(t("diag.files"), [{ name: t("diag.files_short"), color: DIAG_COLORS.files, points: files }], "/s"),
+    diagChart(t("diag.cpu"), [
+      { name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.app.cpu) },
+      { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.cpu) },
+      { name: t("diag.pc"), color: DIAG_COLORS.others, points: at((x) => x.pc.cpu) }], " %", 100),
+    diagChart(t("diag.memory"), [
+      { name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.app.mb) },
+      { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.mb) }], " MB"),
+    diagChart(t("diag.gpu"), [
+      { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.gpu) },
+      { name: t("diag.others"), color: DIAG_COLORS.others, points: at((x) => x.pc.gpu_others) }], " %", 100),
+    diagChart(t("diag.vram"), [{ name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.vram_mb) }], " MB"),
+  );
+  // Where indexing time went in these ten minutes: one bar.
+  const ps = s.map((x) => x.pipeline).filter(Boolean);
+  const box = $("dg-time");
+  if (ps.length < 2) { box.hidden = true; return; }
+  const a = ps[0], b = ps[ps.length - 1];
+  const parts = [["diag.reading", b.read_ms - a.read_ms, "var(--orange)"], ["diag.waiting", b.wait_ms - a.wait_ms, "var(--pink)"],
+    ["diag.model", b.embed_ms - a.embed_ms, "var(--blue)"], ["diag.saving", b.save_ms - a.save_ms, "var(--green)"]];
+  const total = parts.reduce((sum, p) => sum + p[1], 0);
+  box.hidden = total <= 0;
+  if (total <= 0) return;
+  box.replaceChildren(h("div", { class: "dg-title" }, t("diag.time")),
+    h("div", { class: "dg-bar" }, ...parts.map(([, v, c]) => h("i", { style: `width: ${(v / total) * 100}%; background: ${c}` }))),
+    h("div", { class: "dg-legend" }, ...parts.map(([k, v, c]) => h("span", {}, h("i", { style: `background: ${c}` }), t(k),
+      h("b", {}, `${fmt(Math.round(v / 1000))} s`)))));
+}
 
 // ---------- confirm ----------
 

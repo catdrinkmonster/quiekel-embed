@@ -156,6 +156,10 @@ impl Embedder {
         self.proc.read().as_ref().map(|p| p.memory_mb()).unwrap_or(0.0)
     }
 
+    pub fn vram_mb(&self) -> Option<f64> {
+        self.proc.read().as_ref().and_then(|p| p.vram_mb())
+    }
+
     // ---- starting and stopping --------------------------------------------------------------
 
     /// Start the model process; on the processor when prefer_gpu is false (e.g. a game is

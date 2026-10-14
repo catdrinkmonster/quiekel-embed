@@ -568,6 +568,11 @@ impl ModelProcess {
         })
     }
 
+    /// Its video memory in MB, as of its last answer (on the graphics card only).
+    pub fn vram_mb(&self) -> Option<f64> {
+        self.vram.lock().map(|(used, _)| used)
+    }
+
     /// The graphics card's memory budget Windows gives the process is used up: another app needs it.
     pub fn over_budget(&self) -> bool {
         self.vram.lock().is_some_and(|(used, budget)| budget > 0.0 && used > budget)

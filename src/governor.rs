@@ -120,7 +120,7 @@ impl SystemCpu {
 }
 
 /// CPU time of one process (this one, or the model's).
-fn process_cpu_100ns(pid: u32) -> Option<u64> {
+pub fn process_cpu_100ns(pid: u32) -> Option<u64> {
     use windows::Win32::Foundation::{CloseHandle, FILETIME};
     use windows::Win32::System::Threading::{GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     unsafe {

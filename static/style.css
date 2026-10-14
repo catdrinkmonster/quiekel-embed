@@ -826,3 +826,22 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
   .line .dir, .line .info { display: none; }
   .set-row { flex-wrap: wrap; }
 }
+
+/* ---- diagnostics: what the app uses, the last ten minutes ---- */
+.page-diagnostics { display: flex; flex-direction: column; gap: var(--gap-group); }
+.dg-strip { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; }
+.dg-headline { display: flex; align-items: baseline; gap: var(--gap); margin-right: var(--gap); }
+.dg-headline b { font-size: 28px; font-weight: 700; color: var(--ink); }
+.dg-headline span { color: var(--muted); font-size: 13px; }
+.dg-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.dg-chart { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.dg-title { font-size: 12px; font-weight: 600; color: var(--muted); }
+.dg-svg { width: 100%; height: 80px; display: block; }
+.dg-svg polyline { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.dg-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.dg-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.dg-legend i { width: 8px; height: 8px; border-radius: 2px; }
+.dg-legend b { color: var(--ink); font-weight: 600; margin-left: 2px; }
+.dg-time { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.dg-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.dg-bar i { display: block; height: 100%; }
