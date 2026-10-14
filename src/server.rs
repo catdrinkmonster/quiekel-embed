@@ -68,7 +68,6 @@ pub struct Hooks {
     pub app_mode: bool,
     pub pick_folder: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
     pub show_window: Option<Box<dyn Fn() + Send + Sync>>,
-    pub quit_app: Option<Box<dyn Fn() + Send + Sync>>,
     pub set_dark: Option<Box<dyn Fn(bool) + Send + Sync>>,
 }
 
@@ -1202,7 +1201,7 @@ mod tests {
         let maps = FileMap::new(store.clone());
         let diagnostics = crate::diagnostics::Diagnostics::start(embedder.clone(), governor.clone(), indexer.clone(), false);
         let b = Arc::new(Backend { store, settings, governor, embedder, indexer, updater, maps, diagnostics });
-        let hooks = Hooks { app_mode: false, pick_folder: Box::new(|_| None), show_window: None, quit_app: None, set_dark: None };
+        let hooks = Hooks { app_mode: false, pick_folder: Box::new(|_| None), show_window: None, set_dark: None };
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         Client { server: Server::new(b, hooks), rt, dir }
     }

@@ -1647,10 +1647,6 @@ mod tests {
             }
         }
 
-        fn watched(&self) -> Vec<i64> {
-            self.ix.watcher().watches.lock().keys().copied().collect()
-        }
-
     }
 
     fn ago(seconds: u64) -> Instant {

@@ -42,7 +42,6 @@ enum UserEvent {
     LoadUrl(String),
     LoadHtml(String),
     Show,
-    Hide,
     SetDark(bool),
     Quit,
 }
@@ -580,16 +579,13 @@ pub fn main(hidden: bool) -> Result<()> {
         let started = (|| -> Result<()> {
             let backend = server::build_backend("onnx")?;
             progress(0.45);
-            let (p1, p2, p3) = (boot_proxy.clone(), boot_proxy.clone(), boot_proxy.clone());
+            let (p1, p3) = (boot_proxy.clone(), boot_proxy.clone());
             let dark_set = dark_now.clone();
             let hooks = Hooks {
                 app_mode: true,
                 pick_folder: Box::new(move |title| pick_folder(hwnd, title)),
                 show_window: Some(Box::new(move || {
                     let _ = p1.send_event(UserEvent::Show);
-                })),
-                quit_app: Some(Box::new(move || {
-                    let _ = p2.send_event(UserEvent::Quit);
                 })),
                 set_dark: Some(Box::new(move |on| {
                     dark_set.store(on, Ordering::SeqCst);
@@ -670,10 +666,6 @@ pub fn main(hidden: bool) -> Result<()> {
                         window.set_minimized(false);
                     }
                     window.set_focus();
-                }
-                UserEvent::Hide => {
-                    window.set_visible(false);
-                    hidden_since.store(now_s(), Ordering::SeqCst);
                 }
                 UserEvent::SetDark(on) => {
                     if styled != Some(on) {

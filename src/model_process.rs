@@ -290,7 +290,6 @@ impl std::error::Error for Gone {}
 
 #[derive(Debug)]
 pub struct StartFailed {
-    pub kind: String,
     pub text: String,
 }
 
@@ -395,8 +394,8 @@ impl ModelProcess {
         const CREATE_SUSPENDED: u32 = 0x4;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const BELOW_NORMAL: u32 = 0x4000;
-        let failed = |kind: &str, text: String| StartFailed { kind: kind.into(), text: clip(&text) };
-        let exe = model_exe().map_err(|e| failed("engine", e.to_string()))?;
+        let failed = |text: String| StartFailed { text: clip(&text) };
+        let exe = model_exe().map_err(|e| failed(e.to_string()))?;
         let mut child = Command::new(exe)
             .arg("--model-process")
             .stdin(Stdio::piped())
@@ -404,18 +403,18 @@ impl ModelProcess {
             .stderr(Stdio::null())
             .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW | BELOW_NORMAL)
             .spawn()
-            .map_err(|e| failed("engine", e.to_string()))?;
+            .map_err(|e| failed(e.to_string()))?;
         let handle = windows::Win32::Foundation::HANDLE(child.as_raw_handle());
         let job = match job(handle, setup.memory_cap_gb, setup.threads_cap) {
             Ok(j) => j,
             Err(e) => {
                 let _ = child.kill(); // (still suspended: it never ran)
-                return Err(failed("engine", e.to_string()));
+                return Err(failed(e.to_string()));
             }
         };
         if let Err(e) = resume(handle) {
             let _ = child.kill();
-            return Err(failed("engine", e.to_string()));
+            return Err(failed(e.to_string()));
         }
         let stdin = BufWriter::new(child.stdin.take().unwrap());
         let stdout: ChildStdout = child.stdout.take().unwrap();
@@ -433,7 +432,7 @@ impl ModelProcess {
                     }
                 }
             })
-            .map_err(|e| failed("engine", e.to_string()))?;
+            .map_err(|e| failed(e.to_string()))?;
         let pid = child.id();
         let p = ModelProcess {
             setup: setup.clone(),
@@ -448,9 +447,9 @@ impl ModelProcess {
             let mut ch = p.channel.lock();
             let ch = ch.as_mut().unwrap();
             let header = serde_json::to_value(&setup).unwrap_or_default();
-            write_frame(&mut ch.stdin, &header, &[]).map_err(|e| failed("engine", e.to_string()))?;
+            write_frame(&mut ch.stdin, &header, &[]).map_err(|e| failed(e.to_string()))?;
             loop {
-                let (msg, _) = p.receive(ch, None).map_err(|e| failed("engine", e.0))?;
+                let (msg, _) = p.receive(ch, None).map_err(|e| failed(e.0))?;
                 match msg["t"].as_str() {
                     Some("status") => on_status(msg["state"].as_str().unwrap_or("")),
                     Some("ready") => {
@@ -458,7 +457,7 @@ impl ModelProcess {
                         return Ok(());
                     }
                     Some("failed") => {
-                        return Err(failed(msg["kind"].as_str().unwrap_or("engine"), msg["text"].as_str().unwrap_or("").to_string()));
+                        return Err(failed(msg["text"].as_str().unwrap_or("").to_string()));
                     }
                     _ => {}
                 }

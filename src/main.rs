@@ -106,7 +106,6 @@ fn serve(open_browser: bool, model: &str) -> Result<()> {
         app_mode: false,
         pick_folder: Box::new(|title| desktop::pick_folder(0, title)),
         show_window: None,
-        quit_app: None,
         set_dark: None,
     };
     let srv = server::Server::new(backend.clone(), hooks);

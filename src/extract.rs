@@ -60,12 +60,6 @@ impl std::fmt::Display for ReadErrorBox {
 }
 impl std::error::Error for ReadErrorBox {}
 
-pub fn skip(key: &'static str) -> anyhow::Error {
-    anyhow::Error::new(ReadErrorBox(ReadError::Skip(key)))
-}
-pub fn damaged(kind: &'static str) -> anyhow::Error {
-    anyhow::Error::new(ReadErrorBox(ReadError::Damaged(kind)))
-}
 
 pub type ReadResult<T> = Result<T, ReadError>;
 

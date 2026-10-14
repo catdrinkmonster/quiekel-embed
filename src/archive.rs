@@ -932,11 +932,6 @@ impl Drop for Session {
     }
 }
 
-/// Close every container kept open.
-pub fn release() {
-    STATE.lock().open.clear();
-}
-
 fn handle<'a>(st: &'a mut State, disk: &str, names: &[String]) -> Result<&'a mut Open> {
     let meta = std::fs::metadata(disk)?;
     let mtime_ns = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);

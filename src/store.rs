@@ -87,15 +87,6 @@ pub fn kind_code(kind: &str) -> i8 {
     }
 }
 
-pub fn code_kind(code: i8) -> &'static str {
-    match code {
-        0 => "doc",
-        1 => "text",
-        2 => "code",
-        3 => "image",
-        _ => "",
-    }
-}
 
 fn now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
@@ -194,9 +185,7 @@ pub struct Folder {
 
 #[derive(Clone, Debug)]
 pub struct FolderRow {
-    pub id: i64,
     pub path: String,
-    pub watch: bool,
 }
 
 /// An archive or email as last looked into.
@@ -486,6 +475,7 @@ impl Store {
     }
 
     /// Whether the search data is kept in memory (Balanced and Maximum) or searched on disk.
+    #[cfg(test)]
     pub fn keeps_vectors_in_memory(&self) -> bool {
         self.keep_vectors.load(Ordering::SeqCst)
     }
@@ -618,7 +608,7 @@ impl Store {
     pub fn folder(&self, folder_id: i64) -> Option<FolderRow> {
         let db = self.db.lock();
         db.query_row("SELECT id, path, watch FROM folders WHERE id = ?", [folder_id], |r| {
-            Ok(FolderRow { id: r.get(0)?, path: r.get(1)?, watch: r.get::<_, i64>(2)? != 0 })
+            Ok(FolderRow { path: r.get(1)? })
         })
         .optional()
         .ok()
@@ -1238,27 +1228,8 @@ impl Store {
     }
 
     /// (file_ids, vectors) of every chunk in the index.
-    pub fn all_vectors(&self) -> (Vec<i64>, Vec<f32>) {
-        if self.vectors_ready() {
-            return self.vectors.read().rows_of(None);
-        }
-        let (mut ids, mut vecs) = (Vec::new(), Vec::new());
-        let db = self.db.lock();
-        if let Ok(mut st) = db.prepare("SELECT id, vector FROM vectors") {
-            if let Ok(mut rows) = st.query([]) {
-                while let Ok(Some(r)) = rows.next() {
-                    if let (Ok(id), Ok(v)) = (r.get::<_, i64>(0), r.get_ref(1)) {
-                        if let Ok(b) = v.as_blob() {
-                            ids.push(id >> FTS_SHIFT);
-                            from_blob(b, &mut vecs);
-                        }
-                    }
-                }
-            }
-        }
-        (ids, vecs)
-    }
 
+    #[cfg(test)]
     pub fn vector_count(&self) -> i64 {
         let db = self.db.lock();
         db.query_row("SELECT COUNT(*) FROM vectors", [], |r| r.get(0)).unwrap_or(0)

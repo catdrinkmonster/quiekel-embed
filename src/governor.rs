@@ -400,7 +400,7 @@ impl Governor {
         if d.level != state.1.level
             || (reason != state.1.reason() && s.logged.is_none_or(|t| now.duration_since(t).as_secs() >= 60))
         {
-            log::info!("Indexing speed: {reason} ({:.0}%)", d.duty * 100.0);
+            log::info!("Indexing {}: {reason}", if d.duty > 0.0 { "goes on" } else { "waits" });
             s.logged = Some(now);
         }
         *state = (m, d);
