@@ -3,3 +3,5 @@
 *.ps1 text eol=crlf
 *.png binary
 *.ico binary
+# Sample files for the tests: byte for byte, whatever they look like
+tests/fixtures/** binary

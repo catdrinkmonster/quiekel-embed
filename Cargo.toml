@@ -1,0 +1,113 @@
+[package]
+name = "quiekel-embed"
+version = "0.12.0"
+edition = "2024"
+description = "Search your files by what's in them. Locally, on Windows."
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "quiekel-embed"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+half = "2"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+regex = "1"
+fancy-regex = "0.14"
+unicode-normalization = "0.1"
+html-escape = "0.2"
+encoding_rs = "0.8"
+sha1_smol = "1"
+sha2 = "0.10"
+libloading = "0.8"
+memmap2 = "0.9"
+memchr = "2"
+rayon = "1"
+form_urlencoded = "1"
+percent-encoding = "2"
+
+# the model
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic", "directml", "half"] }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+ureq = { version = "3", features = ["json"] }
+
+# the index
+rusqlite = { version = "0.37", features = ["bundled"] }
+notify = "8"
+
+# reading files
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "tiff", "bmp", "ico", "tga", "pnm", "qoi"] }
+kamadak-exif = "0.6"
+resvg = "0.45"
+psd = "0.3"
+mozjpeg = { version = "0.10", default-features = false }
+pdfium-render = { version = "0.8", features = ["sync"] }
+zip = { version = "4", default-features = false, features = ["deflate", "deflate64", "bzip2", "lzma"] }
+tar = "0.4"
+flate2 = "1"
+bzip2 = "0.6"
+lzma-rs = "0.3"
+quick-xml = "0.38"
+calamine = { version = "0.31", features = ["dates"] }
+cfb = "0.10"
+mail-parser = "0.11"
+
+# the map
+nalgebra = "0.34"
+bhtsne = "0.5"
+
+# the server and the window
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tao = "0.34"
+wry = "0.53"
+tray-icon = "0.21"
+nvml-wrapper = "0.11"
+
+[dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_SystemInformation",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Performance",
+    "Win32_System_Power",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_Globalization",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Imaging",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_System_Registry",
+    "Win32_System_Console",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Storage_FileSystem",
+]
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
