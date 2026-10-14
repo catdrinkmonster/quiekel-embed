@@ -500,6 +500,10 @@ impl Indexer {
     fn pace(&self) {
         self.governor.pace(&|| self.is_paused() || self.folder_stopped(), Some(&|| self.manage_device()));
         self.wait_if_paused();
+        // On the processor while the graphics card has room again: move now, not only after the
+        // group (on the processor one group of pictures can take minutes); the group starts over
+        // on the card.
+        self.back_to_the_gpu();
     }
 
     /// The graphics card may take the model now: it has memory to spare, and didn't just run out.
@@ -1455,6 +1459,8 @@ mod tests {
         on_gpu: AtomicBool,
         could_use_gpu: AtomicBool,
         over_budget: AtomicBool,
+        pace: Mutex<Option<Box<dyn Fn(f64) + Send + Sync>>>,
+        after_first: Mutex<Option<Box<dyn Fn() + Send + Sync>>>, // runs after the first item it embeds
         unloaded: Mutex<Vec<String>>,
         loads: AtomicUsize,
         preferred: Mutex<Vec<bool>>,
@@ -1473,6 +1479,8 @@ mod tests {
                 on_gpu: AtomicBool::new(on_gpu),
                 could_use_gpu: AtomicBool::new(on_gpu),
                 over_budget: AtomicBool::new(false),
+                pace: Mutex::new(None),
+                after_first: Mutex::new(None),
                 unloaded: Mutex::new(Vec::new()),
                 loads: AtomicUsize::new(0),
                 preferred: Mutex::new(Vec::new()),
@@ -1489,6 +1497,25 @@ mod tests {
             self.ready.store(false, Ordering::SeqCst);
             *self.status.lock() = status.into();
             self
+        }
+
+        /// Like the real model: a pause for the indexer after each item; let go meanwhile, the rest
+        /// waits for it to start again.
+        fn items(&self, n: usize) -> Result<(), EmbedError> {
+            for k in 0..n {
+                if !self.ready() {
+                    return Err(EmbedError::ModelAsleep);
+                }
+                if k == 0 {
+                    if let Some(f) = self.after_first.lock().take() {
+                        f();
+                    }
+                }
+                if let Some(p) = self.pace.lock().as_ref() {
+                    p(0.0);
+                }
+            }
+            if self.ready() { Ok(()) } else { Err(EmbedError::ModelAsleep) }
         }
 
         fn unloaded(&self) -> Vec<String> {
@@ -1554,7 +1581,9 @@ mod tests {
         fn could_use_gpu(&self) -> bool {
             self.could_use_gpu.load(Ordering::SeqCst)
         }
-        fn set_pace(&self, _pace: Box<dyn Fn(f64) + Send + Sync>) {}
+        fn set_pace(&self, pace: Box<dyn Fn(f64) + Send + Sync>) {
+            *self.pace.lock() = Some(pace);
+        }
         fn set_batch_scale(&self, _scale: f64) {}
         fn documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
             if let Some(e) = self.failures.lock().pop_front() {
@@ -1563,9 +1592,11 @@ mod tests {
             if self.picky.is_some_and(|p| texts.iter().any(|t| t.contains(p))) {
                 return Err(EmbedError::BadInput("ValueError: broken".into()));
             }
+            self.items(texts.len())?;
             Ok(vec![unit(); texts.len()])
         }
         fn images(&self, images: &[image::RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError> {
+            self.items(images.len())?;
             Ok(vec![unit(); images.len()])
         }
     }
@@ -2225,6 +2256,19 @@ mod tests {
         t.ix.index_files(fid, &folder, notes(&folder, 3), None).unwrap(); // the card has room now, and there's work
         assert!(t.e.unloaded() == ["the graphics card is free again"] && t.e.preferred() == [true] && t.e.on_gpu());
         assert_eq!(t.paths(fid).len(), 3);
+    }
+
+    #[test]
+    fn a_long_group_on_the_processor_moves_to_the_graphics_card_as_soon_as_it_has_room() {
+        let t = make(Fake::new(false));
+        t.e.could_use_gpu.store(true, Ordering::SeqCst); // (started on the processor while the card was full)
+        t.gov.set(|m, _| m.vram_free_gb = Some(0.5)); // still full when the group starts
+        let gov = t.gov.clone();
+        *t.e.after_first.lock() = Some(Box::new(move || gov.set(|m, _| m.vram_free_gb = Some(4.0)))); // room again
+        let (fid, folder) = t.folder("docs");
+        t.ix.index_files(fid, &folder, notes(&folder, 6), None).unwrap();
+        assert!(t.e.unloaded() == ["the graphics card is free again"] && t.e.preferred() == [true] && t.e.on_gpu());
+        assert_eq!(t.paths(fid).len(), 6);
     }
 
     #[test]
