@@ -252,7 +252,9 @@ pub fn serve() -> Result<()> {
         }
     } else {
         send(json!({"t": "status", "state": if crate::onnx::cached(setup.gpu) { "loading" } else { "downloading" }}), &[])?;
-        std::panic::catch_unwind(|| crate::onnx::OnnxModel::new(setup.gpu, setup.device, setup.threads))
+        std::panic::catch_unwind(|| {
+            crate::onnx::OnnxModel::new(setup.gpu, setup.device, setup.threads).map(|m| m.with_memory_cap(setup.memory_cap_gb))
+        })
             .unwrap_or_else(|_| Err(anyhow!("the engine panicked while loading")))
             .map(|m| Model::Onnx(Box::new(m)))
     };

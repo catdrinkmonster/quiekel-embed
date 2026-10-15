@@ -31,6 +31,10 @@ pub const MAX_PATCHES: usize = SOFT_TOKENS * POOL * POOL;
 #[cfg(test)]
 const REFERENCE_PATCHES: usize = 280 * POOL * POOL; // (the model's own processor, for the tests)
 const MAX_TOKENS: usize = 2048; // passages are far shorter; this only stops a runaway one
+// On the processor, what a batch takes besides the model: about this much per token in it (rows
+// times their padded length), and the model and its runtime themselves.
+const CPU_MB_PER_TOKEN: f64 = 0.25;
+const CPU_BASE_MB: f64 = 300.0;
 pub const QUERY_PROMPT: &str = "task: search result | query: ";
 const FEATURES: usize = 512;
 /// On the graphics card, ONNX Runtime keeps DirectML's prepared work only for the first input
@@ -250,6 +254,26 @@ pub struct OnnxModel {
     /// On the graphics card: pictures' text part in exactly the PICTURES shape (made when first needed).
     pictures: Option<Session>,
     no_pictures: bool,
+    /// On the processor with a memory cap: the most tokens (rows times padded length) one run of
+    /// texts may hold, so it stays within the cap.
+    token_budget: Option<usize>,
+}
+
+/// Runs for texts of these lengths (in order) that each hold at most `budget` tokens, rows times
+/// the longest of them; a text longer than that runs on its own.
+fn runs(lengths: &[usize], budget: usize) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < lengths.len() {
+        let (mut end, mut longest) = (start + 1, lengths[start]);
+        while end < lengths.len() && longest.max(lengths[end]) * (end + 1 - start) <= budget {
+            longest = longest.max(lengths[end]);
+            end += 1;
+        }
+        out.push(start..end);
+        start = end;
+    }
+    out
 }
 
 impl OnnxModel {
@@ -268,6 +292,7 @@ impl OnnxModel {
         let text = engine.session("model", None)?;
         let mut model = OnnxModel {
             gpu, engine, tokenizer, text, batches: None, no_batches: false, vision: None, pictures: None, no_pictures: false,
+            token_budget: None,
         };
         if gpu {
             model.run_text(&[vec![BOS, EOS]], (vec![], 0))?; // its first shape: SINGLE
@@ -345,6 +370,9 @@ impl Engine {
                 .error_on_failure()]))?;
         } else {
             // No memory pool: it keeps the largest batch's memory for good, for no gain in speed.
+            // No memory pattern either: from a shape's second run on it takes that shape's memory as
+            // one block, far more than the run itself needs at any moment.
+            builder = ok(builder.with_memory_pattern(false))?;
             builder = ok(builder.with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()]))?;
         }
         builder.commit_from_file(&path).with_context(|| format!("loading {}", path.display()))
@@ -359,10 +387,25 @@ impl OnnxModel {
         Ok(encoded.iter().map(|e| e.get_ids().iter().map(|&i| i as i64).collect()).collect())
     }
 
+    /// On the processor, Windows holds the model to `cap_gb` of memory: batches of texts run in
+    /// pieces that fit (see runs()).
+    pub fn with_memory_cap(mut self, cap_gb: Option<f64>) -> Self {
+        if !self.gpu {
+            self.token_budget = cap_gb.map(|gb| ((gb * 1e9 / 1048576.0 - CPU_BASE_MB) / CPU_MB_PER_TOKEN).max(1.0) as usize);
+        }
+        self
+    }
+
     /// Unit vectors of texts, cut to EMBED_DIM.
     pub fn embed_texts(&mut self, texts: &[String], prompt: &str) -> Result<Vec<Vec<f32>>> {
         let ids = self.tokens(texts, prompt)?;
-        self.run_text(&ids, (vec![], 0))
+        let Some(budget) = self.token_budget else { return self.run_text(&ids, (vec![], 0)) };
+        let lengths: Vec<usize> = ids.iter().map(Vec::len).collect();
+        let mut out = Vec::with_capacity(ids.len());
+        for run in runs(&lengths, budget) {
+            out.extend(self.run_text(&ids[run], (vec![], 0))?);
+        }
+        Ok(out)
     }
 
     /// Unit vectors of pictures (one at a time: their encoder attends over all of a picture's patches,
@@ -584,6 +627,18 @@ mod tests {
     fn found(m: &mut OnnxModel, docs: &[Vec<f32>], query: &str) -> usize {
         let q = m.embed_texts(&[query.to_string()], QUERY_PROMPT).unwrap().remove(0);
         (0..docs.len()).max_by(|&a, &b| dot(&docs[a], &q).total_cmp(&dot(&docs[b], &q))).unwrap()
+    }
+
+    #[test]
+    fn long_texts_run_in_smaller_pieces() {
+        // Rows times the longest in a run stay within the budget; one too long runs on its own.
+        assert_eq!(runs(&[512, 512, 512, 512], 2048), [0..4]);
+        assert_eq!(runs(&[1000, 900, 600, 300, 300], 2048), [0..2, 2..5]);
+        assert_eq!(runs(&[3000, 100], 2048), [0..1, 1..2]);
+        assert!(runs(&[], 2048).is_empty());
+        // The light setup's 1 GB: a batch of four long passages (about 1,000 tokens each) splits.
+        let budget = ((1.0 * 1e9 / 1048576.0 - CPU_BASE_MB) / CPU_MB_PER_TOKEN) as usize;
+        assert!(budget >= 4 * 512 && budget < 4 * 1000);
     }
 
     #[test]
