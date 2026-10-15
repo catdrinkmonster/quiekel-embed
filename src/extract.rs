@@ -464,57 +464,56 @@ fn strip_chars(s: &[char]) -> &[char] {
 }
 
 /// Whitespace as the chunker cleans it: line ends unified, tabs as 4 spaces, no spaces at line
-/// ends, runs of spaces inside a line as one (leading indentation kept), at most one blank line.
+/// ends, runs of spaces inside a line as one (leading indentation kept), at most one blank line,
+/// none at the start or the end. In one pass, and only as far as the chunker can ever get (its
+/// MAX_CHUNKS_PER_FILE windows): a long text costs no more than that.
 fn tidy(text: &str) -> Vec<char> {
-    let text = text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "    ");
-    let chars: Vec<char> = text.chars().collect();
-    // [^\S\n]+\n -> \n
-    let mut a: Vec<char> = Vec::with_capacity(chars.len());
-    let mut run = 0usize;
-    for &c in &chars {
+    let limit = config::MAX_CHUNKS_PER_FILE * config::CHUNK_CHARS + config::CHUNK_CHARS;
+    let mut out: Vec<char> = Vec::with_capacity(text.len().min(limit));
+    let mut pending: Vec<char> = Vec::new(); // whitespace since the last other character (not line ends)
+    let mut newlines = 0; // line ends in a row at the end of `out`
+    let mut chars = text.chars().peekable();
+    while let Some(mut c) = chars.next() {
+        if out.len() >= limit {
+            return out; // (what's left can't reach a passage)
+        }
+        if c == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            c = '\n';
+        }
         if c == '\n' {
-            a.truncate(a.len() - run);
-            a.push('\n');
-            run = 0;
-        } else {
-            a.push(c);
-            run = if is_space(c) { run + 1 } else { 0 };
-        }
-    }
-    // (?<=\S)[^\S\n]{2,} -> " "
-    let mut b: Vec<char> = Vec::with_capacity(a.len());
-    let mut i = 0;
-    while i < a.len() {
-        let c = a[i];
-        if is_space(c) && c != '\n' && i > 0 && !is_space(a[i - 1]) {
-            let mut j = i;
-            while j < a.len() && is_space(a[j]) && a[j] != '\n' {
-                j += 1;
+            pending.clear(); // (spaces at a line's end go)
+            newlines += 1;
+            if newlines <= 2 && !out.is_empty() {
+                out.push('\n');
             }
-            if j - i >= 2 {
-                b.push(' ');
-                i = j;
-                continue;
+            continue;
+        }
+        if is_space(c) {
+            if c == '\t' {
+                pending.extend([' '; 4]);
+            } else {
+                pending.push(c);
+            }
+            continue;
+        }
+        if !out.is_empty() {
+            if pending.len() >= 2 && out.last().is_some_and(|&p| !is_space(p)) {
+                out.push(' ');
+            } else {
+                out.extend_from_slice(&pending);
             }
         }
-        b.push(c);
-        i += 1;
+        pending.clear();
+        newlines = 0;
+        out.push(c);
     }
-    // \n{3,} -> \n\n
-    let mut c2: Vec<char> = Vec::with_capacity(b.len());
-    let mut nl = 0;
-    for &c in &b {
-        if c == '\n' {
-            nl += 1;
-            if nl <= 2 {
-                c2.push(c);
-            }
-        } else {
-            nl = 0;
-            c2.push(c);
-        }
+    while out.last().is_some_and(|&c| is_space(c)) {
+        out.pop();
     }
-    strip_chars(&c2).to_vec()
+    out
 }
 
 fn rfind(window: &[char], sep: &[char]) -> Option<usize> {
@@ -525,7 +524,12 @@ fn rfind(window: &[char], sep: &[char]) -> Option<usize> {
 }
 
 pub fn chunk_text(text: &str) -> Vec<String> {
-    let text = tidy(text);
+    chunks_of(&tidy(text))
+}
+
+/// Passages of a tidied text: windows of CHUNK_CHARS, each ending at the strongest boundary in
+/// its back half, overlapping by CHUNK_OVERLAP.
+fn chunks_of(text: &[char]) -> Vec<String> {
     if text.is_empty() {
         return vec![];
     }
@@ -566,6 +570,88 @@ pub fn chunk_text(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whitespace as the chunker cleans it: line ends unified, tabs as 4 spaces, no spaces at line
+    /// ends, runs of spaces inside a line as one (leading indentation kept), at most one blank line.
+    fn tidy_reference(text: &str) -> Vec<char> {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "    ");
+        let chars: Vec<char> = text.chars().collect();
+        // [^\S\n]+\n -> \n
+        let mut a: Vec<char> = Vec::with_capacity(chars.len());
+        let mut run = 0usize;
+        for &c in &chars {
+            if c == '\n' {
+                a.truncate(a.len() - run);
+                a.push('\n');
+                run = 0;
+            } else {
+                a.push(c);
+                run = if is_space(c) { run + 1 } else { 0 };
+            }
+        }
+        // (?<=\S)[^\S\n]{2,} -> " "
+        let mut b: Vec<char> = Vec::with_capacity(a.len());
+        let mut i = 0;
+        while i < a.len() {
+            let c = a[i];
+            if is_space(c) && c != '\n' && i > 0 && !is_space(a[i - 1]) {
+                let mut j = i;
+                while j < a.len() && is_space(a[j]) && a[j] != '\n' {
+                    j += 1;
+                }
+                if j - i >= 2 {
+                    b.push(' ');
+                    i = j;
+                    continue;
+                }
+            }
+            b.push(c);
+            i += 1;
+        }
+        // \n{3,} -> \n\n
+        let mut c2: Vec<char> = Vec::with_capacity(b.len());
+        let mut nl = 0;
+        for &c in &b {
+            if c == '\n' {
+                nl += 1;
+                if nl <= 2 {
+                    c2.push(c);
+                }
+            } else {
+                nl = 0;
+                c2.push(c);
+            }
+        }
+        strip_chars(&c2).to_vec()
+    }
+
+    #[test]
+    fn tidying_in_one_pass_matches_the_reference_and_long_texts_give_the_same_passages() {
+        let pieces: Vec<String> = ["word", "Wort", "x", ".", " ", "  ", "\t", "\n", "\r\n", "\r", "\n\n\n"]
+            .iter()
+            .map(|s| s.to_string())
+            .chain([0xA0u32, 0x2003, 0x1C, 0x0B].iter().map(|&c| char::from_u32(c).unwrap().to_string()))
+            .collect();
+        let mut seed = 7u64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for len in [0, 1, 2, 5, 20, 200, 3000] {
+            for _ in 0..200 {
+                let text: String = (0..len).map(|_| pieces[next(pieces.len())].as_str()).collect();
+                assert_eq!(tidy(&text), tidy_reference(&text), "{text:?}");
+            }
+        }
+        // Longer than the passages can reach: the same passages as from the whole text.
+        let long: String = (0..700_000).map(|_| pieces[next(pieces.len())].as_str()).collect();
+        assert!(long.chars().count() > 2 * config::MAX_CHUNKS_PER_FILE * config::CHUNK_CHARS);
+        let all = chunks_of(&tidy_reference(&long));
+        assert_eq!(all.len(), config::MAX_CHUNKS_PER_FILE);
+        assert_eq!(chunk_text(&long), all);
+    }
 
     #[test]
     fn short_text_is_one_chunk() {
