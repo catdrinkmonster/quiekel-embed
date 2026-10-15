@@ -52,18 +52,28 @@
         [IO.Compression.ZipFile]::ExtractToDirectory($zip, $temp)
         if (-not (Test-Path (Join-Path $temp "quiekel-embed.exe"))) { throw "The release has no quiekel-embed.exe." }
 
-        # A running copy (the app and its model process, also an older version's) lets go first.
-        $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$dir\*" })
+        # A running copy lets go first: the app and its model process, also an older version's. (One
+        # that ran on Python runs from launchers in this folder; the interpreters they start, from
+        # elsewhere, end with them, or are found by their command line.)
+        $inDir = { param($text) "$text".IndexOf("$dir\", [StringComparison]::OrdinalIgnoreCase) -ge 0 }
+        $running = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.ProcessId -ne $PID -and ((& $inDir $_.ExecutablePath) -or ($_.Name -match '^pythonw?\.exe$' -and (& $inDir $_.CommandLine)))
+        })
         if ($running.Count) {
             Step "Closing the running Quiekel Embed..."
-            $running | Stop-Process -Force
-            $running | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 800  # (Windows lets go of the files a moment later)
+            $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            $running | ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 15 -ErrorAction SilentlyContinue }
         }
         # The folder holds only the program (the index and settings are in %LOCALAPPDATA%\QuiekelEmbed):
-        # what was there goes, an older version's too (also one that ran on Python).
+        # what was there goes, an older version's too (also one that ran on Python). Windows may hold
+        # a file a moment after its program has closed: tried again.
         Step "Installing to $dir..."
-        if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+        for ($try = 1; Test-Path -LiteralPath $dir; $try++) {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path -LiteralPath $dir)) { break }
+            if ($try -ge 10) { throw "Couldn't replace ${dir}: a program still has a file in it open. Close it and run the line again." }
+            Start-Sleep -Seconds 1
+        }
         New-Item -ItemType Directory -Force $dir | Out-Null
         Get-ChildItem $temp | Copy-Item -Destination $dir -Recurse -Force
     } finally {
@@ -72,14 +82,10 @@
     }
 
     if (-not $env:QUIEKEL_NO_SHORTCUTS) {
+        # (Started with Windows or pinned to the taskbar before, also by an older version: still,
+        # now with this program.)
         Step "Adding Desktop and Start Menu shortcuts..."
         & $exe --shortcuts | Out-Null
-        # Started with Windows before: still, now with this program.
-        $startup = Join-Path ([Environment]::GetFolderPath("Startup")) "Quiekel Embed.lnk"
-        if (Test-Path $startup) {
-            $link = (New-Object -ComObject WScript.Shell).CreateShortcut($startup)
-            $link.TargetPath = $exe; $link.Arguments = "--hidden"; $link.WorkingDirectory = $dir; $link.Save()
-        }
     }
 
     if (-not $env:QUIEKEL_NO_START) {

@@ -590,6 +590,11 @@ impl Store {
             let db = self.db.lock();
             db.execute_batch("DELETE FROM files; DELETE FROM chunks_fts; DELETE FROM containers; DELETE FROM vectors;")?;
             let _ = std::fs::remove_file(self.map_path()); // its files are gone
+            // What versions before 1.0 kept next to the index: their vectors, map and update note.
+            let _ = std::fs::remove_dir_all(self.dir.join("vectors"));
+            for old in ["map.npz", "update-result.json"] {
+                let _ = std::fs::remove_file(self.dir.join(old));
+            }
         }
         self.meta_set("index", &current);
         Ok(())
@@ -1787,11 +1792,14 @@ mod tests {
         assert_eq!(s.vector_count(), 2);
         s.meta_set("index", "someone/another-model@256/f2"); // (made with another model)
         std::fs::write(s.map_path(), b"QEMAP001").unwrap();
+        std::fs::create_dir_all(dir.join("vectors").join("chunks.lance")).unwrap(); // (versions before 1.0)
+        std::fs::write(dir.join("map.npz"), b"old").unwrap();
         drop(s);
         let again = Store::open_at(&dir.join("state.db")).unwrap();
         assert!(again.vector_count() == 0 && again.signature(r"C:\a\f.x").is_none());
         assert!(again.folder(fid).is_some()); // the folders stay
         assert!(!again.map_path().exists()); // the map of the files that were
+        assert!(!dir.join("vectors").exists() && !dir.join("map.npz").exists()); // and what older versions kept
         drop(again);
         let _ = std::fs::remove_dir_all(dir);
     }
