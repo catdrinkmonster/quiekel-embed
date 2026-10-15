@@ -2,8 +2,9 @@
 //! passages' vectors.
 //!
 //! Searches don't scan the vectors on disk: every passage's vector is also kept in memory
-//! (`Vectors`, about 1 KB per passage), which turns a search into a few milliseconds of maths.
-//! Light performance turns that off; searches then read the vectors from disk.
+//! (`Vectors`, in half precision: half a KB per passage), which turns a search into a few
+//! milliseconds of maths. While they're being read at start-up, and for indexes too big to keep,
+//! searches read the vectors from disk.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -11,6 +12,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
+use half::f16;
+use half::slice::HalfFloatSliceExt;
 use parking_lot::{Mutex, RwLock};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
@@ -137,6 +140,92 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
     acc.iter().sum::<f32>() + rest
 }
 
+/// A vector kept in half precision against one in full: with the processor's vector instructions
+/// (AVX2, FMA and F16C, most PCs since 2013), else through a conversion first.
+#[inline]
+fn dot16(a: &[f16], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    if *VECTOR_UNITS {
+        // SAFETY: the processor has the instructions (checked once).
+        return unsafe { dot16_avx2(a, b) };
+    }
+    let mut row = [0f32; EMBED_DIM];
+    let row = &mut row[..a.len().min(EMBED_DIM)];
+    a[..row.len()].convert_to_f32_slice(row);
+    dot(row, b)
+}
+
+#[cfg(target_arch = "x86_64")]
+static VECTOR_UNITS: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") && is_x86_feature_detected!("f16c")
+});
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma,f16c")]
+unsafe fn dot16_avx2(a: &[f16], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let n = a.len().min(b.len());
+    let (pa, pb) = (a.as_ptr() as *const u16, b.as_ptr());
+    // SAFETY: every load stays below n, inside both slices.
+    unsafe {
+        let mut s = [_mm256_setzero_ps(); 4];
+        let mut i = 0;
+        while i + 32 <= n {
+            for (k, acc) in s.iter_mut().enumerate() {
+                let x = _mm256_cvtph_ps(_mm_loadu_si128(pa.add(i + 8 * k) as *const __m128i));
+                *acc = _mm256_fmadd_ps(x, _mm256_loadu_ps(pb.add(i + 8 * k)), *acc);
+            }
+            i += 32;
+        }
+        let t = _mm256_add_ps(_mm256_add_ps(s[0], s[1]), _mm256_add_ps(s[2], s[3]));
+        let x = _mm_add_ps(_mm256_castps256_ps128(t), _mm256_extractf128_ps(t, 1));
+        let x = _mm_add_ps(x, _mm_movehl_ps(x, x));
+        let x = _mm_add_ss(x, _mm_shuffle_ps(x, x, 1));
+        let mut sum = _mm_cvtss_f32(x);
+        while i < n {
+            sum += a[i].to_f32() * b[i];
+            i += 1;
+        }
+        sum
+    }
+}
+
+/// The k best of what comes along, by score (best first once full).
+struct Best {
+    k: usize,
+    items: Vec<(f32, usize, usize)>,
+}
+
+impl Best {
+    fn new(k: usize) -> Best {
+        Best { k, items: Vec::with_capacity(k + 1) }
+    }
+
+    /// Whether a score would make it in.
+    #[inline]
+    fn wants(&self, score: f32) -> bool {
+        self.items.len() < self.k || score > self.items[self.k - 1].0
+    }
+
+    fn add(&mut self, item: (f32, usize, usize)) {
+        if self.items.len() < self.k {
+            self.items.push(item);
+            if self.items.len() == self.k {
+                self.items.sort_by(|x, y| y.0.total_cmp(&x.0));
+            }
+        } else if item.0 > self.items[self.k - 1].0 {
+            let at = self.items.partition_point(|x| x.0 >= item.0);
+            self.items.insert(at, item);
+            self.items.pop();
+        }
+    }
+
+    fn into_sorted(mut self) -> Vec<(f32, usize, usize)> {
+        self.items.sort_by(|x, y| y.0.total_cmp(&x.0));
+        self.items
+    }
+}
+
 fn normalized(v: &[f32]) -> Vec<f32> {
     let n = dot(v, v).sqrt();
     let n = if n > 0.0 { n } else { 1.0 };
@@ -242,12 +331,12 @@ pub struct Block {
     chunks: Vec<i32>,
     kinds: Vec<i8>,
     folders: Vec<i64>,
-    vecs: Vec<f32>,
+    vecs: Vec<f16>,
     alive: Vec<bool>,
 }
 
 impl Block {
-    fn new(ids: Vec<i64>, chunks: Vec<i32>, kinds: Vec<i8>, folders: Vec<i64>, vecs: Vec<f32>) -> Block {
+    fn new(ids: Vec<i64>, chunks: Vec<i32>, kinds: Vec<i8>, folders: Vec<i64>, vecs: Vec<f16>) -> Block {
         let alive = vec![true; ids.len()];
         Block { ids, chunks, kinds, folders, vecs, alive }
     }
@@ -256,7 +345,7 @@ impl Block {
         self.ids.len()
     }
 
-    fn row(&self, i: usize) -> &[f32] {
+    fn row(&self, i: usize) -> &[f16] {
         &self.vecs[i * EMBED_DIM..(i + 1) * EMBED_DIM]
     }
 }
@@ -288,7 +377,7 @@ pub struct Vectors {
 }
 
 impl Vectors {
-    pub const MAX_ROWS: usize = 500_000; // ~500 MB: bigger indexes are searched on disk instead
+    pub const MAX_ROWS: usize = 500_000; // ~250 MB: bigger indexes are searched on disk instead
     const MAX_BLOCKS: usize = 48;
 
     fn fill(&mut self, block: Block) {
@@ -356,25 +445,21 @@ impl Vectors {
 
     /// (file_id, chunk, kind code, cosine) of the closest passages, best first.
     fn search(&self, q: &[f32], limit: usize, filter: &Filter) -> Vec<(i64, i32, i8, f32)> {
-        let mut found: Vec<(f32, usize, usize)> = Vec::new();
-        for (bi, b) in self.blocks.iter().enumerate() {
-            let mut sims: Vec<(f32, usize, usize)> = (0..b.len())
-                .filter(|&i| b.alive[i] && filter.allows(b.kinds[i], b.folders[i], b.ids[i]))
-                .map(|i| (dot(b.row(i), q), bi, i))
-                .collect();
-            let k = limit.min(sims.len());
-            if k == 0 {
-                continue;
-            }
-            if k < sims.len() {
-                sims.select_nth_unstable_by(k - 1, |x, y| y.0.total_cmp(&x.0));
-                sims.truncate(k);
-            }
-            found.extend(sims);
+        if limit == 0 {
+            return Vec::new();
         }
-        found.sort_by(|x, y| y.0.total_cmp(&x.0));
-        found.truncate(limit);
-        found
+        let mut best = Best::new(limit);
+        for (bi, b) in self.blocks.iter().enumerate() {
+            for i in 0..b.len() {
+                if b.alive[i] && filter.allows(b.kinds[i], b.folders[i], b.ids[i]) {
+                    let s = dot16(b.row(i), q);
+                    if best.wants(s) {
+                        best.add((s, bi, i));
+                    }
+                }
+            }
+        }
+        best.into_sorted()
             .into_iter()
             .map(|(s, bi, i)| {
                 let b = &self.blocks[bi];
@@ -390,7 +475,9 @@ impl Vectors {
             for i in 0..b.len() {
                 if b.alive[i] && file_ids.is_none_or(|s| s.contains(&b.ids[i])) {
                     ids.push(b.ids[i]);
-                    vecs.extend_from_slice(b.row(i));
+                    let at = vecs.len();
+                    vecs.resize(at + EMBED_DIM, 0.0);
+                    b.row(i).convert_to_f32_slice(&mut vecs[at..]);
                 }
             }
         }
@@ -506,8 +593,8 @@ impl Store {
 
     // ---- vectors in memory ------------------------------------------------------------------
 
-    /// Balanced and Maximum performance keep them (and fill them now, in the background); Light
-    /// lets them go and searches the vectors on disk.
+    /// Keep them in memory (filled now, in the background), or let them go and search the vectors
+    /// on disk.
     pub fn keep_vectors_in_memory(self: &Arc<Self>, keep: bool) {
         self.keep_vectors.store(keep, Ordering::SeqCst);
         if keep {
@@ -518,7 +605,7 @@ impl Store {
         }
     }
 
-    /// Whether the search data is kept in memory (Balanced and Maximum) or searched on disk.
+    /// Whether the search data is kept in memory or searched on disk.
     #[cfg(test)]
     pub fn keeps_vectors_in_memory(&self) -> bool {
         self.keep_vectors.load(Ordering::SeqCst)
@@ -555,7 +642,7 @@ impl Store {
                 chunks.push((id & CHUNK_MASK) as i32);
                 folders.push(r.get(1)?);
                 kinds.push(r.get::<_, i64>(2)? as i8);
-                from_blob(r.get_ref(3)?.as_blob()?, &mut vecs);
+                vecs.extend(r.get_ref(3)?.as_blob()?.chunks_exact(4).map(|c| f16::from_f32(f32::from_le_bytes([c[0], c[1], c[2], c[3]]))));
             }
             Ok(())
         })();
@@ -577,7 +664,7 @@ impl Store {
     /// What the vectors in memory take, in MB (0 when they're on disk).
     pub fn vectors_mb(&self) -> f64 {
         let v = self.vectors.read();
-        if v.ready { (v.rows * EMBED_DIM * 4) as f64 / 1e6 } else { 0.0 }
+        if v.ready { (v.rows * EMBED_DIM * 2) as f64 / 1e6 } else { 0.0 }
     }
 
     // ---- meta & settings ------------------------------------------------------------------
@@ -1080,7 +1167,7 @@ impl Store {
                 b_chunks.push(r.chunk as i32);
                 b_kinds.push(kind);
                 b_folders.push(r.folder_id);
-                b_vecs.extend_from_slice(&r.vector);
+                b_vecs.extend(r.vector.iter().map(|&x| f16::from_f32(x)));
             }
         }
         {
@@ -1618,7 +1705,7 @@ mod tests {
         let key = |hits: &Vec<VectorHit>| hits.iter().map(|h| (h.file_id, h.chunk, h.text.clone())).collect::<Vec<_>>();
         for (mem, disk) in in_memory.iter().zip(&on_disk) {
             assert_eq!(key(mem), key(disk));
-            assert!(mem.iter().zip(disk).all(|(m, d)| (m.similarity - d.similarity).abs() < 1e-5));
+            assert!(mem.iter().zip(disk).all(|(m, d)| (m.similarity - d.similarity).abs() < 2e-3)); // (half precision in memory)
         }
         assert!(in_memory[1].len() == 10 && in_memory[1].iter().all(|h| images.contains(&h.file_id)));
         assert!(in_memory[3].iter().all(|h| some.contains(&h.file_id)));
@@ -1770,5 +1857,26 @@ mod tests {
         assert!(s.removing().is_empty());
         drop(s);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn half_precision_gives_the_same_scores_and_the_same_best() {
+        let mut rng = Rng(9);
+        let q = rng.unit();
+        let rows: Vec<Vec<f32>> = (0..300).map(|_| rng.unit()).collect();
+        for r in &rows {
+            let h: Vec<f16> = r.iter().map(|&x| f16::from_f32(x)).collect();
+            let mut back = vec![0f32; EMBED_DIM];
+            h.convert_to_f32_slice(&mut back);
+            assert!((dot16(&h, &q) - dot(&back, &q)).abs() < 1e-5); // (the processor's instructions, or not)
+            assert!((dot16(&h, &q) - dot(r, &q)).abs() < 2e-3);
+        }
+        let mut best = Best::new(10);
+        for (i, r) in rows.iter().enumerate() {
+            best.add((dot(r, &q), 0, i));
+        }
+        let mut all: Vec<(f32, usize)> = rows.iter().enumerate().map(|(i, r)| (dot(r, &q), i)).collect();
+        all.sort_by(|x, y| y.0.total_cmp(&x.0));
+        assert_eq!(best.into_sorted().iter().map(|x| x.2).collect::<Vec<_>>(), all[..10].iter().map(|x| x.1).collect::<Vec<_>>());
     }
 }
