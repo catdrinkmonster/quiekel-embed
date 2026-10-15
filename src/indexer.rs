@@ -42,20 +42,21 @@ struct Stop;
 type Found = (String, i64, f64);
 
 /// Where indexing spends its time, summed since the app started: reading files (all readers
-/// together), waiting for read files, the model, saving. Milliseconds, and what was done.
+/// together), waiting for read files, the model, saving. Microseconds (a small file is read in
+/// well under a millisecond), and what was done.
 #[derive(Default)]
 struct Pipeline {
-    read_ms: AtomicU64,
+    read_us: AtomicU64,
     files: AtomicU64,
-    wait_ms: AtomicU64,
-    embed_ms: AtomicU64,
+    wait_us: AtomicU64,
+    embed_us: AtomicU64,
     texts: AtomicU64,
     pictures: AtomicU64,
-    save_ms: AtomicU64,
+    save_us: AtomicU64,
 }
 
-fn add_ms(counter: &AtomicU64, since: Instant) {
-    counter.fetch_add(since.elapsed().as_millis() as u64, Ordering::Relaxed);
+fn add_time(counter: &AtomicU64, since: Instant) {
+    counter.fetch_add(since.elapsed().as_micros() as u64, Ordering::Relaxed);
 }
 
 enum Job {
@@ -207,7 +208,7 @@ impl Group {
         for (entry, chunks) in self.entries.iter().zip(&self.chunks) {
             for (i, c) in chunks.iter().enumerate() {
                 if let Some(img) = &c.image {
-                    images.push(img.clone());
+                    images.push(img);
                     meta_i.push((entry, i, &c.snippet));
                 } else {
                     texts.push(c.text.clone().unwrap_or_default());
@@ -307,6 +308,7 @@ pub struct Indexer {
     paused: AtomicBool,
     retry: Flag,
     waking: AtomicBool,
+    removing: AtomicBool, // the thread that takes removed folders' files out of the index runs
     cancelled: Mutex<HashSet<i64>>,
     progress: Mutex<Map<String, Value>>,
     moved_to_gpu: Mutex<Option<Instant>>,
@@ -350,6 +352,7 @@ impl Indexer {
             paused: AtomicBool::new(false),
             retry: Flag::new(),
             waking: AtomicBool::new(false),
+            removing: AtomicBool::new(false),
             cancelled: Mutex::new(HashSet::new()),
             progress: Mutex::new(obj(json!({"state": "starting"}))),
             moved_to_gpu: Mutex::new(None),
@@ -398,6 +401,7 @@ impl Indexer {
             self.enqueue_scan(f.id); // catch changes made while the app was closed
         }
         self.watcher().sync();
+        self.finish_removals(); // (folders removed just before the app last closed)
     }
 
     pub fn enqueue_scan(&self, folder_id: i64) {
@@ -414,12 +418,48 @@ impl Indexer {
         }
     }
 
+    /// The folder is gone for the page at once; its files leave the index in the background.
     pub fn remove_folder(&self, folder_id: i64) -> anyhow::Result<()> {
         self.cancelled.lock().insert(folder_id);
         self.paused_folders.lock().remove(&folder_id);
-        self.store.remove_folder(folder_id)?;
+        self.store.begin_removing(folder_id);
         self.watcher().sync();
+        self.finish_removals();
         Ok(())
+    }
+
+    /// Takes the files of removed folders out of the index, a step at a time, in a thread of its
+    /// own (at most one), also for folders a restart interrupted.
+    fn finish_removals(&self) {
+        if self.store.removing().is_empty() || self.removing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let me = self.arc();
+        std::thread::Builder::new()
+            .name("remove-folders".into())
+            .spawn(move || {
+                set_background_priority(true);
+                loop {
+                    let Some(id) = me.store.removing().first().copied() else { break };
+                    let started = Instant::now();
+                    loop {
+                        match me.store.remove_folder_step(id, crate::store::REMOVE_STEP) {
+                            Ok(true) => {
+                                log::info!("A removed folder has left the index ({:.1} s)", started.elapsed().as_secs_f64());
+                                break;
+                            }
+                            Ok(false) => {}
+                            Err(e) => {
+                                log::error!("Removing a folder's files failed: {e:#}");
+                                std::thread::sleep(Duration::from_secs(5));
+                            }
+                        }
+                    }
+                }
+                me.removing.store(false, Ordering::SeqCst);
+                me.finish_removals(); // (one that came in just now)
+            })
+            .ok();
     }
 
     pub fn pause(&self) {
@@ -462,10 +502,11 @@ impl Indexer {
         p.insert("paused".into(), json!(self.is_paused()));
         p.insert("files_per_min".into(), json!(self.files_per_min()));
         let n = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let ms = |c: &AtomicU64| n(c) / 1000;
         let t = &self.pipeline;
         p.insert("pipeline".into(), json!({
-            "read_ms": n(&t.read_ms), "files": n(&t.files), "wait_ms": n(&t.wait_ms), "embed_ms": n(&t.embed_ms),
-            "texts": n(&t.texts), "pictures": n(&t.pictures), "save_ms": n(&t.save_ms), "readers": self.readers(),
+            "read_ms": ms(&t.read_us), "files": n(&t.files), "wait_ms": ms(&t.wait_us), "embed_ms": ms(&t.embed_us),
+            "texts": n(&t.texts), "pictures": n(&t.pictures), "save_ms": ms(&t.save_us), "readers": self.readers(),
         }));
         p
     }
@@ -819,7 +860,7 @@ impl Indexer {
             })
             .collect();
         self.store.add_pending(folder_id, &pending)?;
-        self.index_files(folder_id, &root, todo.clone(), Some(types))?;
+        self.index_files(folder_id, &root, todo, Some(types))?;
         if !self.cancelled.lock().contains(&folder_id) {
             let rows: Vec<ContainerRow> = containers.seen.into_values().collect();
             self.store.save_containers(folder_id, &rows, true)?;
@@ -889,16 +930,12 @@ impl Indexer {
                     let mut containers = Containers::new(types.clone(), HashMap::new(), HashMap::new());
                     let inner = containers.files(p, f.1, f.2, &mut Report::default());
                     let keep: HashSet<String> = inner.iter().map(|x| normcase(&x.0)).collect();
-                    let prefix = format!("{}\\", normcase(p));
                     let stale: Vec<i64> = self
                         .store
-                        .file_signatures(folder.id)
+                        .files_inside(p)
                         .into_iter()
-                        .filter(|(q, _)| {
-                            let q = normcase(q);
-                            q.starts_with(&prefix) && !keep.contains(&q)
-                        })
-                        .map(|(_, v)| v.0)
+                        .filter(|(_, q)| !keep.contains(&normcase(q)))
+                        .map(|(id, _)| id)
                         .collect();
                     if !stale.is_empty() {
                         let _ = self.store.remove_file_ids(&stale);
@@ -1029,7 +1066,7 @@ impl Indexer {
         loop {
             let waiting = Instant::now();
             let got = ready.recv_timeout(Duration::from_millis(500));
-            add_ms(&self.pipeline.wait_ms, waiting);
+            add_time(&self.pipeline.wait_us, waiting);
             match got {
                 Ok(item) => return item,
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return None,
@@ -1133,7 +1170,7 @@ impl Indexer {
                 entry.error = Some("Error: the reader failed".into());
                 (entry, Vec::new())
             });
-        add_ms(&self.pipeline.read_ms, reading);
+        add_time(&self.pipeline.read_us, reading);
         self.pipeline.files.fetch_add(1, Ordering::Relaxed);
         self.governor.pace(&|| stop.load(Ordering::SeqCst) || self.is_paused(), None); // (memory running out)
         let mut item = Some(item);
@@ -1237,7 +1274,7 @@ impl Indexer {
         }
         let embedding = Instant::now();
         let embedded = self.embed(&group);
-        add_ms(&self.pipeline.embed_ms, embedding);
+        add_time(&self.pipeline.embed_us, embedding);
         self.pipeline.texts.fetch_add(group.n_text as u64, Ordering::Relaxed);
         self.pipeline.pictures.fetch_add(group.n_image as u64, Ordering::Relaxed);
         let rows = match embedded? {
@@ -1265,7 +1302,7 @@ impl Indexer {
         };
         let saving = Instant::now();
         let saved = self.store.save_files(&group.entries, &rows);
-        add_ms(&self.pipeline.save_ms, saving);
+        add_time(&self.pipeline.save_us, saving);
         Ok(saved)
     }
 
@@ -1595,7 +1632,7 @@ mod tests {
             self.items(texts.len())?;
             Ok(vec![unit(); texts.len()])
         }
-        fn images(&self, images: &[image::RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        fn images(&self, images: &[&image::RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError> {
             self.items(images.len())?;
             Ok(vec![unit(); images.len()])
         }

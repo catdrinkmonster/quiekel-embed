@@ -50,11 +50,18 @@ fn clip(text: &str) -> String {
 // ---- frames ------------------------------------------------------------------------------------
 
 pub fn write_frame(w: &mut dyn Write, header: &Value, bytes: &[u8]) -> std::io::Result<()> {
+    write_frame_parts(w, header, &[bytes])
+}
+
+/// A frame whose bytes are written straight from several buffers (pictures: no copy first).
+fn write_frame_parts(w: &mut dyn Write, header: &Value, parts: &[&[u8]]) -> std::io::Result<()> {
     let h = serde_json::to_vec(header)?;
     w.write_all(&(h.len() as u32).to_le_bytes())?;
     w.write_all(&h)?;
-    w.write_all(&(bytes.len() as u32).to_le_bytes())?;
-    w.write_all(bytes)?;
+    w.write_all(&(parts.iter().map(|p| p.len()).sum::<usize>() as u32).to_le_bytes())?;
+    for p in parts {
+        w.write_all(p)?;
+    }
     w.flush()
 }
 
@@ -309,7 +316,7 @@ pub enum Reply {
 /// What the app asks.
 pub enum Request<'a> {
     Texts(&'a [String], &'a str),
-    Images(&'a [RgbImage]),
+    Images(&'a [&'a RgbImage]),
     Query(&'a str),
 }
 
@@ -537,19 +544,15 @@ impl ModelProcess {
             return Err(Gone("the model process isn't running".into()));
         }
         let ch = guard.as_mut().ok_or_else(|| Gone("the model process isn't running".into()))?;
-        let (header, bytes) = match request {
+        let (header, parts): (Value, Vec<&[u8]>) = match request {
             Request::Texts(items, prompt) => (json!({"op": "text", "items": items, "prompt": prompt}), Vec::new()),
             Request::Query(text) => (json!({"op": "query", "text": text}), Vec::new()),
             Request::Images(images) => {
                 let sizes: Vec<[u32; 2]> = images.iter().map(|i| [i.width(), i.height()]).collect();
-                let mut bytes = Vec::with_capacity(images.iter().map(|i| i.as_raw().len()).sum());
-                for i in images {
-                    bytes.extend_from_slice(i.as_raw());
-                }
-                (json!({"op": "image", "sizes": sizes}), bytes)
+                (json!({"op": "image", "sizes": sizes}), images.iter().map(|i| i.as_raw().as_slice()).collect())
             }
         };
-        if let Err(e) = write_frame(&mut ch.stdin, &header, &bytes) {
+        if let Err(e) = write_frame_parts(&mut ch.stdin, &header, &parts) {
             self.dead.store(true, std::sync::atomic::Ordering::SeqCst);
             return Err(Gone(clip(&e.to_string())));
         }

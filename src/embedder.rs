@@ -311,7 +311,7 @@ impl Embedder {
 
     /// Embed in batches, longest first so each batch needs little padding. A batch that runs out of
     /// memory is halved; a single item that does gives GpuBusy.
-    fn embed_items(&self, texts: Option<&[String]>, images: Option<&[RgbImage]>, prompt: &str) -> Result<Vec<Vec<f32>>, EmbedError> {
+    fn embed_items(&self, texts: Option<&[String]>, images: Option<&[&RgbImage]>, prompt: &str) -> Result<Vec<Vec<f32>>, EmbedError> {
         let n = texts.map(|t| t.len()).or(images.map(|i| i.len())).unwrap_or(0);
         let mut out = vec![Vec::new(); n];
         if n == 0 {
@@ -334,7 +334,7 @@ impl Embedder {
                     self.ask(Request::Texts(&batch, prompt))?
                 }
                 (_, Some(im)) => {
-                    let batch: Vec<RgbImage> = order[i..end].iter().map(|&j| im[j].clone()).collect();
+                    let batch: Vec<&RgbImage> = order[i..end].iter().map(|&j| im[j]).collect();
                     self.ask(Request::Images(&batch))?
                 }
                 _ => unreachable!(),
@@ -372,7 +372,7 @@ impl Embedder {
         self.embed_items(Some(texts), None, "")
     }
 
-    pub fn images(&self, images: &[RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError> {
+    pub fn images(&self, images: &[&RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError> {
         self.embed_items(None, Some(images), "")
     }
 
@@ -404,7 +404,7 @@ pub trait Model: Send + Sync {
     /// < 1 shrinks batches when video memory is tight.
     fn set_batch_scale(&self, scale: f64);
     fn documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError>;
-    fn images(&self, images: &[RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError>;
+    fn images(&self, images: &[&RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError>;
 }
 
 impl Model for Embedder {
@@ -447,7 +447,7 @@ impl Model for Embedder {
     fn documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
         Embedder::documents(self, texts)
     }
-    fn images(&self, images: &[RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError> {
+    fn images(&self, images: &[&RgbImage]) -> Result<Vec<Vec<f32>>, EmbedError> {
         Embedder::images(self, images)
     }
 }

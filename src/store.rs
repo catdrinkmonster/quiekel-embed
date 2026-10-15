@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS files (
     indexed_at REAL NOT NULL,
     muted INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS files_folder ON files(folder_id);
+-- A folder's files, by status (its unreadable or skipped ones without visiting the rest).
+DROP INDEX IF EXISTS files_folder;
+CREATE INDEX IF NOT EXISTS files_folder_status ON files(folder_id, status);
 -- Archives and emails as last looked into: unchanged ones aren't opened again.
 CREATE TABLE IF NOT EXISTS containers (
     path TEXT PRIMARY KEY COLLATE NOCASE,
@@ -75,6 +77,7 @@ CREATE INDEX IF NOT EXISTS vectors_folder ON vectors(folder_id);
 ";
 
 pub const FTS_SHIFT: i64 = 10; // up to 1024 chunks per file in the keyword index
+pub const REMOVE_STEP: usize = 500; // files taken out of the index in one transaction
 const CHUNK_MASK: i64 = (1 << FTS_SHIFT) - 1;
 
 pub fn kind_code(kind: &str) -> i8 {
@@ -99,6 +102,14 @@ fn fts_range(file_id: i64) -> (i64, i64) {
 /// 'C:\x' -> 'C:\x\', for matching the paths of everything inside a folder.
 fn dir_prefix(path: &str) -> String {
     format!("{}\\", path.trim_end_matches(['\\', '/']))
+}
+
+/// The paths inside a folder, as a range the paths' index can look up (case-insensitive, as the
+/// column): from 'C:\x\' up to 'C:\x]' (']' comes right after '\').
+fn inside(path: &str) -> (String, String) {
+    let lo = dir_prefix(path);
+    let hi = format!("{}]", &lo[..lo.len() - 1]);
+    (lo, hi)
 }
 
 /// Windows' case-insensitive paths, as Python's os.path.normcase.
@@ -390,15 +401,33 @@ impl Vectors {
 // ---- the store -----------------------------------------------------------------------------------
 
 pub struct Store {
-    db: Mutex<Connection>,
+    db: Mutex<Connection>, // writes, and the indexer's own reads
+    // The page's reads (searches, folders, details): in WAL mode they don't wait for a write
+    // under way, nor a write for them.
+    reader: Mutex<Connection>,
     dir: std::path::PathBuf, // the folder the index is in (the map's file goes next to it)
     pub vectors: RwLock<Vectors>,
     version: AtomicU64,
-    folders_cache: Mutex<Option<(u64, Vec<Folder>)>>,
+    structure: AtomicU64, // goes up when folders are added, removed or changed (not just their files)
+    folders_cache: Mutex<Option<FoldersCache>>,
     keep_vectors: AtomicBool,
     too_many: AtomicBool, // more passages than fit in memory: search them on disk
     loading: Mutex<()>,
+    // Folders being removed: gone for the page already, their files go in steps (see
+    // remove_folder_step). Kept in the meta table too, so a restart goes on with them.
+    removing: Mutex<HashSet<i64>>,
 }
+
+/// The folders as last counted.
+struct FoldersCache {
+    version: u64,
+    structure: u64,
+    at: Instant,
+    folders: Vec<Folder>,
+}
+
+// While only files change (indexing), the folders' counts are this old at most.
+const FOLDERS_FRESH: std::time::Duration = if cfg!(test) { std::time::Duration::ZERO } else { std::time::Duration::from_secs(2) };
 
 fn ids_sql(ids: &[i64]) -> String {
     ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
@@ -414,28 +443,43 @@ impl Store {
             std::fs::create_dir_all(dir)?;
         }
         let db = Connection::open(path)?;
+        db.busy_timeout(std::time::Duration::from_secs(30))?;
         db.pragma_update(None, "journal_mode", "WAL")?;
         // In WAL mode this is still crash-safe; a power cut may only undo the last saves, which
         // are then indexed again.
         db.pragma_update(None, "synchronous", "NORMAL")?;
         db.pragma_update(None, "foreign_keys", "ON")?;
         db.execute_batch(SCHEMA)?;
+        let reader = Connection::open(path)?;
+        reader.busy_timeout(std::time::Duration::from_secs(30))?;
+        reader.pragma_update(None, "query_only", "ON")?;
         let store = Store {
             db: Mutex::new(db),
+            reader: Mutex::new(reader),
             dir: path.parent().map(std::path::Path::to_path_buf).unwrap_or_default(),
             vectors: RwLock::new(Vectors::default()),
             version: AtomicU64::new(0),
+            structure: AtomicU64::new(0),
             folders_cache: Mutex::new(None),
             keep_vectors: AtomicBool::new(true),
             too_many: AtomicBool::new(false),
             loading: Mutex::new(()),
+            removing: Mutex::new(HashSet::new()),
         };
         store.check_index_format()?;
+        let removing: Vec<i64> = store.meta_get("removing").and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+        store.removing.lock().extend(removing);
         Ok(store)
     }
 
     fn changed(&self) {
         self.version.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The folders themselves changed (added, removed, watched, scanned): the page sees it at once.
+    fn restructured(&self) {
+        self.structure.fetch_add(1, Ordering::SeqCst);
+        self.changed();
     }
 
     /// Where the map of the files is kept.
@@ -501,9 +545,10 @@ impl Store {
         let (mut ids, mut chunks, mut kinds, mut folders) =
             (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
         let mut vecs = Vec::with_capacity(n * EMBED_DIM);
+        let removing = json!(self.removing()).to_string(); // (those folders' vectors are on their way out)
         let read = (|| -> rusqlite::Result<()> {
-            let mut st = db.prepare("SELECT id, folder_id, kind, vector FROM vectors")?;
-            let mut rows = st.query([])?;
+            let mut st = db.prepare("SELECT id, folder_id, kind, vector FROM vectors WHERE folder_id NOT IN (SELECT value FROM json_each(?))")?;
+            let mut rows = st.query([removing])?;
             while let Some(r) = rows.next()? {
                 let id: i64 = r.get(0)?;
                 ids.push(id >> FTS_SHIFT);
@@ -539,7 +584,10 @@ impl Store {
 
     pub fn meta_get(&self, key: &str) -> Option<String> {
         let db = self.db.lock();
-        db.query_row("SELECT value FROM meta WHERE key = ?", [key], |r| r.get(0)).optional().ok().flatten()
+        db.prepare_cached("SELECT value FROM meta WHERE key = ?")
+            .and_then(|mut st| st.query_row([key], |r| r.get(0)).optional())
+            .ok()
+            .flatten()
     }
 
     pub fn meta_set(&self, key: &str, value: &str) {
@@ -553,13 +601,13 @@ impl Store {
     // ---- folders ------------------------------------------------------------------------------
 
     pub fn folders(&self) -> Vec<Folder> {
-        let version = self.version();
-        if let Some((v, f)) = self.folders_cache.lock().as_ref() {
-            if *v == version {
-                return f.clone();
+        let (version, structure) = (self.version(), self.structure.load(Ordering::SeqCst));
+        if let Some(c) = self.folders_cache.lock().as_ref() {
+            if c.version == version || (c.structure == structure && c.at.elapsed() < FOLDERS_FRESH) {
+                return c.folders.clone();
             }
         }
-        let db = self.db.lock();
+        let db = self.reader.lock();
         let result = (|| -> rusqlite::Result<Vec<Folder>> {
             let mut st = db.prepare(
                 "SELECT f.id, f.path, f.watch, f.added_at, f.last_scan_at, f.report,
@@ -601,12 +649,18 @@ impl Store {
             rows.collect()
         })()
         .unwrap_or_default();
-        *self.folders_cache.lock() = Some((version, result.clone()));
+        drop(db);
+        let removing = self.removing.lock().clone();
+        let result: Vec<Folder> = result.into_iter().filter(|f| !removing.contains(&f.id)).collect();
+        *self.folders_cache.lock() = Some(FoldersCache { version, structure, at: Instant::now(), folders: result.clone() });
         result
     }
 
     pub fn folder(&self, folder_id: i64) -> Option<FolderRow> {
-        let db = self.db.lock();
+        if self.removing.lock().contains(&folder_id) {
+            return None;
+        }
+        let db = self.reader.lock();
         db.query_row("SELECT id, path, watch FROM folders WHERE id = ?", [folder_id], |r| {
             Ok(FolderRow { path: r.get(1)? })
         })
@@ -616,31 +670,89 @@ impl Store {
     }
 
     pub fn add_folder(&self, path: &str) -> Result<i64> {
+        // A folder on its way out where this one goes (the same, inside it, or around it): its
+        // files go first.
+        let removing: Vec<i64> = self.removing.lock().iter().copied().collect();
+        for id in removing {
+            let old: Option<String> = self.db.lock().query_row("SELECT path FROM folders WHERE id = ?", [id], |r| r.get(0)).optional()?;
+            if old.is_some_and(|old| crate::indexer::is_inside(path, &old) || crate::indexer::is_inside(&old, path)) {
+                while !self.remove_folder_step(id, REMOVE_STEP)? {}
+            }
+        }
         let db = self.db.lock();
         db.execute("INSERT INTO folders (path, added_at) VALUES (?, ?)", params![path, now()])?;
         let id = db.last_insert_rowid();
         drop(db);
-        self.changed();
+        self.restructured();
         Ok(id)
     }
 
+    /// Remove a folder, all at once.
+    #[cfg(test)]
     pub fn remove_folder(&self, folder_id: i64) -> Result<()> {
+        self.begin_removing(folder_id);
+        while !self.remove_folder_step(folder_id, REMOVE_STEP)? {}
+        Ok(())
+    }
+
+    /// A folder is to go: for the page it's gone at once (from the folders, the searches and the
+    /// map); remove_folder_step() then takes its files out of the index.
+    pub fn begin_removing(&self, folder_id: i64) {
+        let ids: Vec<i64> = {
+            let mut r = self.removing.lock();
+            r.insert(folder_id);
+            r.iter().copied().collect()
+        };
+        self.meta_set("removing", &json!(ids).to_string());
+        self.vectors.write().drop_rows(&|_, folder| folder == folder_id);
+        self.restructured();
+    }
+
+    /// Folders on their way out.
+    pub fn removing(&self) -> Vec<i64> {
+        self.removing.lock().iter().copied().collect()
+    }
+
+    /// Takes up to `n` of a removed folder's files out of the index, with their keyword entries
+    /// and vectors; true once none are left, and the folder itself is gone too.
+    pub fn remove_folder_step(&self, folder_id: i64, n: usize) -> Result<bool> {
         let mut db = self.db.lock();
         let tx = db.transaction()?;
-        let ids: Vec<i64> = {
-            let mut st = tx.prepare("SELECT id FROM files WHERE folder_id = ?")?;
-            st.query_map([folder_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
-        };
-        Self::delete_fts(&tx, &ids)?;
-        tx.execute("DELETE FROM vectors WHERE folder_id = ?", [folder_id])?;
-        tx.execute("DELETE FROM files WHERE folder_id = ?", [folder_id])?;
+        let ids: Vec<i64> = tx
+            .prepare_cached("SELECT id FROM files WHERE folder_id = ? LIMIT ?")?
+            .query_map(params![folder_id, n as i64], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !ids.is_empty() {
+            Self::forget(&tx, &ids)?;
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute("DELETE FROM vectors WHERE folder_id = ?", [folder_id])?; // (any left)
         tx.execute("DELETE FROM containers WHERE folder_id = ?", [folder_id])?;
         tx.execute("DELETE FROM folders WHERE id = ?", [folder_id])?;
-        self.vectors.write().drop_rows(&|_, folder| folder == folder_id);
         tx.commit()?;
-        self.too_many.store(false, Ordering::SeqCst);
         drop(db);
-        self.changed();
+        let ids: Vec<i64> = {
+            let mut r = self.removing.lock();
+            r.remove(&folder_id);
+            r.iter().copied().collect()
+        };
+        self.meta_set("removing", &json!(ids).to_string());
+        self.vectors.write().drop_rows(&|_, folder| folder == folder_id); // (a group saved meanwhile)
+        self.too_many.store(false, Ordering::SeqCst); // (maybe they fit in memory now)
+        self.restructured();
+        Ok(true)
+    }
+
+    /// Files, their keyword entries and their vectors, out of the index (in a transaction).
+    fn forget(tx: &Connection, ids: &[i64]) -> rusqlite::Result<()> {
+        Self::delete_fts(tx, ids)?;
+        let mut vectors = tx.prepare_cached("DELETE FROM vectors WHERE id BETWEEN ? AND ?")?;
+        for &id in ids {
+            let (lo, hi) = fts_range(id);
+            vectors.execute([lo, hi])?;
+        }
+        tx.execute(&format!("DELETE FROM files WHERE id IN ({})", ids_sql(ids)), [])?;
         Ok(())
     }
 
@@ -648,7 +760,7 @@ impl Store {
         let db = self.db.lock();
         let _ = db.execute("UPDATE folders SET watch = ? WHERE id = ?", params![watch as i64, folder_id]);
         drop(db);
-        self.changed();
+        self.restructured();
     }
 
     /// A scan finished; `report`: why files were left out.
@@ -660,7 +772,7 @@ impl Store {
             params![now(), report, folder_id],
         );
         drop(db);
-        self.changed();
+        self.restructured();
     }
 
     /// The archives and emails in a folder as last looked into, by normcase'd path.
@@ -708,7 +820,7 @@ impl Store {
     /// Why a folder's files aren't searched: what its last scan left out, and the files that were
     /// skipped, by reason (a few of each).
     pub fn details(&self, folder_id: i64, examples: i64) -> Value {
-        let db = self.db.lock();
+        let db = self.reader.lock();
         let report: Value = db
             .query_row("SELECT report FROM folders WHERE id = ?", [folder_id], |r| r.get::<_, Option<String>>(0))
             .optional()
@@ -746,18 +858,18 @@ impl Store {
     // ---- files -------------------------------------------------------------------------------------
 
     pub fn file(&self, file_id: i64) -> Option<FileRecord> {
-        let db = self.db.lock();
-        db.query_row(&format!("SELECT {FILE_COLUMNS} FROM files WHERE id = ?"), [file_id], FileRecord::from_row)
-            .optional()
+        let db = self.reader.lock();
+        db.prepare_cached(&format!("SELECT {FILE_COLUMNS} FROM files WHERE id = ?"))
+            .and_then(|mut st| st.query_row([file_id], FileRecord::from_row).optional())
             .ok()
             .flatten()
     }
 
     /// The start of a file's text, as shown in search results ("" for pictures).
     pub fn first_passage(&self, file_id: i64) -> String {
-        let db = self.db.lock();
-        db.query_row("SELECT text FROM chunks_fts WHERE rowid = ?", [file_id << FTS_SHIFT], |r| r.get(0))
-            .optional()
+        let db = self.reader.lock();
+        db.prepare_cached("SELECT text FROM chunks_fts WHERE rowid = ?")
+            .and_then(|mut st| st.query_row([file_id << FTS_SHIFT], |r| r.get(0)).optional())
             .ok()
             .flatten()
             .unwrap_or_default()
@@ -768,7 +880,7 @@ impl Store {
         if ids.is_empty() {
             return out;
         }
-        let db = self.db.lock();
+        let db = self.reader.lock();
         for part in ids.chunks(500) {
             let sql = format!("SELECT {FILE_COLUMNS} FROM files WHERE id IN ({})", ids_sql(part));
             if let Ok(mut st) = db.prepare(&sql) {
@@ -779,21 +891,36 @@ impl Store {
                 }
             }
         }
+        drop(db);
+        let removing = self.removing.lock();
+        if !removing.is_empty() {
+            out.retain(|_, f| !removing.contains(&f.folder_id)); // (on their way out)
+        }
         out
     }
 
     /// Every file with vectors, by id: (id, mtime, size).
     pub fn map_files(&self) -> Vec<(i64, f64, f64)> {
-        let db = self.db.lock();
-        db.prepare("SELECT id, mtime, size FROM files WHERE status = 'indexed' AND chunks > 0 ORDER BY id")
-            .and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? as f64)))?.collect())
-            .unwrap_or_default()
+        let removing = json!(self.removing()).to_string();
+        let db = self.reader.lock();
+        db.prepare(
+            "SELECT id, mtime, size FROM files WHERE status = 'indexed' AND chunks > 0
+             AND folder_id NOT IN (SELECT value FROM json_each(?)) ORDER BY id",
+        )
+        .and_then(|mut st| st.query_map([removing], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? as f64)))?.collect())
+        .unwrap_or_default()
     }
 
     pub fn map_file_count(&self) -> i64 {
-        let db = self.db.lock();
-        db.query_row("SELECT COUNT(*) FROM files WHERE status = 'indexed' AND chunks > 0", [], |r| r.get(0))
-            .unwrap_or(0)
+        let removing = json!(self.removing()).to_string();
+        let db = self.reader.lock();
+        db.query_row(
+            "SELECT COUNT(*) FROM files WHERE status = 'indexed' AND chunks > 0
+             AND folder_id NOT IN (SELECT value FROM json_each(?))",
+            [removing],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
     }
 
     /// path -> (id, size, mtime, status) for every known file in a folder.
@@ -804,6 +931,15 @@ impl Store {
                 st.query_map([folder_id], |r| Ok((r.get::<_, String>(1)?, (r.get(0)?, r.get(2)?, r.get(3)?, r.get(4)?))))?
                     .collect()
             })
+            .unwrap_or_default()
+    }
+
+    /// (id, path) of the known files inside a folder, or inside an archive or an email.
+    pub fn files_inside(&self, path: &str) -> Vec<(i64, String)> {
+        let (lo, hi) = inside(path);
+        let db = self.db.lock();
+        db.prepare_cached("SELECT id, path FROM files WHERE path >= ? AND path < ?")
+            .and_then(|mut st| st.query_map(params![lo, hi], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
             .unwrap_or_default()
     }
 
@@ -841,17 +977,15 @@ impl Store {
     /// (id, size, mtime, status) of a known file.
     pub fn signature(&self, path: &str) -> Option<(i64, i64, f64, String)> {
         let db = self.db.lock();
-        db.query_row("SELECT id, size, mtime, status FROM files WHERE path = ?", [path], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })
-        .optional()
-        .ok()
-        .flatten()
+        db.prepare_cached("SELECT id, size, mtime, status FROM files WHERE path = ?")
+            .and_then(|mut st| st.query_row([path], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional())
+            .ok()
+            .flatten()
     }
 
     /// A folder's unreadable files, newest first; "seen": its warning was looked at.
     pub fn errors(&self, folder_id: i64, limit: i64) -> Vec<Value> {
-        let db = self.db.lock();
+        let db = self.reader.lock();
         db.prepare(
             "SELECT id, path, error, muted FROM files WHERE folder_id = ? AND status = 'error'
              ORDER BY muted, indexed_at DESC LIMIT ?",
@@ -873,7 +1007,7 @@ impl Store {
         let db = self.db.lock();
         let _ = db.execute("UPDATE files SET muted = 1 WHERE folder_id = ? AND status = 'error' AND muted = 0", [folder_id]);
         drop(db);
-        self.changed();
+        self.restructured();
     }
 
     /// Replace the vectors and keyword entries of the given files and upsert their records.
@@ -882,10 +1016,11 @@ impl Store {
         let mut db = self.db.lock();
         let tx = db.transaction()?;
         // The folder may have been removed while this group was being embedded.
-        let live: HashSet<i64> = {
+        let mut live: HashSet<i64> = {
             let mut st = tx.prepare("SELECT id FROM folders")?;
             st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
         };
+        live.retain(|f| !self.removing.lock().contains(f)); // (or is on its way out)
         let entries: Vec<&Entry> = entries.iter().filter(|e| live.contains(&e.folder_id)).collect();
         let vector_rows: Vec<&VectorRow> = vector_rows.iter().filter(|r| live.contains(&r.folder_id)).collect();
         // Only files that had vectors need them deleted.
@@ -969,18 +1104,14 @@ impl Store {
         let mut ids = Vec::new();
         {
             let db = self.db.lock();
+            let mut find = db.prepare_cached("SELECT id FROM files WHERE path = ? OR (path >= ? AND path < ?)")?;
+            let mut forget = db.prepare_cached("DELETE FROM containers WHERE path = ? OR (path >= ? AND path < ?)")?;
             for p in paths {
-                let prefix = dir_prefix(p);
-                let mut st =
-                    db.prepare("SELECT id FROM files WHERE path = ? OR substr(path, 1, ?) = ? COLLATE NOCASE")?;
-                let found = st.query_map(params![p, prefix.chars().count() as i64, prefix], |r| r.get::<_, i64>(0))?;
-                for id in found {
+                let (lo, hi) = inside(p);
+                for id in find.query_map(params![p, lo, hi], |r| r.get::<_, i64>(0))? {
                     ids.push(id?);
                 }
-                db.execute(
-                    "DELETE FROM containers WHERE path = ? OR substr(path, 1, ?) = ? COLLATE NOCASE",
-                    params![p, prefix.chars().count() as i64, prefix],
-                )?;
+                forget.execute(params![p, lo, hi])?;
             }
         }
         if !ids.is_empty() {
@@ -989,21 +1120,17 @@ impl Store {
         Ok(())
     }
 
+    /// Forget files: in steps of REMOVE_STEP, each its own transaction, so a big one doesn't hold
+    /// up the other writes (a file left over by a crash is forgotten again by the next scan).
     pub fn remove_file_ids(&self, ids: &[i64]) -> Result<()> {
-        let mut db = self.db.lock();
-        let tx = db.transaction()?;
-        for part in ids.chunks(500) {
-            Self::delete_fts(&tx, part)?;
-            for &id in part {
-                let (lo, hi) = fts_range(id);
-                tx.execute("DELETE FROM vectors WHERE id BETWEEN ? AND ?", [lo, hi])?;
-            }
-            tx.execute(&format!("DELETE FROM files WHERE id IN ({})", ids_sql(part)), [])?;
-        }
         let gone: HashSet<i64> = ids.iter().copied().collect();
         self.vectors.write().drop_rows(&|f, _| gone.contains(&f));
-        tx.commit()?;
-        drop(db);
+        for part in ids.chunks(REMOVE_STEP) {
+            let mut db = self.db.lock();
+            let tx = db.transaction()?;
+            Self::forget(&tx, part)?;
+            tx.commit()?;
+        }
         self.changed();
         self.too_many.store(false, Ordering::SeqCst); // (maybe they fit in memory now)
         Ok(())
@@ -1051,7 +1178,7 @@ impl Store {
     }
 
     fn search_on_disk(&self, q: &[f32], limit: usize, filter: &Filter) -> Vec<(i64, i32, i8, f32)> {
-        let db = self.db.lock();
+        let db = self.reader.lock();
         let mut found: Vec<(f32, i64, i8)> = Vec::new();
         let mut vec = Vec::with_capacity(EMBED_DIM);
         let scan = (|| -> rusqlite::Result<()> {
@@ -1085,7 +1212,7 @@ impl Store {
     /// Passage texts by keyword-index row id (file_id << 10 | chunk).
     fn passages(&self, keys: &[i64]) -> HashMap<i64, String> {
         let mut out = HashMap::new();
-        let db = self.db.lock();
+        let db = self.reader.lock();
         for part in keys.chunks(500) {
             let sql = format!("SELECT rowid, text FROM chunks_fts WHERE rowid IN ({})", ids_sql(part));
             if let Ok(mut st) = db.prepare(&sql) {
@@ -1110,10 +1237,10 @@ impl Store {
             values.push(f.into());
         }
         if let Some(u) = under.filter(|u| !u.is_empty()) {
-            let prefix = dir_prefix(u);
-            wheres.push("substr(f.path, 1, ?) = ? COLLATE NOCASE".into());
-            values.push((prefix.chars().count() as i64).into());
-            values.push(prefix.into());
+            let (lo, hi) = inside(u);
+            wheres.push("f.path >= ? AND f.path < ?".into());
+            values.push(lo.into());
+            values.push(hi.into());
         }
         // Rank first, then read the texts of just the best.
         let join = if wheres.len() > 1 { format!("JOIN files f ON f.id = (chunks_fts.rowid >> {FTS_SHIFT})") } else { String::new() };
@@ -1123,7 +1250,7 @@ impl Store {
             wheres.join(" AND ")
         );
         values.push((limit as i64).into());
-        let db = self.db.lock();
+        let db = self.reader.lock();
         let ranked: Vec<i64> = match db.prepare(&sql).and_then(|mut st| {
             st.query_map(params_from_iter(values.iter()), |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<Vec<i64>>>()
         }) {
@@ -1158,7 +1285,7 @@ impl Store {
             return self.vectors.read().rows_of(Some(&set));
         }
         let (mut ids, mut vecs) = (Vec::new(), Vec::new());
-        let db = self.db.lock();
+        let db = self.reader.lock();
         if let Ok(mut st) = db.prepare("SELECT id, vector FROM vectors WHERE id BETWEEN ? AND ?") {
             for &f in file_ids {
                 let (lo, hi) = fts_range(f);
@@ -1181,33 +1308,31 @@ impl Store {
 
     /// Indexed files anywhere inside a folder.
     pub fn file_ids_under(&self, path: &str) -> Vec<i64> {
-        let prefix = dir_prefix(path);
-        let db = self.db.lock();
-        db.prepare("SELECT id FROM files WHERE status = 'indexed' AND substr(path, 1, ?) = ? COLLATE NOCASE")
-            .and_then(|mut st| st.query_map(params![prefix.chars().count() as i64, prefix], |r| r.get(0))?.collect())
+        let (lo, hi) = inside(path);
+        let db = self.reader.lock();
+        db.prepare_cached("SELECT id FROM files WHERE status = 'indexed' AND path >= ? AND path < ?")
+            .and_then(|mut st| st.query_map(params![lo, hi], |r| r.get(0))?.collect())
             .unwrap_or_default()
     }
 
     /// The folders directly inside `path` that hold searchable files, with how many.
     pub fn subdirs(&self, path: &str) -> Vec<Value> {
-        let prefix = dir_prefix(path);
-        let n = prefix.chars().count();
-        let db = self.db.lock();
+        let (prefix, hi) = inside(path);
+        let db = self.reader.lock();
         let rows: Vec<String> = db
-            .prepare(
-                "SELECT path FROM files WHERE status IN ('indexed', 'pending') AND substr(path, 1, ?) = ? COLLATE NOCASE",
-            )
-            .and_then(|mut st| st.query_map(params![n as i64, prefix], |r| r.get(0))?.collect())
+            .prepare_cached("SELECT path FROM files WHERE status IN ('indexed', 'pending') AND path >= ? AND path < ?")
+            .and_then(|mut st| st.query_map(params![prefix, hi], |r| r.get(0))?.collect())
             .unwrap_or_default();
-        let mut counts: HashMap<String, i64> = HashMap::new();
-        for p in rows {
-            let rest: String = p.chars().skip(n).collect();
-            if let Some((name, _)) = rest.split_once('\\') {
-                *counts.entry(name.to_string()).or_insert(0) += 1;
+        drop(db);
+        let mut counts: HashMap<&str, i64> = HashMap::new();
+        for p in &rows {
+            // (a path found starts with the prefix but for ASCII case, which keeps its length)
+            if let Some((name, _)) = p.get(prefix.len()..).and_then(|rest| rest.split_once('\\')) {
+                *counts.entry(name).or_insert(0) += 1;
             }
         }
-        let mut list: Vec<(String, i64)> = counts.into_iter().collect();
-        list.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        let mut list: Vec<(&str, i64)> = counts.into_iter().collect();
+        list.sort_by_cached_key(|(name, _)| name.to_lowercase());
         list.into_iter().map(|(name, count)| json!({"path": format!("{prefix}{name}"), "name": name, "count": count})).collect()
     }
 
@@ -1226,8 +1351,6 @@ impl Store {
         }
         best
     }
-
-    /// (file_ids, vectors) of every chunk in the index.
 
     #[cfg(test)]
     pub fn vector_count(&self) -> i64 {
@@ -1579,6 +1702,72 @@ mod tests {
         unreadable(r"C:\a\y.jpg"); // broken again later: that's news, so it warns
         assert_eq!(unseen(), BTreeSet::from([r"C:\a\y.jpg".to_string(), r"C:\a\z.jpg".to_string()]));
         assert_eq!(s.folders()[0].errors, 2);
+        drop(s);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn whats_inside_a_folder_whatever_the_case_and_not_its_neighbours() {
+        let (s, dir) = store();
+        let fid = s.add_folder(r"C:\").unwrap();
+        for p in [r"C:\Docs\a.txt", r"C:\docs\Sub\b.txt", r"C:\DOCS\Sub\c.txt", r"C:\Docs2\d.txt", r"C:\Docs]\e.txt", r"C:\Docs\f.zip\in\g.txt"] {
+            save(&s, fid, p, "text", &["words"], "x");
+        }
+        let names = |ids: Vec<i64>| -> BTreeSet<String> {
+            s.files_by_ids(&ids).into_values().map(|f| f.path.rsplit('\\').next().unwrap().to_string()).collect()
+        };
+        let set = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>();
+        assert_eq!(names(s.file_ids_under(r"c:\docs")), set(&["a.txt", "b.txt", "c.txt", "g.txt"]));
+        assert_eq!(names(s.file_ids_under(r"C:\Docs\")), set(&["a.txt", "b.txt", "c.txt", "g.txt"]));
+        let dirs: Vec<(String, i64)> = s.subdirs(r"C:\Docs").iter().map(|d| (d["name"].as_str().unwrap().to_string(), d["count"].as_i64().unwrap())).collect();
+        assert_eq!(dirs, [("f.zip".to_string(), 1), ("Sub".to_string(), 2)]);
+        assert_eq!(s.keyword_search("\"words\"", 10, &[], None, Some(r"C:\DOCS")).len(), 4);
+        assert_eq!(s.files_inside(r"C:\Docs\f.zip").len(), 1);
+        s.remove_paths(&[r"C:\docs\sub".into()]).unwrap(); // a folder deleted: what was in it goes
+        assert_eq!(names(s.file_ids_under(r"C:\")), set(&["a.txt", "d.txt", "e.txt", "g.txt"]));
+        drop(s);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_removed_folder_is_gone_at_once_and_its_files_follow_in_steps_also_after_a_restart() {
+        let (s, dir) = store();
+        let (fa, fb) = (s.add_folder(r"C:\a").unwrap(), s.add_folder(r"C:\b").unwrap());
+        let mut rng = Rng(5);
+        for i in 0..5 {
+            save_vectors(&s, fa, &format!(r"C:\a\f{i}.x"), "text", vec![rng.unit(), rng.unit()]);
+        }
+        save_vectors(&s, fb, r"C:\b\g.x", "text", vec![rng.unit()]);
+        s.keep_vectors.store(true, Ordering::SeqCst);
+        s.load_vectors();
+        let target = rng.unit();
+        assert_eq!(s.search(&target, 20, &[], None, None).len(), 11);
+        let a_ids: Vec<i64> = (0..5).map(|i| s.signature(&format!(r"C:\a\f{i}.x")).unwrap().0).collect();
+        s.begin_removing(fa);
+        // Gone for the page: the folder, its files in searches and on the map.
+        assert!(s.folders().iter().all(|f| f.id != fa) && s.folder(fa).is_none() && s.folder(fb).is_some());
+        assert!(s.search(&target, 20, &[], None, None).iter().all(|h| !a_ids.contains(&h.file_id)));
+        assert!(s.files_by_ids(&a_ids).is_empty());
+        assert_eq!(s.map_file_count(), 1);
+        assert_eq!(s.map_files().len(), 1);
+        // A step, then a restart: it goes on where it stopped.
+        assert!(!s.remove_folder_step(fa, 2).unwrap());
+        drop(s);
+        let s = Store::open_at(&dir.join("state.db")).unwrap();
+        assert_eq!(s.removing(), vec![fa]);
+        assert!(s.folders().iter().all(|f| f.id != fa));
+        s.keep_vectors.store(true, Ordering::SeqCst);
+        s.load_vectors(); // (not the vectors of a folder on its way out)
+        assert_eq!(s.vectors.read().rows, 1);
+        while !s.remove_folder_step(fa, 2).unwrap() {}
+        assert!(s.removing().is_empty() && a_ids.iter().all(|&id| s.file(id).is_none()));
+        assert_eq!(s.vector_count(), 1);
+        assert_eq!(s.keyword_search("\"f0\"", 10, &[], None, None).len(), 0);
+        // Its place can be taken again (here while another removal is under way there).
+        let again = s.add_folder(r"C:\a").unwrap();
+        s.begin_removing(again);
+        assert!(s.add_folder(r"C:\a\inner").is_ok());
+        assert!(s.removing().is_empty());
         drop(s);
         let _ = std::fs::remove_dir_all(dir);
     }
