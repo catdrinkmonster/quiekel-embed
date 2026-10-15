@@ -588,6 +588,7 @@ pub fn main(hidden: bool) -> Result<()> {
         .with_html(page("", "", dark.load(Ordering::SeqCst)))
         .with_background_color((r, g, b, 255))
         .with_incognito(true)
+        .with_visible(!hidden)
         .build(&window)?;
     let tray = make_tray(proxy.clone());
 
@@ -666,14 +667,26 @@ pub fn main(hidden: bool) -> Result<()> {
     })?;
 
     let mut styled = Some(dark.load(Ordering::SeqCst));
+    // The page knows when nobody can see it (in the tray, minimized): it then barely polls, and
+    // WebView2 stops drawing it.
+    let mut page_shown = !hidden;
+    let mut show_page = move |webview: &wry::WebView, window: &tao::window::Window| {
+        let shown = window.is_visible() && !window.is_minimized();
+        if shown != page_shown {
+            let _ = webview.set_visible(shown);
+            page_shown = shown;
+        }
+    };
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 window.set_visible(false); // keep running in the tray
+                show_page(&webview, &window);
                 hidden_since.store(now_s(), Ordering::SeqCst);
                 tray.hint_once();
             }
+            Event::WindowEvent { event: WindowEvent::Resized(_), .. } => show_page(&webview, &window), // (minimized or back)
             Event::UserEvent(e) => match e {
                 UserEvent::Progress(share) => {
                     let _ = webview.evaluate_script(&format!("progress({share:.2})"));
@@ -690,6 +703,7 @@ pub fn main(hidden: bool) -> Result<()> {
                     if window.is_minimized() {
                         window.set_minimized(false);
                     }
+                    show_page(&webview, &window);
                     window.set_focus();
                 }
                 UserEvent::SetDark(on) => {
