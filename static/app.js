@@ -677,7 +677,7 @@ function renderFolders(folders, progress, phase) {
   const list = $("folders");
   list.replaceChildren();
   if (!folders.length) {
-    list.append(h("div", { class: "empty compact" }, h("img", { class: "logo", src: "/static/pig.svg", alt: "" }), waitingText()));
+    list.append(h("div", { class: "empty compact" }, h("img", { class: "logo", src: "/static/quiekel.svg", alt: "" }), waitingText()));
   }
   for (const f of folders) {
     const here = active === f.path;
@@ -1412,8 +1412,8 @@ function updateNotice() {
   setTip(notice, `${t("search.still_indexing")}\n${progress}${t("search.by_name_only")}`);
 }
 
-function pigImage(tip, small = false) {
-  const img = h("img", { src: "/static/pig.svg", alt: "", class: small ? "logo small" : "logo" });
+function quiekelImage(tip, small = false) {
+  const img = h("img", { src: "/static/quiekel.svg", alt: "", class: small ? "logo small" : "logo" });
   if (tip) setTip(img, tip);
   return img;
 }
@@ -1430,15 +1430,15 @@ function waitingText() {
 function renderEmpty() {
   const empty = $("empty");
   empty.hidden = false;
-  if (state.hasFolders === false) return empty.replaceChildren(pigImage(), waitingText());
-  empty.replaceChildren(pigImage());
+  if (state.hasFolders === false) return empty.replaceChildren(quiekelImage(), waitingText());
+  empty.replaceChildren(quiekelImage());
 }
 
 function renderMessage(msg) {
   state.results = [];
   $("results").replaceChildren();
   $("empty").hidden = false;
-  $("empty").replaceChildren(pigImage(null, true), h("p", {}, msg));
+  $("empty").replaceChildren(quiekelImage(null, true), h("p", {}, msg));
 }
 
 // The likely results first (the server puts them on top); the rest behind a divider that says how

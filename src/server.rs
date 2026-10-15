@@ -53,8 +53,8 @@ const STATIC: [(&str, &[u8], &str); 8] = [
     ("i18n.json", include_bytes!("../static/i18n.json"), "application/json"),
     ("icon.png", include_bytes!("../static/icon.png"), "image/png"),
     ("index.html", include_bytes!("../static/index.html"), "text/html; charset=utf-8"),
-    ("pig-dark.svg", include_bytes!("../static/pig-dark.svg"), "image/svg+xml"),
-    ("pig.svg", include_bytes!("../static/pig.svg"), "image/svg+xml"),
+    ("quiekel-dark.svg", include_bytes!("../static/quiekel-dark.svg"), "image/svg+xml"),
+    ("quiekel.svg", include_bytes!("../static/quiekel.svg"), "image/svg+xml"),
     ("style.css", include_bytes!("../static/style.css"), "text/css; charset=utf-8"),
     ("theme.js", include_bytes!("../static/theme.js"), "text/javascript; charset=utf-8"),
 ];

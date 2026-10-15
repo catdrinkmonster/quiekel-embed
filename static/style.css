@@ -145,7 +145,7 @@ h3 { font-family: var(--display); color: var(--ink); margin: 0; letter-spacing: 
 ::selection { background: var(--mark); color: var(--ink); }
 [hidden] { display: none !important; }
 .i18n-pending body { visibility: hidden; } /* until the texts are translated */
-:root[data-theme="dark"] img.logo { content: url("/static/pig-dark.svg"); } /* white edge on dark paper */
+:root[data-theme="dark"] img.logo { content: url("/static/quiekel-dark.svg"); } /* white edge on dark paper */
 .mono { font-family: var(--mono); font-size: 12px; }
 
 ::-webkit-scrollbar { width: 12px; height: 12px; }

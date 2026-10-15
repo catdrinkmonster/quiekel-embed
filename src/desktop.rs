@@ -66,10 +66,10 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#x27;")
 }
 
-/// What the window shows until the app is there: the pig and a ring that fills up as the app
+/// What the window shows until the app is there: Quiekel and a ring that fills up as the app
 /// starts (red to green; progress() moves it), or what went wrong.
 fn page(message: &str, detail: &str, dark: bool) -> String {
-    let pig = b64(server::static_file(if dark { "pig-dark.svg" } else { "pig.svg" }).unwrap_or_default());
+    let quiekel = b64(server::static_file(if dark { "quiekel-dark.svg" } else { "quiekel.svg" }).unwrap_or_default());
     let (bg, fg, muted) = colors(dark);
     let (track, sat, light) = if dark { ("#2b2c30", 62, 56) } else { ("#d0d1c9", 72, 44) };
     let ring = r#"<svg class="ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="t" cx="10" cy="10" r="8"/><circle class="a" id="a" cx="10" cy="10" r="8" pathLength="100"/></svg>"#;
@@ -92,7 +92,7 @@ function progress(share) {{
   a.style.strokeDasharray = (share * 100).toFixed(1) + " 100";
   a.style.stroke = "hsl(" + Math.round(share * 120) + " {sat}% {light}%)";
 }}
-</script></head><body><div class="box"><img src="data:image/svg+xml;base64,{pig}" alt="">{body}</div></body></html>"#
+</script></head><body><div class="box"><img src="data:image/svg+xml;base64,{quiekel}" alt="">{body}</div></body></html>"#
     )
 }
 
