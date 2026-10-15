@@ -21,26 +21,19 @@ Get-ChildItem (Join-Path $root "vendor") -Recurse -Filter *.dll | Copy-Item -Des
 Copy-Item (Join-Path $root "vendor\licenses") $dist -Recurse
 Copy-Item (Join-Path $root "LICENSE") (Join-Path $dist "licenses\quiekel-embed.txt")
 
-# The crates compiled into the exe (its dependencies, not those of build scripts or tests) and the
-# license texts their packages carry: each text once, under the list of crates that carry it.
+# The crates compiled into the exe (cargo tree: the dependencies built for it, not those of build
+# scripts or tests) and the license texts their packages carry: each text once, under the list of
+# crates that carry it.
+$inExe = @{}
+foreach ($line in (cargo tree --locked -e normal --target x86_64-pc-windows-msvc --prefix none -f "{p}")) {
+    if ($line -match '^(\S+) v(\S+)') { $inExe["$($Matches[1]) $($Matches[2])"] = $true }
+}
+if ($LASTEXITCODE) { throw "cargo tree failed." }
 $meta = (cargo metadata --format-version 1 --locked --filter-platform x86_64-pc-windows-msvc | Out-String) | ConvertFrom-Json
 if ($LASTEXITCODE) { throw "cargo metadata failed." }
-$nodes = @{}
-foreach ($n in $meta.resolve.nodes) { $nodes[$n.id] = $n }
-$inExe = @{}
-$todo = [Collections.Generic.Queue[string]]::new()
-$todo.Enqueue($meta.resolve.root)
-while ($todo.Count) {
-    foreach ($d in $nodes[$todo.Dequeue()].deps) {
-        if (@($d.dep_kinds | Where-Object { $null -eq $_.kind }).Count -and -not $inExe.ContainsKey($d.pkg)) {
-            $inExe[$d.pkg] = $true
-            $todo.Enqueue($d.pkg)
-        }
-    }
-}
 $texts = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)  # (by the text without its spacing)
 $bare = @()
-foreach ($p in @($meta.packages | Where-Object { $inExe.ContainsKey($_.id) } | Sort-Object name, version)) {
+foreach ($p in @($meta.packages | Where-Object { $_.source -and $inExe.ContainsKey("$($_.name) $($_.version)") } | Sort-Object name, version)) {
     $crate = "$($p.name) $($p.version)"
     $dir = Split-Path -Parent $p.manifest_path
     $files = @(Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.Name -match '^(licen[cs]e|copying|notice|unlicense|copyright)' })
