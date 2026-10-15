@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS containers (
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     name, text, tokenize = 'unicode61 remove_diacritics 2'
 );
+-- How many passages hold each word (read from the keyword index itself; nothing is stored).
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vocab USING fts5vocab(chunks_fts, 'row');
 -- The passages' vectors (EMBED_DIM float32 each), id as in chunks_fts.
 CREATE TABLE IF NOT EXISTS vectors (
     id INTEGER PRIMARY KEY,
@@ -497,6 +499,7 @@ pub struct Store {
     version: AtomicU64,
     structure: AtomicU64, // goes up when folders are added, removed or changed (not just their files)
     folders_cache: Mutex<Option<FoldersCache>>,
+    passages_cache: Mutex<Option<(u64, i64)>>, // (version, passages in the keyword index)
     keep_vectors: AtomicBool,
     too_many: AtomicBool, // more passages than fit in memory: search them on disk
     loading: Mutex<()>,
@@ -548,6 +551,7 @@ impl Store {
             version: AtomicU64::new(0),
             structure: AtomicU64::new(0),
             folders_cache: Mutex::new(None),
+            passages_cache: Mutex::new(None),
             keep_vectors: AtomicBool::new(true),
             too_many: AtomicBool::new(false),
             loading: Mutex::new(()),
@@ -1309,6 +1313,43 @@ impl Store {
         out
     }
 
+    /// The terms more than half of the passages hold (the last one also as the start of longer
+    /// words, when `prefix`): in a keyword search their weight is next to nothing, and ranking all
+    /// their passages takes long.
+    pub fn common_terms(&self, terms: &[String], prefix: bool) -> HashSet<String> {
+        let version = self.version();
+        let db = self.reader.lock();
+        let cached = self.passages_cache.lock().filter(|c| c.0 == version).map(|c| c.1);
+        let total = match cached {
+            Some(n) => n,
+            None => {
+                let Ok(n) = db.prepare_cached("SELECT count(*) FROM chunks_fts_docsize").and_then(|mut st| st.query_row([], |r| r.get::<_, i64>(0))) else {
+                    return HashSet::new();
+                };
+                *self.passages_cache.lock() = Some((version, n));
+                n
+            }
+        };
+        let mut common = HashSet::new();
+        for (i, t) in terms.iter().enumerate() {
+            let held: rusqlite::Result<Option<i64>> = if prefix && i + 1 == terms.len() {
+                // (the most any one word with this start is held: with several, the union is more)
+                let next: String = match t.chars().last() {
+                    Some(c) => t[..t.len() - c.len_utf8()].to_string() + &char::from_u32(c as u32 + 1).unwrap_or(c).to_string(),
+                    None => continue,
+                };
+                db.prepare_cached("SELECT max(doc) FROM chunks_vocab WHERE term >= ? AND term < ?")
+                    .and_then(|mut st| st.query_row(params![t, next], |r| r.get(0)))
+            } else {
+                db.prepare_cached("SELECT doc FROM chunks_vocab WHERE term = ?").and_then(|mut st| st.query_row([t], |r| r.get(0)).optional())
+            };
+            if held.ok().flatten().is_some_and(|n| n * 2 > total) {
+                common.insert(t.clone());
+            }
+        }
+        common
+    }
+
     /// Full-text matches, best first. `fts` is an FTS5 query string.
     pub fn keyword_search(&self, fts: &str, limit: usize, kinds: &[&str], folder_id: Option<i64>, under: Option<&str>) -> Vec<KeywordHit> {
         let mut wheres = vec!["chunks_fts MATCH ?".to_string()];
@@ -1876,5 +1917,20 @@ mod tests {
         let mut all: Vec<(f32, usize)> = rows.iter().enumerate().map(|(i, r)| (dot(r, &q), i)).collect();
         all.sort_by(|x, y| y.0.total_cmp(&x.0));
         assert_eq!(best.into_sorted().iter().map(|x| x.2).collect::<Vec<_>>(), all[..10].iter().map(|x| x.1).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn words_most_passages_hold_are_common() {
+        let (s, dir) = store();
+        let fid = s.add_folder("C:/c").unwrap();
+        for i in 0..6 {
+            save(&s, fid, &format!("C:/c/n{i}.txt"), "text", &[if i == 0 { "rent and holiday" } else { "rent again" }], "n.txt");
+        }
+        let terms = |w: &[&str]| w.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(s.common_terms(&terms(&["rent", "holiday"]), false), HashSet::from(["rent".to_string()]));
+        assert_eq!(s.common_terms(&terms(&["holiday", "ren"]), true), HashSet::from(["ren".to_string()])); // (as the start of "rent")
+        assert!(s.common_terms(&terms(&["holi"]), true).is_empty());
+        drop(s);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -440,7 +440,7 @@ fn logic_check(path: &str) -> Result<()> {
             let q = q.as_str().unwrap_or("");
             let terms = search::query_terms(q);
             serde_json::json!({
-                "q": q, "terms": terms, "fts": search::fts_query(&terms), "identifier": search::looks_like_identifier(q),
+                "q": q, "terms": terms, "fts": search::fts_query(&terms, &Default::default()), "identifier": search::looks_like_identifier(q),
                 "normalized": search::normalize(q),
             })
         })

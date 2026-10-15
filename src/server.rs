@@ -21,7 +21,7 @@ use crate::filetypes::{self, Types};
 use crate::governor::Governor;
 use crate::i18n;
 use crate::indexer::{Indexer, is_inside};
-use crate::search::{fts_query, fuse, kinds, query_terms};
+use crate::search::{fts_query, fuse, kinds, query_terms, typing_prefix};
 use crate::store::{FileRecord, Settings, Store};
 use crate::updater::{REPO_URL, Updater};
 
@@ -525,7 +525,10 @@ impl Server {
             Some(v) => self.vector_hits(v, limit * 6, kind, folder, under),
             None => Vec::new(),
         };
-        let keyword_hits = match fts_query(&query_terms(&text)) {
+        // Words most passages hold can't rank anything: left out, unless keywords are all there is.
+        let terms = query_terms(&text);
+        let common = if query_vec.is_some() { self.b.store.common_terms(&terms, typing_prefix(&terms)) } else { Default::default() };
+        let keyword_hits = match fts_query(&terms, &common) {
             Some(m) => self.b.store.keyword_search(&m, limit * 4, kinds(kind), folder, under),
             None => Vec::new(),
         };

@@ -84,17 +84,24 @@ pub fn query_terms(query: &str) -> Vec<String> {
     chosen.into_iter().filter(|w| seen.insert(w.clone())).take(12).collect()
 }
 
-/// FTS5 query: any of the terms; the last one also as a prefix (search as you type), once it has
-/// TYPING_PREFIX_MIN letters.
-pub fn fts_query(terms: &[String]) -> Option<String> {
-    if terms.is_empty() {
-        return None;
-    }
-    let mut parts: Vec<String> = terms.iter().map(|t| format!("\"{t}\"")).collect();
-    if terms.last().is_some_and(|t| t.chars().count() >= TYPING_PREFIX_MIN) {
-        parts.last_mut().unwrap().push('*');
-    }
-    Some(parts.join(" OR "))
+/// Whether the last term counts as the start of longer words too (search as you type): once it
+/// has TYPING_PREFIX_MIN letters.
+pub fn typing_prefix(terms: &[String]) -> bool {
+    terms.last().is_some_and(|t| t.chars().count() >= TYPING_PREFIX_MIN)
+}
+
+/// FTS5 query: any of the terms but the `common` ones (see Store::common_terms); the last one
+/// also as a prefix (see typing_prefix).
+pub fn fts_query(terms: &[String], common: &HashSet<String>) -> Option<String> {
+    let last = terms.len().checked_sub(1)?;
+    let prefix = typing_prefix(terms);
+    let parts: Vec<String> = terms
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !common.contains(*t))
+        .map(|(i, t)| if i == last && prefix { format!("\"{t}\"*") } else { format!("\"{t}\"") })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" OR "))
 }
 
 static IDENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\d|_|\w[.\-/]\w|""#).unwrap());
@@ -292,7 +299,12 @@ mod tests {
 
     #[test]
     fn fts_query_ends_in_a_prefix() {
-        assert_eq!(fts_query(&["rent".into(), "due".into()]).unwrap(), "\"rent\" OR \"due\"*");
+        let none = HashSet::new();
+        assert_eq!(fts_query(&["rent".into(), "due".into()], &none).unwrap(), "\"rent\" OR \"due\"*");
+        // Words most passages hold are left out; the last stays a prefix only as itself.
+        let common = HashSet::from(["due".to_string()]);
+        assert_eq!(fts_query(&["rent".into(), "due".into()], &common).unwrap(), "\"rent\"");
+        assert_eq!(fts_query(&["due".into()], &common), None);
     }
 
     #[test]
@@ -340,9 +352,10 @@ mod tests {
 
     #[test]
     fn fts_query_prefixes_the_last_term() {
-        assert_eq!(fts_query(&terms(&["invoice", "2026", "114"])).unwrap(), r#""invoice" OR "2026" OR "114"*"#);
-        assert_eq!(fts_query(&[]), None);
-        assert_eq!(fts_query(&terms(&["invoice", "20"])).unwrap(), r#""invoice" OR "20""#); // (a prefix from three letters on)
+        let none = HashSet::new();
+        assert_eq!(fts_query(&terms(&["invoice", "2026", "114"]), &none).unwrap(), r#""invoice" OR "2026" OR "114"*"#);
+        assert_eq!(fts_query(&[], &none), None);
+        assert_eq!(fts_query(&terms(&["invoice", "20"]), &none).unwrap(), r#""invoice" OR "20""#); // (a prefix from three letters on)
     }
 
     #[test]
