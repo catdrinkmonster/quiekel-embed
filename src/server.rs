@@ -112,6 +112,49 @@ pub fn build_backend(model: &str) -> anyhow::Result<Arc<Backend>> {
 pub fn start_background(b: &Backend) {
     b.store.keep_vectors_in_memory(true);
     b.indexer.start();
+    let store = b.store.clone();
+    std::thread::Builder::new()
+        .name("tidy-previews".into())
+        .spawn(move || {
+            crate::governor::set_background_priority(true);
+            tidy_previews(&store, &config::thumbs_dir());
+        })
+        .ok();
+}
+
+/// The previews kept on disk ("{file id}-{its mtime}-{size}.jpg") of files that are gone or have
+/// changed since: deleted. So are half-written ones left behind.
+fn tidy_previews(store: &Store, dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut kept: Vec<(i64, i64, std::path::PathBuf)> = Vec::new();
+    let mut gone = 0;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let parsed = name.strip_suffix(".jpg").and_then(|stem| {
+            let (id, rest) = stem.split_once('-')?;
+            let (mtime, _size) = rest.rsplit_once('-')?;
+            Some((id.parse::<i64>().ok()?, mtime.parse::<i64>().ok()?))
+        });
+        match parsed {
+            Some((id, mtime)) => kept.push((id, mtime, e.path())),
+            None => {
+                // (one being written right now is left alone)
+                let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age.as_secs() > 600));
+                if old && std::fs::remove_file(e.path()).is_ok() {
+                    gone += 1;
+                }
+            }
+        }
+    }
+    let files = store.files_by_ids(&kept.iter().map(|k| k.0).collect::<Vec<_>>());
+    for (id, mtime, path) in kept {
+        if files.get(&id).is_none_or(|f| f.mtime as i64 != mtime) && std::fs::remove_file(path).is_ok() {
+            gone += 1;
+        }
+    }
+    if gone > 0 {
+        log::info!("Removed {gone} previews of files that are gone or have changed");
+    }
 }
 
 /// Below normal for the whole app: whatever else the PC is busy with comes first.
@@ -1171,6 +1214,33 @@ mod tests {
         assert_eq!(c.get("/api/search?q=x&limit=lots").status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(c.get("/api/search").status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(c.post("/api/settings", json!({"theme": "dark", "unknown": 1})).status, StatusCode::OK); // (others are left alone)
+    }
+
+    #[test]
+    fn previews_of_files_gone_or_changed_are_tidied_away() {
+        let c = client();
+        let store = &c.b().store;
+        let folder = store.add_folder(r"C:\p").unwrap();
+        let entry = crate::store::Entry {
+            folder_id: folder, path: r"C:\p\a.jpg".into(), size: 1, mtime: 100.0, kind: "image".into(), status: "indexed".into(),
+            chunks: 0, error: None, search_name: "a.jpg".into(),
+        };
+        store.save_files(&[entry], &[]).unwrap();
+        let id = store.signature(r"C:\p\a.jpg").unwrap().0;
+        let dir = std::env::temp_dir().join(format!("quiekel-rs-previews-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = [format!("{id}-100-360.jpg"), format!("{id}-100-1600.jpg"), format!("{id}-99-360.jpg"), "999999-5-360.jpg".into(), "7-x.jpg.tmp".into()];
+        for n in &names {
+            std::fs::write(dir.join(n), b"jpeg").unwrap();
+        }
+        tidy_previews(store, &dir);
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        // The file as it is now keeps its previews; the changed and the gone file's go. (A file still
+        // being written is left alone.)
+        assert_eq!(left, [format!("{id}-100-1600.jpg"), format!("{id}-100-360.jpg"), "7-x.jpg.tmp".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

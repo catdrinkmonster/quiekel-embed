@@ -24,6 +24,9 @@ pub fn kinds(filter: &str) -> &'static [&'static str] {
 }
 
 const PREFIX_MIN: usize = 4; // shorter words must match whole words: "cat" shouldn't match "catalog"
+// The last word typed so far matches the start of words from this many letters on: two letters
+// start most words of a big index, and ranking them all takes long.
+const TYPING_PREFIX_MIN: usize = 3;
 const RRF_K: f64 = 60.0;
 const EXACT_BONUS: f64 = 1.0 / RRF_K; // an all-words match outranks a file found only one way
 
@@ -81,13 +84,14 @@ pub fn query_terms(query: &str) -> Vec<String> {
     chosen.into_iter().filter(|w| seen.insert(w.clone())).take(12).collect()
 }
 
-/// FTS5 query: any of the terms; the last one also as a prefix (search as you type).
+/// FTS5 query: any of the terms; the last one also as a prefix (search as you type), once it has
+/// TYPING_PREFIX_MIN letters.
 pub fn fts_query(terms: &[String]) -> Option<String> {
     if terms.is_empty() {
         return None;
     }
     let mut parts: Vec<String> = terms.iter().map(|t| format!("\"{t}\"")).collect();
-    if terms.last().map(|t| t.chars().count() >= 2).unwrap_or(false) {
+    if terms.last().is_some_and(|t| t.chars().count() >= TYPING_PREFIX_MIN) {
         parts.last_mut().unwrap().push('*');
     }
     Some(parts.join(" OR "))
@@ -338,6 +342,7 @@ mod tests {
     fn fts_query_prefixes_the_last_term() {
         assert_eq!(fts_query(&terms(&["invoice", "2026", "114"])).unwrap(), r#""invoice" OR "2026" OR "114"*"#);
         assert_eq!(fts_query(&[]), None);
+        assert_eq!(fts_query(&terms(&["invoice", "20"])).unwrap(), r#""invoice" OR "20""#); // (a prefix from three letters on)
     }
 
     #[test]
