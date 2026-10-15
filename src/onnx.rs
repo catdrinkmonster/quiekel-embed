@@ -28,6 +28,7 @@ pub const POOL: usize = 3;
 // on captioned photos: the right one in the top five as often, first a little less often).
 pub const SOFT_TOKENS: usize = 140;
 pub const MAX_PATCHES: usize = SOFT_TOKENS * POOL * POOL;
+#[cfg(test)]
 const REFERENCE_PATCHES: usize = 280 * POOL * POOL; // (the model's own processor, for the tests)
 const MAX_TOKENS: usize = 2048; // passages are far shorter; this only stops a runaway one
 pub const QUERY_PROMPT: &str = "task: search result | query: ";

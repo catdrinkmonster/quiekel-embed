@@ -28,6 +28,12 @@ const CHECK_EVERY_S: u64 = 24 * 3600;
 const MAX_ZIP: u64 = 800 << 20;
 const IDLE_BEFORE_INSTALL_S: u64 = 30 * 60; // installing by itself: the window closed this long
 const STARTED_WITHIN_S: u64 = 90; // the new version must be up by then, or the old one comes back
+const HELPER_WITHIN_S: u64 = 20; // the new version's helper must run by then, or this app stays
+// Marks in the app's folder while an update hands over: the update waits (UPDATING), the new
+// version came up (STARTED); in the unpacked release: its helper runs (HELPER_UP).
+const UPDATING: &str = ".updating";
+const STARTED: &str = ".started";
+const HELPER_UP: &str = ".helper-up";
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -305,7 +311,9 @@ impl Updater {
         self.set_stage(json!({"state": "installing", "version": version}));
         log::info!("Installing {version}");
         use std::os::windows::process::CommandExt;
-        std::process::Command::new(&helper)
+        let up = unpacked.join(HELPER_UP);
+        let _ = std::fs::remove_file(&up);
+        let mut helper = std::process::Command::new(&helper)
             .arg("--finish-update")
             .arg(unpacked)
             .arg(&install)
@@ -315,6 +323,19 @@ impl Updater {
             .creation_flags(0x0800_0000 | 0x0000_0200) // no window, a process group of its own
             .spawn()
             .context("starting the new version")?;
+        // This app quits only once the new version's helper runs: a broken download mustn't leave
+        // the app closed.
+        let end = Instant::now() + Duration::from_secs(HELPER_WITHIN_S);
+        while !up.exists() {
+            if let Ok(Some(status)) = helper.try_wait() {
+                bail!("the new version ended at once ({status})");
+            }
+            if Instant::now() > end {
+                let _ = helper.kill();
+                bail!("the new version didn't start");
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
         (hooks.quit)();
         Ok(())
     }
@@ -366,9 +387,25 @@ impl Updater {
             }
         }
         if let Some(dir) = install_dir() {
-            remove_old(&dir);
+            tidy_install(&dir);
         }
     }
+}
+
+/// The old version's files and the marks in the app's folder go, unless an update is handing
+/// over right now (the old files are its way back: it removes them itself once this version runs).
+fn tidy_install(dir: &Path) {
+    let updating = dir.join(UPDATING);
+    let fresh = std::fs::metadata(&updating)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().is_ok_and(|age| age.as_secs() < 10 * 60));
+    if fresh {
+        return;
+    }
+    let _ = std::fs::remove_file(updating); // (one left over from an update that broke off)
+    let _ = std::fs::remove_file(dir.join(STARTED));
+    let _ = std::fs::remove_file(dir.join(HELPER_UP)); // (copied along by an earlier version)
+    remove_old(dir);
 }
 
 /// The releases this version brought, until the page has shown them (it saves "seen_version").
@@ -494,8 +531,8 @@ pub fn swap(new: &Path, install: &Path) -> Result<()> {
         }
         for p in files_below(new) {
             let rel = p.strip_prefix(new)?;
-            if rel.to_string_lossy() == ".complete" {
-                continue;
+            if [".complete", HELPER_UP].contains(&rel.to_string_lossy().as_ref()) {
+                continue; // (the unpacked release's own marks)
             }
             let to = install.join(rel);
             if let Some(parent) = to.parent() {
@@ -567,20 +604,23 @@ fn wait_for_exit(pid: u32, timeout: Duration) {
 pub fn finish(args: &[String]) -> Result<()> {
     let [unpacked, install, pid, from] = args else { bail!("usage: --finish-update <unpacked> <install> <pid> <from>") };
     let (unpacked, install) = (PathBuf::from(unpacked), PathBuf::from(install));
+    let _ = std::fs::write(unpacked.join(HELPER_UP), b""); // (the old app quits once it sees this)
     let to = current_version();
     wait_for_exit(pid.parse().unwrap_or(0), Duration::from_secs(60));
-    let started = install.join(".started");
+    let (started, updating) = (install.join(STARTED), install.join(UPDATING));
     let _ = std::fs::remove_file(&started);
     if let Err(e) = swap(&unpacked, &install) {
         write_result(json!({"ok": false, "version": to, "error": format!("{e:#}")}));
         start_app(&install);
         return Err(e);
     }
+    let _ = std::fs::write(&updating, b"");
     start_app(&install);
     let end = Instant::now() + Duration::from_secs(STARTED_WITHIN_S);
     while Instant::now() < end {
         if started.exists() {
             let _ = std::fs::remove_file(&started);
+            let _ = std::fs::remove_file(&updating);
             remove_old(&install);
             write_result(json!({"ok": true, "version": to, "from": from}));
             return Ok(());
@@ -590,16 +630,22 @@ pub fn finish(args: &[String]) -> Result<()> {
     // The new version didn't come up: the old one comes back.
     log::error!("Version {to} did not start; going back to {from}");
     kill_app(&install);
-    restore(&install);
+    restore(&install); // (the marks go with the new files)
     write_result(json!({"ok": false, "version": to, "error": "the new version did not start"}));
     start_app(&install);
     Ok(())
 }
 
-/// The app started fine: tells a waiting update so.
+/// The app started fine: tells an update waiting for it so.
 pub fn started() {
     if let Some(dir) = install_dir() {
-        let _ = std::fs::write(dir.join(".started"), b"");
+        mark_started(&dir);
+    }
+}
+
+fn mark_started(dir: &Path) {
+    if dir.join(UPDATING).exists() {
+        let _ = std::fs::write(dir.join(STARTED), b"");
     }
 }
 
@@ -744,9 +790,11 @@ mod tests {
         std::fs::write(new.join(EXE), b"new app").unwrap();
         std::fs::write(new.join("added.dll"), b"new").unwrap();
         std::fs::write(new.join(".complete"), b"").unwrap();
+        std::fs::write(new.join(HELPER_UP), b"").unwrap();
         swap(&new, &install).unwrap();
         assert_eq!(std::fs::read(install.join(EXE)).unwrap(), b"new app");
-        assert!(install.join("added.dll").is_file() && !install.join("gone.dll").exists() && !install.join(".complete").exists());
+        assert!(install.join("added.dll").is_file() && !install.join("gone.dll").exists());
+        assert!(!install.join(".complete").exists() && !install.join(HELPER_UP).exists()); // (marks stay behind)
         // The new version didn't start: everything as it was.
         restore(&install);
         assert_eq!(std::fs::read(install.join(EXE)).unwrap(), b"old app");
@@ -756,6 +804,30 @@ mod tests {
         swap(&new, &install).unwrap();
         remove_old(&install);
         assert!(files_below(&install).iter().all(|p| !p.to_string_lossy().ends_with(OLD)));
+    }
+
+    #[test]
+    fn the_handover_marks_and_the_old_files_last_as_long_as_an_update_waits() {
+        let d = temp("marks");
+        std::fs::write(d.join(EXE), b"new").unwrap();
+        std::fs::write(d.join(format!("{EXE}{OLD}")), b"old").unwrap();
+        // An ordinary start: no update waits for it, so no mark, and leftovers go.
+        mark_started(&d);
+        assert!(!d.join(STARTED).exists());
+        tidy_install(&d);
+        assert!(!d.join(format!("{EXE}{OLD}")).exists());
+        // While an update waits: the mark, and the old files stay (they're its way back).
+        std::fs::write(d.join(format!("{EXE}{OLD}")), b"old").unwrap();
+        std::fs::write(d.join(UPDATING), b"").unwrap();
+        mark_started(&d);
+        tidy_install(&d);
+        assert!(d.join(STARTED).exists() && d.join(format!("{EXE}{OLD}")).exists());
+        // An update that broke off long ago doesn't hold them for good.
+        let stale = std::time::SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(d.join(UPDATING)).unwrap().set_modified(stale).unwrap();
+        tidy_install(&d);
+        assert!(!d.join(UPDATING).exists() && !d.join(STARTED).exists() && !d.join(format!("{EXE}{OLD}")).exists());
+        assert_eq!(std::fs::read(d.join(EXE)).unwrap(), b"new");
     }
 
     #[test]

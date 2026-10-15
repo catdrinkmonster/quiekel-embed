@@ -217,6 +217,28 @@ pub fn pick_folder(owner: isize, title: &str) -> Option<String> {
     .flatten()
 }
 
+/// A fullscreen app (a game, a film) is in front: it covers its whole screen.
+fn fullscreen_in_front() -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
+    unsafe {
+        let front = GetForegroundWindow();
+        if front.0.is_null() || front == GetShellWindow() || front == GetDesktopWindow() {
+            return false;
+        }
+        let mut r = RECT::default();
+        if GetWindowRect(front, &mut r).is_err() {
+            return false;
+        }
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(MonitorFromWindow(front, MONITOR_DEFAULTTONEAREST), &mut info).as_bool() {
+            return false;
+        }
+        let m = info.rcMonitor;
+        r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
+    }
+}
+
 // ---- the tray icon -------------------------------------------------------------------------------
 
 const WM_TRAY: u32 = WM_APP + 1;
@@ -290,6 +312,9 @@ impl Tray {
     }
 
     fn notify(&self, text: &str) {
+        if fullscreen_in_front() {
+            return; // (nothing pops up over a game or a film; the page still shows it)
+        }
         let mut d = self.data();
         d.uFlags = NIF_INFO;
         d.szInfo = wide::<256>(text);
