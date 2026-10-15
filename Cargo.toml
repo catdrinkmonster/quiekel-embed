@@ -67,7 +67,7 @@ bhtsne = "0.5"
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 tao = "0.34"
-wry = "0.53"
+wry = "0.57"
 tray-icon = "0.21"
 nvml-wrapper = "0.11"
 
