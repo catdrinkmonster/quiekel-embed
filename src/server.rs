@@ -219,160 +219,23 @@ fn etag_of(bytes: &[u8]) -> String {
 
 type Query = HashMap<String, String>;
 
-// Requests that don't fit get the same 422 replies as the Python app's (its validation library's
-// wording, with the input that didn't fit).
-
-fn invalid(errors: Vec<Value>) -> ApiError {
-    ApiError { status: StatusCode::UNPROCESSABLE_ENTITY, body: json!({"detail": errors}) }
-}
-
-fn int_parsing(loc: Value, input: &Value) -> Value {
-    json!({"type": "int_parsing", "loc": loc, "msg": "Input should be a valid integer, unable to parse string as an integer", "input": input})
+/// A request that doesn't fit (a body, number or field the API can't read): 422 with the reason.
+fn unreadable(what: impl std::fmt::Display) -> ApiError {
+    detail(StatusCode::UNPROCESSABLE_ENTITY, &what.to_string())
 }
 
 fn query_int(q: &Query, key: &str) -> Result<Option<i64>, ApiError> {
-    match q.get(key) {
-        None => Ok(None),
-        Some(v) => v.trim().parse::<i64>().map(Some).map_err(|_| invalid(vec![int_parsing(json!(["query", key]), &json!(v))])),
-    }
+    q.get(key).map(|v| v.trim().parse::<i64>().map_err(|_| unreadable(format!("{key}: not a whole number")))).transpose()
 }
 
 fn path_int(name: &str, v: &str) -> Result<i64, ApiError> {
-    v.trim().parse::<i64>().map_err(|_| invalid(vec![int_parsing(json!(["path", name]), &json!(v))]))
+    v.trim().parse::<i64>().map_err(|_| unreadable(format!("{name}: not a whole number")))
 }
 
-#[derive(Clone, Copy)]
-enum Ty {
-    Str,
-    Bool,
-    Int,
-    StrList,
+/// A JSON body, as the type the route takes.
+fn body_json<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, ApiError> {
+    serde_json::from_slice(body).map_err(unreadable)
 }
-
-/// A JSON body checked field by field (types loosened as the Python app's library does: "true"
-/// for a yes/no, "5" for a number), ready to deserialize.
-fn checked(body: &[u8], fields: &[(&str, Ty, bool)]) -> Result<Value, ApiError> {
-    let value: Value = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(e) => {
-            return Err(invalid(vec![json!({
-                "type": "json_invalid", "loc": ["body", e.column().saturating_sub(1)], "msg": "JSON decode error",
-                "input": {}, "ctx": {"error": "Expecting value"},
-            })]));
-        }
-    };
-    let Some(obj) = value.as_object() else {
-        return Err(invalid(vec![json!({
-            "type": "model_attributes_type", "loc": ["body"],
-            "msg": "Input should be a valid dictionary or object to extract fields from", "input": value,
-        })]));
-    };
-    let mut errors = Vec::new();
-    let mut out = Map::new();
-    for &(name, ty, required) in fields {
-        let v = match obj.get(name) {
-            None if required => {
-                errors.push(json!({"type": "missing", "loc": ["body", name], "msg": "Field required", "input": value}));
-                continue;
-            }
-            None | Some(Value::Null) => continue,
-            Some(v) => v,
-        };
-        let loc = json!(["body", name]);
-        match ty {
-            Ty::Str => match v {
-                Value::String(_) => {
-                    out.insert(name.into(), v.clone());
-                }
-                _ => errors.push(json!({"type": "string_type", "loc": loc, "msg": "Input should be a valid string", "input": v})),
-            },
-            Ty::Bool => {
-                let parsed = match v {
-                    Value::Bool(b) => Some(*b),
-                    Value::Number(n) => match n.as_f64() {
-                        Some(x) if x == 0.0 => Some(false),
-                        Some(x) if x == 1.0 => Some(true),
-                        _ => None,
-                    },
-                    Value::String(t) => match t.trim().to_lowercase().as_str() {
-                        "0" | "off" | "f" | "false" | "n" | "no" => Some(false),
-                        "1" | "on" | "t" | "true" | "y" | "yes" => Some(true),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                match parsed {
-                    Some(b) => {
-                        out.insert(name.into(), json!(b));
-                    }
-                    None if matches!(v, Value::String(_) | Value::Number(_)) => errors.push(json!({
-                        "type": "bool_parsing", "loc": loc, "msg": "Input should be a valid boolean, unable to interpret input", "input": v,
-                    })),
-                    None => errors.push(json!({"type": "bool_type", "loc": loc, "msg": "Input should be a valid boolean", "input": v})),
-                }
-            }
-            Ty::Int => match v {
-                Value::Number(n) if n.is_i64() => {
-                    out.insert(name.into(), v.clone());
-                }
-                Value::Number(n) => match n.as_f64() {
-                    Some(x) if x.fract() == 0.0 => {
-                        out.insert(name.into(), json!(x as i64));
-                    }
-                    _ => errors.push(json!({
-                        "type": "int_from_float", "loc": loc, "msg": "Input should be a valid integer, got a number with a fractional part", "input": v,
-                    })),
-                },
-                Value::Bool(b) => {
-                    out.insert(name.into(), json!(*b as i64));
-                }
-                Value::String(t) => match t.trim().parse::<i64>() {
-                    Ok(i) => {
-                        out.insert(name.into(), json!(i));
-                    }
-                    Err(_) => errors.push(int_parsing(loc, v)),
-                },
-                _ => errors.push(json!({"type": "int_type", "loc": loc, "msg": "Input should be a valid integer", "input": v})),
-            },
-            Ty::StrList => match v {
-                Value::Array(items) => {
-                    let mut ok = true;
-                    for (i, item) in items.iter().enumerate() {
-                        if !item.is_string() {
-                            ok = false;
-                            errors.push(json!({"type": "string_type", "loc": ["body", name, i], "msg": "Input should be a valid string", "input": item}));
-                        }
-                    }
-                    if ok {
-                        out.insert(name.into(), v.clone());
-                    }
-                }
-                _ => errors.push(json!({"type": "list_type", "loc": loc, "msg": "Input should be a valid list", "input": v})),
-            },
-        }
-    }
-    if errors.is_empty() { Ok(Value::Object(out)) } else { Err(invalid(errors)) }
-}
-
-fn body_json<T: for<'de> Deserialize<'de>>(body: &[u8], fields: &[(&str, Ty, bool)]) -> Result<T, ApiError> {
-    let value = checked(body, fields)?;
-    serde_json::from_value(value).map_err(|e| invalid(vec![json!({"type": "value_error", "loc": ["body"], "msg": e.to_string(), "input": null})]))
-}
-
-const SETTINGS_FIELDS: [(&str, Ty, bool); 12] = [
-    ("language", Ty::Str, false),
-    ("theme", Ty::Str, false),
-    ("auto_update", Ty::Bool, false),
-    ("seen_version", Ty::Str, false),
-    ("autostart", Ty::Bool, false),
-    ("view_files", Ty::Str, false),
-    ("view_images", Ty::Str, false),
-    ("kinds_off", Ty::StrList, false),
-    ("problems_seen", Ty::Int, false),
-    ("hidden_files", Ty::Bool, false),
-    ("program_folders", Ty::Bool, false),
-    ("diagnostics", Ty::Bool, false),
-];
 
 // ---- the server -----------------------------------------------------------------------------------
 
@@ -443,7 +306,7 @@ impl Server {
             "model_mb": self.b.embedder.memory_mb().round() as i64,
             "vectors_mb": match self.b.store.vectors_mb() {
                 mb if mb > 0.0 => json!((mb * 10.0).round() / 10.0),
-                _ => json!(0), // (Python's 0 when they're on disk)
+                _ => json!(0), // (on disk)
             },
         })
     }
@@ -594,7 +457,7 @@ impl Server {
     }
 
     fn search(&self, q: &Query) -> Result<Response, ApiError> {
-        let text = q.get("q").ok_or_else(|| missing("q"))?.trim().to_string();
+        let text = q.get("q").ok_or_else(|| unreadable("q: missing"))?.trim().to_string();
         let kind = q.get("kind").map(String::as_str).unwrap_or("all");
         let folder = query_int(q, "folder")?;
         let under = q.get("under").map(String::as_str);
@@ -790,7 +653,7 @@ impl Server {
             }
             ["api", "status"] if get => Ok(json_reply(&self.status())),
             ["api", "diagnostics"] if get => Ok(json_reply(&b.diagnostics.view(&b.embedder))),
-            ["api", "settings"] if post => self.update_settings(body_json(body, &SETTINGS_FIELDS)?),
+            ["api", "settings"] if post => self.update_settings(body_json(body)?),
             ["api", "update", "check"] if post => {
                 b.updater.check();
                 Ok(json_reply(&b.updater.status()))
@@ -827,13 +690,13 @@ impl Server {
                 ok()
             }
             ["api", "window", "theme"] if post => {
-                let t: ThemeIn = body_json(body, &[("dark", Ty::Bool, true)])?;
+                let t: ThemeIn = body_json(body)?;
                 if let Some(set) = &self.hooks.set_dark {
                     set(t.dark);
                 }
                 ok()
             }
-            ["api", "folders"] if post => self.add_folder(body_json(body, &[("path", Ty::Str, true)])?),
+            ["api", "folders"] if post => self.add_folder(body_json(body)?),
             ["api", "folders", "pick"] if post => {
                 let Some(_one) = self.pick_lock.try_lock() else { return Err(fail(409, "picker_open", json!({}))) };
                 let picked = (self.hooks.pick_folder)(&i18n::t(&self.lang(), "folders.picker_title", &[]));
@@ -863,7 +726,7 @@ impl Server {
             }
             ["api", "folders", id, "watch"] if post => {
                 let id = path_int("folder_id", id)?;
-                let w: WatchIn = body_json(body, &[("watch", Ty::Bool, true)])?;
+                let w: WatchIn = body_json(body)?;
                 self.known_folder(id)?;
                 b.store.set_watch(id, w.watch);
                 b.indexer.watcher().sync();
@@ -882,7 +745,7 @@ impl Server {
             }
             ["api", "folders", id, "reveal"] if post => {
                 let id = path_int("folder_id", id)?;
-                let ex: ExampleIn = body_json(body, &[("reason", Ty::Str, true), ("index", Ty::Int, true)])?;
+                let ex: ExampleIn = body_json(body)?;
                 let report = b.store.details(id, 5)["report"].clone();
                 let examples: Vec<String> = report[&ex.reason]["examples"]
                     .as_array()
@@ -1002,9 +865,6 @@ impl Server {
     }
 }
 
-fn missing(field: &str) -> ApiError {
-    invalid(vec![json!({"type": "missing", "loc": ["query", field], "msg": "Field required", "input": null})])
-}
 
 /// A path the API has, for some method (wrong method: 405 rather than 404).
 fn known_path(parts: &[&str]) -> bool {
@@ -1021,7 +881,7 @@ fn known_path(parts: &[&str]) -> bool {
     )
 }
 
-/// (folder, name) of a path, as Python's Path.parent and Path.name.
+/// (folder, name) of a path.
 pub fn split_path(path: &str) -> (String, String) {
     match path.rfind('\\') {
         Some(i) => {
@@ -1299,6 +1159,18 @@ mod tests {
         assert_eq!(r.status, StatusCode::BAD_REQUEST);
         let detail = &r.json()["detail"];
         assert_eq!((detail["key"].as_str(), detail["message"].as_str()), (Some("err.empty_path"), Some("Enter a folder path.")));
+    }
+
+    #[test]
+    fn requests_that_dont_fit_get_422_with_the_reason() {
+        let c = client();
+        let r = c.post("/api/folders", json!({"folder": "C:/x"})); // (it's "path")
+        assert!(r.status == StatusCode::UNPROCESSABLE_ENTITY && r.json()["detail"].as_str().unwrap().contains("path"));
+        assert_eq!(c.post("/api/settings", json!({"diagnostics": "very"})).status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(c.get("/api/folders/abc/details").status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(c.get("/api/search?q=x&limit=lots").status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(c.get("/api/search").status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(c.post("/api/settings", json!({"theme": "dark", "unknown": 1})).status, StatusCode::OK); // (others are left alone)
     }
 
     #[test]

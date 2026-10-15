@@ -201,7 +201,8 @@ pub const SCANNED_PDF_PAGES: usize = 3;
 /// Files are embedded together until a group holds this many chunks.
 pub const GROUP_CHUNKS: usize = 128;
 
-/// A file name's extension, lowercase with its dot ("" for none), as Python's Path.suffix.
+/// A file name's extension, lowercase with its dot ("" for none, and for a name that only starts
+/// with a dot).
 pub fn suffix(name: &str) -> String {
     let base = name.rsplit(['\\', '/']).next().unwrap_or(name);
     match base.rfind('.') {

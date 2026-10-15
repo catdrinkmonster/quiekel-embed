@@ -54,7 +54,7 @@ pub fn normalize(text: &str) -> String {
     text.nfkd().filter(|c| !is_mark(*c)).collect::<String>().to_lowercase()
 }
 
-/// Letters and digits (Python's [^\W_]): what the keyword index treats as words.
+/// Letters and digits: what the keyword index treats as words ("_" separates them).
 fn is_word_char(c: char) -> bool {
     c.is_alphanumeric()
 }

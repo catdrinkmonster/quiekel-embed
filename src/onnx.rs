@@ -1,6 +1,6 @@
 //! EmbeddingGemma 2 through ONNX Runtime: on any graphics card Windows can drive (DirectML) or on
-//! the processor. The same model files, tokenizer and preparation as the Python app, so the same
-//! texts give the same vectors.
+//! the processor. The model's published files and tokenizer, with texts and pictures prepared as
+//! its own processor prepares them.
 
 use std::path::{Path, PathBuf};
 

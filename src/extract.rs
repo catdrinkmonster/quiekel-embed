@@ -446,7 +446,7 @@ pub fn strip_html(raw: &str) -> String {
 
 // ---- chunking ------------------------------------------------------------
 
-/// Python's str.isspace(): Unicode whitespace, and the file/group/record/unit separators.
+/// Whitespace: Unicode's, and the file, group, record and unit separators.
 pub fn is_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }

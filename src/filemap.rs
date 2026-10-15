@@ -151,7 +151,7 @@ fn std_dev(v: &[f64]) -> f64 {
     (v.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / v.len().max(1) as f64).sqrt()
 }
 
-/// numpy's quantile (linear interpolation).
+/// The q-quantile of the values, interpolated linearly between the nearest two.
 fn quantile(mut values: Vec<f64>, q: f64) -> f64 {
     if values.is_empty() {
         return 0.0;

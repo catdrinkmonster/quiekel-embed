@@ -1,6 +1,6 @@
-//! Pictures: decoding, and resizing exactly as Pillow does (the Python app's library), so the
-//! model sees the same pixels: bicubic with antialiasing, fixed-point weights, horizontal pass
-//! first into an 8-bit image, then the vertical one.
+//! Pictures: decoding, and resizing exactly as the model's own image processor does (Pillow's
+//! resize), so the model sees the pixels it was made for: bicubic with antialiasing, fixed-point
+//! weights, horizontal pass first into an 8-bit image, then the vertical one.
 
 use image::RgbImage;
 
@@ -310,7 +310,7 @@ fn exif_orientation(data: &[u8]) -> Orientation {
         .unwrap_or(Orientation::NoTransforms)
 }
 
-/// JPEG through libjpeg, decoded as Pillow (the Python app's library) decodes it, its "draft"
+/// JPEG through libjpeg, decoded as the model's image processor (Pillow) decodes it, its "draft"
 /// scaling for big photos included: the same pixels. None: one it leaves to the other decoders
 /// (CMYK, or one libjpeg gives up on).
 fn libjpeg(data: &[u8], max_side: u32, tiny_check: bool) -> Option<ReadResult<DynamicImage>> {
@@ -701,8 +701,7 @@ mod tests {
     }
 }
 
-/// HEIC photos (iPhones and others) through libheif, the library the Python app uses too (in
-/// vendor\libheif, when it's there): the same decoder, the same pixels.
+/// HEIC photos (iPhones and others) through libheif (in vendor\libheif, when it's there).
 mod heif {
     use std::ffi::{c_char, c_int, c_void};
     use std::path::{Path, PathBuf};

@@ -46,7 +46,7 @@ pub fn format_value(value: &Value, lang: &str) -> String {
     }
 }
 
-/// Python's "{:g}" for the small numbers the app shows (memory in GB, percentages).
+/// The small numbers the app shows (memory in GB, percentages) in their shortest form: 2, 0.6, 12.5.
 pub fn format_g(f: f64) -> String {
     if f == f.trunc() && f.abs() < 1e15 {
         return format!("{}", f as i64);

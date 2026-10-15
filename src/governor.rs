@@ -91,7 +91,7 @@ fn filetime(ft: windows::Win32::Foundation::FILETIME) -> u64 {
     (ft.dwHighDateTime as u64) << 32 | ft.dwLowDateTime as u64
 }
 
-/// The whole PC's busy share since the last reading, as psutil.cpu_percent(None).
+/// The whole PC's busy share since the last reading.
 struct SystemCpu {
     last: Option<(u64, u64)>, // (idle, total)
 }

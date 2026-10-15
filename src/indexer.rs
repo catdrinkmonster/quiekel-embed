@@ -65,7 +65,7 @@ enum Job {
     Remove(Vec<String>),
 }
 
-/// threading.Event.
+/// A flag that threads can wait for.
 struct Flag {
     set: Mutex<bool>,
     cv: Condvar,

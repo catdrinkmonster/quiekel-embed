@@ -115,7 +115,7 @@ fn inside(path: &str) -> (String, String) {
     (lo, hi)
 }
 
-/// Windows' case-insensitive paths, as Python's os.path.normcase.
+/// A path as Windows compares paths: backslashes, lowercase.
 pub fn normcase(path: &str) -> String {
     path.replace('/', "\\").to_lowercase()
 }
@@ -748,9 +748,7 @@ impl Store {
             return None;
         }
         let db = self.reader.lock();
-        db.query_row("SELECT id, path, watch FROM folders WHERE id = ?", [folder_id], |r| {
-            Ok(FolderRow { path: r.get(1)? })
-        })
+        db.query_row("SELECT path FROM folders WHERE id = ?", [folder_id], |r| Ok(FolderRow { path: r.get(0)? }))
         .optional()
         .ok()
         .flatten()

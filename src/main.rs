@@ -213,7 +213,7 @@ fn video_memory(device: i32) -> serde_json::Value {
         );
         serde_json::json!({
             "local": mb(local.CurrentUsage), "budget": mb(local.Budget), "shared": mb(shared.CurrentUsage),
-            "ram": mb(p.WorkingSetSize as u64), "ram_peak": mb(p.PeakWorkingSetSize as u64), "ram_private": mb(p.PrivateWorkingSetSize as u64), "commit": mb(p.PrivateUsage as u64),
+            "ram": mb(p.WorkingSetSize as u64), "ram_peak": mb(p.PeakWorkingSetSize as u64), "ram_private": mb(p.PrivateWorkingSetSize as u64), "commit": mb(p.PrivateUsage as u64), "commit_peak": mb(p.PeakPagefileUsage as u64),
         })
     }
 }

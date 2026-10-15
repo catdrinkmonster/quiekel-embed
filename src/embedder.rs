@@ -319,7 +319,7 @@ impl Embedder {
         }
         let mut order: Vec<usize> = (0..n).collect();
         if let Some(t) = texts {
-            // (Python's len(): characters; a stable sort keeps the order of equal lengths)
+            // (by characters; a stable sort keeps the order of equal lengths)
             order.sort_by_key(|&i| std::cmp::Reverse(t[i].chars().count()));
         }
         let base = self.batch(if texts.is_some() { "text" } else { "image" });
