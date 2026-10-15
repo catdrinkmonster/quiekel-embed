@@ -5,8 +5,13 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Make the release for this version (the version in Cargo.toml, e.g. 1.0.0); empty: only test"
+        required: false
+        default: ""
 
-# Least privilege: the token can only read the code.
+# Least privilege: the token can only read the code (the release job asks for more).
 permissions:
   contents: read
 
@@ -18,18 +23,54 @@ jobs:
   test:
     name: test
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       # Actions are pinned to full commit SHAs (supply-chain safety); Dependabot keeps them current.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - name: Install exactly the locked dependencies, as the installer does
-        run: uv sync --locked
-      # These machines have no graphics card: the model's own tests run on the processor, in the
-      # setups for PCs without one (a desktop, built-in graphics with 8 GB, an old dual core).
-      - name: Download the model's files for the processor (8-bit)
-        run: uv run --no-sync python -c "from quiekel_embed import onnx_engine; onnx_engine.download(False)"
+      - name: Rust (stable)
+        run: rustup toolchain install stable --profile minimal; rustup default stable
+      - name: The libraries the app loads (these exact files, checked)
+        run: .github/libraries.ps1
+      - name: Build
+        run: cargo build --release --locked
+      # These machines have no graphics card: the model's own tests skip themselves without its files.
       - name: Test
-        run: uv run --no-sync pytest -q
+        run: cargo test --release --locked -- --test-threads=1
+
+  release:
+    name: release
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # (creates the draft release, with its zip)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The version asked for is the one in Cargo.toml
+        env:
+          VERSION: ${{ inputs.release }}
+        run: |
+          $line = Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1
+          if ($line.Matches[0].Groups[1].Value -ne $env:VERSION) { throw "Cargo.toml says $($line.Matches[0].Groups[1].Value), not $env:VERSION." }
+      - name: Rust (stable)
+        run: rustup toolchain install stable --profile minimal; rustup default stable
+      - name: The libraries the app loads (these exact files, checked)
+        run: .github/libraries.ps1
+      - name: Build
+        run: cargo build --release --locked
+      - name: The release zip (the app and its libraries side by side, their licenses in licenses\)
+        env:
+          VERSION: ${{ inputs.release }}
+        run: .github/release.ps1 -Version $env:VERSION
+      # A draft, with its zip: a maintainer writes its notes and publishes it, which makes its tag
+      # (release tags are theirs to make, and a published release can't change).
+      - name: The release, as a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.release }}
+        run: gh release create "v$env:VERSION" "Quiekel-Embed-$env:VERSION-windows-x64.zip" --draft --target "${{ github.sha }}" --title "v$env:VERSION" --generate-notes
