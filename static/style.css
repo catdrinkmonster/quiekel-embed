@@ -149,8 +149,8 @@ h3 { font-family: var(--display); color: var(--ink); margin: 0; letter-spacing: 
 .mono { font-family: var(--mono); font-size: 12px; }
 
 ::-webkit-scrollbar { width: 12px; height: 12px; }
-::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 10px; border: 3px solid var(--bg); }
-::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); }
+::-webkit-scrollbar-thumb { background: var(--scroll) padding-box; border-radius: 10px; border: 3px solid transparent; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover) padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; display: block; }
@@ -286,7 +286,7 @@ svg.i .frame { stroke-width: 2.6; }
 .um-notes { display: flex; flex-direction: column; gap: var(--gap-group); max-height: min(52vh, 420px); overflow: auto; }
 .um-release h4 { display: flex; align-items: baseline; gap: var(--gap); margin: 0 0 6px; font-size: 13px; }
 .um-release h4 .muted { color: var(--muted); font-weight: 500; font-size: 12px; }
-.um-release .notes { margin: 0; }
+.um-release .notes { margin: 0; max-height: none; overflow: visible; } /* (the list around them scrolls) */
 .update-badge svg.i { width: 20px; height: 20px; }
 @keyframes wiggle { 0%, 82%, 100% { transform: rotate(0); } 86% { transform: rotate(-12deg); } 92% { transform: rotate(10deg); } }
 
@@ -630,7 +630,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 /* A folder's details */
 .modal-card.folder-info { width: min(640px, 100%); }
 /* Everything below the title scrolls as one */
-.fm-body { margin-top: 14px; display: flex; flex-direction: column; gap: 20px; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.fm-body { margin-top: 14px; display: flex; flex-direction: column; gap: 20px; min-height: 0; overflow: auto; }
 .fm-body > * { flex-shrink: 0; }
 .fm-headline { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .fm-headline b { display: block; font: 800 30px/1.1 var(--display); color: var(--ink); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
@@ -778,6 +778,10 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .modal-sub { margin: 0 0 0 28px; font: 12px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal-sub:empty { display: none; }
 .modal-head, .modal-sub, .modal-text, .modal-actions { flex: none; } /* only the body scrolls */
+/* A modal's scrolling part: its scrollbar runs in a lane at the modal's right edge, clear of the
+   content, which stays in line with the head's close button (the lane is kept when nothing
+   scrolls, so nothing shifts). */
+.fm-body, .tm-body, .um-notes { margin-right: -14px; padding-right: 2px; scrollbar-gutter: stable; }
 .modal-text { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
 .notes {
   margin: 12px 0 0; padding: 12px 14px; background: var(--well); border: 1px solid var(--border); border-radius: 6px;
@@ -793,7 +797,7 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .info-btn:hover { color: var(--ink); }
 /* Settings → File types */
 .modal-card.types { width: auto; min-width: min(340px, 100%); max-width: min(680px, 100%); }
-.tm-body { margin-top: 12px; display: flex; flex-direction: column; gap: 16px; overflow: auto; padding-right: 4px; }
+.tm-body { margin-top: 12px; display: flex; flex-direction: column; gap: 16px; overflow: auto; }
 .tm-head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
 .tm-head > svg.i { width: 18px; height: 18px; color: var(--muted); }
 .tm-head b { color: var(--ink); }
