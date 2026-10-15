@@ -35,7 +35,7 @@ percent-encoding = "2"
 
 # the model
 ort = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic", "directml", "half"] }
-tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
 ureq = { version = "3", features = ["json"] }
 
 # the index
