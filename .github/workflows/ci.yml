@@ -46,7 +46,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
-      contents: write # (creates the release, with its zip, in one step: releases can't change afterwards)
+      contents: write # (creates the draft release, with its zip)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,20 +63,14 @@ jobs:
         run: .github/libraries.ps1
       - name: Build
         run: cargo build --release --locked
-      - name: The release zip (the app and its libraries, side by side)
+      - name: The release zip (the app and its libraries side by side, their licenses in licenses\)
         env:
           VERSION: ${{ inputs.release }}
-        run: |
-          New-Item -ItemType Directory dist | Out-Null
-          Copy-Item target\release\quiekel-embed.exe dist\
-          Get-ChildItem vendor -Recurse -Filter *.dll | Copy-Item -Destination dist\
-          Copy-Item vendor\pdfium\LICENSE dist\PDFIUM-LICENSE
-          Compress-Archive -Path dist\* -DestinationPath "Quiekel-Embed-$env:VERSION-windows-x64.zip"
-      - name: The release, with its zip
+        run: .github/release.ps1 -Version $env:VERSION
+      # A draft, with its zip: a maintainer writes its notes and publishes it, which makes its tag
+      # (release tags are theirs to make, and a published release can't change).
+      - name: The release, as a draft
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.release }}
-        run: |
-          # (the notes: RELEASE.md if the commit has one, else GitHub's list of the merged pull requests)
-          $notes = if (Test-Path RELEASE.md) { @("--notes-file", "RELEASE.md") } else { @("--generate-notes") }
-          gh release create "v$env:VERSION" "Quiekel-Embed-$env:VERSION-windows-x64.zip" --target "${{ github.sha }}" --title "v$env:VERSION" @notes
+        run: gh release create "v$env:VERSION" "Quiekel-Embed-$env:VERSION-windows-x64.zip" --draft --target "${{ github.sha }}" --title "v$env:VERSION" --generate-notes

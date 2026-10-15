@@ -699,6 +699,18 @@ mod tests {
         let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 1, 2, 0xFF, 0xDA, 0x00, 0x02, 7, 8, 0xFF, 0xD9];
         assert_eq!(jpeg_end(&jpeg, 0), jpeg.len());
     }
+
+    #[test]
+    fn heic_photos_are_read_by_libheif() {
+        // (a made-up photo: red on the left, blue on the right)
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("Urlaub.heic");
+        let img = heif::load(&path, config::MIN_IMAGE_SIDE).unwrap().to_rgb8();
+        assert_eq!(img.dimensions(), (160, 120));
+        let (left, right) = (img.get_pixel(20, 60), img.get_pixel(140, 60));
+        assert!(left[0] > 180 && left[2] < 80, "{left:?}");
+        assert!(right[2] > 180 && right[0] < 80, "{right:?}");
+        assert_eq!(load_image(&path, 1024).unwrap().dimensions(), (160, 120));
+    }
 }
 
 /// HEIC photos (iPhones and others) through libheif (in vendor\libheif, when it's there).

@@ -99,6 +99,8 @@ pinned versions there. Tests: `cargo test --release -- --test-threads=1`.
 ## License
 
 [MIT](LICENSE). Model: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (Apache 2.0).
+The release zip also holds ONNX Runtime with DirectML, PDFium, and libheif with libde265 (LGPL 3.0);
+their licenses, and those of the crates built into the app, are in its `licenses` folder.
 
 <sub>Screenshots show made-up files. Photos: "flower.jpg" by vultilion and "china.jpg" by
 danielbuechele (CC BY 2.0), bundled with scikit-learn.</sub>

@@ -1,6 +1,7 @@
 /target/
 /vendor/
 /dist/
+/Quiekel-Embed-*.zip
 *.log
 
 # Never commit secrets or local settings
