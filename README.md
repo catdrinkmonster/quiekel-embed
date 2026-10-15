@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="src/quiekel_embed/static/pig-dark.svg">
-    <img src="src/quiekel_embed/static/pig.svg" width="96" alt="Quiekel, the pig">
+    <source media="(prefers-color-scheme: dark)" srcset="static/quiekel-dark.svg">
+    <img src="static/quiekel.svg" width="96" alt="Quiekel">
   </picture>
 </p>
 
@@ -11,89 +11,90 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/hero-dark.png">
-  <img src="docs/screenshots/hero-light.png" alt="A search for 'letter from my landlord about the rent' finds a German letter about a rent increase first">
+  <img src="docs/screenshots/hero-light.png" alt="A search for 'letter from my landlord about the rent' finds the landlord's letter about a rent increase, written in German, and the English lease">
 </picture>
 
-- Search by meaning and by keywords, in 100+ languages.
-- Documents, emails with attachments, text and code, photos by what they show, files in archives.
-- Runs on the graphics card or the processor. Files, index and searches stay on the PC.
-- Indexes in the background: slows down for busy apps, waits while a game runs.
+Add the folders you want to search, then describe what you're looking for. "Letter from my landlord
+about the rent" finds that letter even when it uses other words or is written in another language.
+Names, numbers and codes work too, and photos are found by what they show.
+
+Everything happens on your PC. Files are only read, never changed, and nothing about them leaves
+the computer.
 
 | Photos by what they show | Similar files on a map |
 |---|---|
-| <img src="docs/screenshots/photos.png" width="420" alt="An image search for 'flower' finds a dahlia photo named IMG_0412.jpg first"> | <img src="docs/screenshots/map.png" width="420" alt="The 3D map with a letter selected: its preview and its most similar files"> |
+| <img src="docs/screenshots/photos.png" width="420" alt="A picture search for 'flower' finds a dahlia photo named IMG_0412.jpg first"> | <img src="docs/screenshots/map.png" width="420" alt="The 3D map with a document selected: its preview and its most similar files"> |
 
 ## Install
 
-Windows 10 or 11, 64-bit. In PowerShell:
+Windows 10 or 11, 64-bit. Open PowerShell (not as administrator) and run:
 
 ```powershell
 irm https://github.com/catdrinkmonster/quiekel-embed/raw/main/install.ps1 | iex
 ```
 
-In Command Prompt:
+From Command Prompt:
 
 ```bat
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/catdrinkmonster/quiekel-embed/raw/main/install.ps1 | iex"
 ```
 
-Installs uv, the app and a desktop shortcut (about 300 MB; the model follows on first start, 0.5
-to 0.9 GB). Without Git, the app gets its own copy (MinGit) in its folder. No administrator rights
-needed: run it in a normal PowerShell window, and again to update. macOS and Linux are not
-supported.
+This puts the latest release in `%LOCALAPPDATA%\Programs\Quiekel Embed` (under 40 MB to download),
+adds Desktop and Start Menu shortcuts and opens the app. On its first start the app downloads the AI
+model, 0.5 to 0.9 GB. It shows new versions and what changed in them, and updates when you say so
+(or by itself, if you turn that on in Settings). Running the line over an older version replaces it;
+your folders and settings stay.
 
-The model runs with ONNX Runtime, in a process of its own at below-normal priority. The app looks
-at the PC once and picks a setup:
+## What it runs on
 
-| PC | The model runs on | Memory |
-|---|---|---|
-| A graphics card with 3 GB of its own or more | the graphics card (DirectML) | 0.6 GB, and 1.5 to 2.7 GB of the card's |
-| Built-in graphics or a smaller card, and 16 GB or more | the graphics, with the PC's memory; unloaded when not in use | about 3 GB |
-| Otherwise | the processor, half the cores (at most 8) | at most 1.5 GB |
-| Less than 12 GB, or fewer than 4 cores | the processor, at most 2 cores; unloaded when not in use | at most 1 GB |
+The model works in the background at low priority, so whatever else you're doing comes first. The
+app picks how it runs from what the PC has:
 
-Windows holds the model to that memory. If the graphics card fails, the processor takes over.
+| PC | The model runs on |
+|---|---|
+| A graphics card with 3 GB of its own or more | the graphics card |
+| Built-in graphics or a smaller card, and 16 GB of memory or more | the graphics, using the PC's memory |
+| Otherwise | the processor, with at most 1.5 GB of memory |
+| Less than 12 GB of memory, or fewer than 4 cores | the processor, with at most 2 cores and 1 GB, loaded only while needed |
 
-<details>
-<summary>Install by hand, or uninstall</summary>
+Any graphics card that runs DirectX 12 works; if it fails, the processor takes over. When the PC's
+memory runs low, indexing waits. The pause button, in the app and in the tray menu, pauses it.
 
-With [uv](https://docs.astral.sh/uv/) and [Git](https://git-scm.com/):
-
-```powershell
-git clone https://github.com/catdrinkmonster/quiekel-embed "$env:LOCALAPPDATA\Programs\Quiekel Embed"
-cd "$env:LOCALAPPDATA\Programs\Quiekel Embed"
-uv sync --locked
-uv run --no-sync quiekel-embed-shortcuts
-```
-
-Uninstall: quit from the tray icon, then
-
-```powershell
-cd "$env:LOCALAPPDATA\Programs\Quiekel Embed"; uv run --no-sync quiekel-embed-shortcuts --remove; cd ~
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\Quiekel Embed", "$env:LOCALAPPDATA\QuiekelEmbed"
-```
-
-The model stays in the Hugging Face cache (`~\.cache\huggingface`).
-</details>
-
-## File types
+## What it reads
 
 | | |
 |---|---|
-| Documents | PDF, Word, Excel, PowerPoint (also 97-2003, templates, macro files), LibreOffice and OpenOffice, RTF, EPUB and other e-books, XPS, Illustrator |
+| Documents | PDF, Word, Excel, PowerPoint (also 97-2003, templates and macro files), OpenDocument, RTF, EPUB |
 | Emails | Outlook (`.msg`) and standard (`.eml`) emails with their attachments, saved web pages (`.mht`) |
 | Text and code | 200+ types |
-| Pictures | JPEG, PNG, HEIC, WebP, AVIF, GIF, TIFF, SVG, PSD, camera raw, Krita |
-| Archives | ZIP, 7z, RAR, TAR, CAB, ISO, one level nested; 7z, RAR, CAB and ISO need Windows 11 23H2 or later |
-| Others | read as text when there's text inside |
+| Pictures | JPEG, PNG, HEIC, WebP, AVIF, GIF, TIFF, BMP, SVG, PSD, camera raw |
+| Archives | ZIP and TAR, also one inside another; 7z, RAR, CAB and ISO with Windows 11 (2023 update or later) |
+| Anything else | read as text when there's text inside |
 
-Settings → File types switches types off and covers hidden files, program folders and very big
-archives. A folder's ⓘ lists what wasn't searched, and why.
+Files are recognised by their content, not their name. Settings → File types switches kinds of files
+off. A folder's details list what wasn't searched, and why.
 
 ## Privacy
 
-Online only for the model download on first start and, if switched on, update checks. The index is
-in `%LOCALAPPDATA%\QuiekelEmbed`. Files are read, never changed.
+The app goes online to download the model once, to look for new versions on GitHub, and to download
+an update you install. The index is kept in `%LOCALAPPDATA%\QuiekelEmbed`.
+
+## Uninstall
+
+Quit from the tray icon, then in PowerShell:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Quiekel Embed\quiekel-embed.exe" --shortcuts --remove
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\Quiekel Embed", "$env:LOCALAPPDATA\QuiekelEmbed"
+```
+
+The model stays in the Hugging Face cache (`%USERPROFILE%\.cache\huggingface`).
+
+## Building
+
+Rust (stable, MSVC): `cargo build --release`. The app loads ONNX Runtime with DirectML, PDFium and
+libheif at run time, from its own folder or from `vendor\`; `.github\libraries.ps1` fetches the
+pinned versions there. Tests: `cargo test --release -- --test-threads=1`.
 
 ## License
 
