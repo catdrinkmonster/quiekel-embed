@@ -28,8 +28,7 @@ use crate::updater::{REPO_URL, Updater};
 const THEMES: [&str; 3] = ["auto", "light", "dark"];
 // Two files this close as a whole (their passages' means) are nearly the same file: a copy, another
 // format, a version. Copies under other names and folders measured 0.98-0.99 (the name is part of
-// what the model reads), different bills 0.80. Not calibrated yet: the duplicates work will set it on
-// the lab's sets.
+// what the model reads), different bills 0.80. Not calibrated yet: the duplicates work will set it.
 const NEAR_IDENTICAL: f32 = 0.96;
 const VIEWS: [&str; 3] = ["cards", "list", "grid"]; // results with passages, one line each, thumbnails
 // Opening these would run them (or, for .reg, change Windows): they open in an editor instead.
