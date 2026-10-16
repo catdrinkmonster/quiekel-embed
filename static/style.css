@@ -647,6 +647,62 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mc-foot { display: flex; align-items: center; gap: 6px; }
 .map-card .actions { margin: 0; justify-content: flex-start; }
 
+/* The map's views, at the bar's end like the search page's; the panel that explains them, on the
+   left (the same frame as the card on the right). */
+.map-views { margin-left: auto; }
+.map-explain {
+  position: absolute; top: 14px; left: 14px; width: 268px; max-height: calc(100% - 76px); overflow: auto; padding: 12px;
+  background: var(--card); border: 1px solid var(--border-strong); border-radius: 10px;
+}
+.mx-head { display: flex; align-items: center; gap: 8px; }
+.mx-head > svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
+.mx-head b { flex: 1; min-width: 0; color: var(--ink); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-head .chip-x { flex: none; color: var(--muted); }
+.mx-line { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text); }
+.mx-show {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-weight: 600; color: var(--muted); white-space: nowrap; vertical-align: baseline;
+}
+.mx-show:hover { color: var(--ink); text-decoration: underline; }
+.mx-show svg.i { width: 14px; height: 14px; align-self: center; }
+.mx-step { margin-top: 10px; font-size: 11px; font-weight: 700; color: var(--faint); }
+.mx-text { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--text); }
+.mx-visual { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 10px; }
+.mx-words { max-width: 100%; font-weight: 600; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
+.mx-print { display: block; border-radius: 4px; border: 1px solid var(--border); background: var(--well); image-rendering: pixelated; flex: none; }
+.mx-caption { font-size: 11px; color: var(--faint); text-align: center; }
+.mx-prints { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+.mx-arrow svg.i { width: 16px; height: 16px; color: var(--faint); display: block; }
+.mx-passages { align-self: stretch; display: flex; flex-direction: column; gap: 6px; }
+.mx-passage { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.4; color: var(--text); }
+.mx-passage > span {
+  min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.mx-passage em { font-style: normal; font-weight: 600; color: var(--muted); margin-right: 4px; }
+.mx-file { align-self: stretch; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mx-file svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
+.mx-file b { min-width: 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-dir { align-self: stretch; font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-thumb { display: block; max-width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; }
+.mx-thumb.small { max-height: 48px; }
+.mx-sample { align-self: stretch; padding: 8px 10px; border-radius: 6px; background: var(--well); border: 1px solid var(--border); }
+.mx-sample p {
+  margin: 0; font-size: 12px; line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden;
+}
+.mx-results { align-self: stretch; min-height: 0; margin-bottom: 0; }
+.mx-results .more-divider { margin: 4px 0; min-height: 22px; cursor: default; }
+.mx-open { align-self: flex-end; }
+.mx-result { cursor: default; }
+.mx-near { margin: 10px 0 0; }
+.mx-skel { width: 100%; height: 120px; }
+.mx-error { margin: 10px 0 0; font-size: 12px; color: var(--red); }
+.mx-nav { display: flex; align-items: center; gap: var(--gap); margin-top: 12px; }
+.mx-dots { flex: 1; display: flex; justify-content: center; gap: 6px; }
+.mx-dots button { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 50%; background: var(--border-strong); cursor: pointer; }
+.mx-dots button:hover { background: var(--faint); }
+.mx-dots button.on { background: var(--orange); }
+
 /* ---- folders ---- */
 /* The index at a glance: one number, one bar of the kinds of files, File types beside it. */
 .index-head { display: flex; align-items: flex-start; gap: var(--gap-group); margin-bottom: var(--gap-group); }
@@ -915,16 +971,21 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 
 /* ---- diagnostics: what the app uses, the last ten minutes ---- */
 .page-diagnostics { display: flex; flex-direction: column; gap: var(--gap-group); }
-.dg-strip { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; }
+.dg-strip { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; margin-bottom: var(--gap-group); }
 .dg-strip .chip { height: var(--ctl-sm); padding: 0 10px; border-color: var(--border); color: var(--muted); }
 .dg-headline { display: flex; align-items: baseline; gap: var(--gap); margin-right: var(--gap); }
 .dg-headline b { font-size: 28px; font-weight: 700; color: var(--ink); }
 .dg-headline span { color: var(--muted); font-size: 13px; }
 .dg-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .dg-chart { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
-.dg-title { font-size: 12px; font-weight: 600; color: var(--muted); }
+.dg-title { display: flex; align-items: baseline; gap: var(--gap); font-size: 12px; font-weight: 600; color: var(--muted); }
 .dg-svg { width: 100%; height: 80px; display: block; }
 .dg-svg polyline { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.dg-svg .dg-grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+/* A chart's top value, beside its title: small, muted. */
+.dg-top { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
+.dg-kinds { padding-top: 6px; border-top: 1px solid var(--border); }
+.dg-strip .stat.chip svg.i { color: var(--faint); }
 .dg-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
 .dg-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .dg-legend i { width: 8px; height: 8px; border-radius: 2px; }

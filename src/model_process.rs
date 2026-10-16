@@ -614,7 +614,7 @@ impl ModelProcess {
         self.dead.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Its memory (working set), as Task Manager shows it.
+    /// Its memory, as Task Manager shows it.
     pub fn memory_mb(&self) -> f64 {
         if !self.alive() {
             return 0.0;
@@ -633,16 +633,19 @@ impl Drop for ModelProcess {
     }
 }
 
-/// A process's working set in MB (0 if it can't be read).
+/// A process's memory in MB as Task Manager shows it: what it holds in memory of its own (its
+/// private working set; the whole working set where Windows doesn't tell that). 0 if it can't be
+/// read.
 pub fn process_memory_mb(pid: u32) -> f64 {
-    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX2};
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     unsafe {
         let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return 0.0 };
-        let mut c = PROCESS_MEMORY_COUNTERS { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32, ..Default::default() };
-        let ok = GetProcessMemoryInfo(h, &mut c, c.cb).is_ok();
+        let mut c = PROCESS_MEMORY_COUNTERS_EX2 { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32, ..Default::default() };
+        let ok = GetProcessMemoryInfo(h, &mut c as *mut PROCESS_MEMORY_COUNTERS_EX2 as *mut PROCESS_MEMORY_COUNTERS, c.cb).is_ok();
         let _ = windows::Win32::Foundation::CloseHandle(h);
-        if ok { c.WorkingSetSize as f64 / 1e6 } else { 0.0 }
+        let bytes = if c.PrivateWorkingSetSize > 0 { c.PrivateWorkingSetSize } else { c.WorkingSetSize };
+        if ok { bytes as f64 / 1e6 } else { 0.0 }
     }
 }
 

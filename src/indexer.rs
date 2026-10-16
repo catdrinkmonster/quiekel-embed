@@ -48,12 +48,15 @@ type Found = (String, i64, f64);
 struct Pipeline {
     read_us: AtomicU64,
     files: AtomicU64,
+    kinds: [AtomicU64; 4], // files read, by kind: KINDS
     wait_us: AtomicU64,
     embed_us: AtomicU64,
     texts: AtomicU64,
     pictures: AtomicU64,
     save_us: AtomicU64,
 }
+
+const KINDS: [&str; 4] = ["doc", "text", "code", "image"];
 
 fn add_time(counter: &AtomicU64, since: Instant) {
     counter.fetch_add(since.elapsed().as_micros() as u64, Ordering::Relaxed);
@@ -543,6 +546,7 @@ impl Indexer {
         p.insert("pipeline".into(), json!({
             "read_ms": ms(&t.read_us), "files": n(&t.files), "wait_ms": ms(&t.wait_us), "embed_ms": ms(&t.embed_us),
             "texts": n(&t.texts), "pictures": n(&t.pictures), "save_ms": ms(&t.save_us), "readers": self.readers(),
+            "kinds": KINDS.iter().zip(&t.kinds).map(|(k, c)| (k.to_string(), json!(n(c)))).collect::<Map<String, Value>>(),
         }));
         p
     }
@@ -1246,6 +1250,9 @@ impl Indexer {
             });
         add_time(&self.pipeline.read_us, reading);
         self.pipeline.files.fetch_add(1, Ordering::Relaxed);
+        if let Some(k) = KINDS.iter().position(|k| *k == item.0.kind) {
+            self.pipeline.kinds[k].fetch_add(1, Ordering::Relaxed);
+        }
         self.governor.pace(&|| stop.load(Ordering::SeqCst) || self.is_paused(), None); // (memory running out)
         let mut item = Some(item);
         while !stop.load(Ordering::SeqCst) {
