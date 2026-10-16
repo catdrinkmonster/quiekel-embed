@@ -67,6 +67,7 @@ pub struct Chunk {
     pub snippet: String,              // shown in search results
     pub text: Option<String>,         // embedded as a document passage
     pub image: Option<RgbImage>,      // embedded as an image
+    pub page: Option<u32>,            // the page it starts on (PDFs), from 1
 }
 
 pub struct Extracted {
@@ -303,7 +304,7 @@ pub fn extract(path: &Path, size: u64, title: Option<&str>, kind: Option<&str>) 
             }
             Err(e) => return Err(e),
         };
-        return Ok(Extracted { kind, chunks: vec![Chunk { snippet: String::new(), text: None, image: Some(image) }] });
+        return Ok(Extracted { kind, chunks: vec![Chunk { snippet: String::new(), text: None, image: Some(image), page: None }] });
     }
     let text = if kind == "doc" {
         let (text, pages) = read_document(path)?;
@@ -311,7 +312,7 @@ pub fn extract(path: &Path, size: u64, title: Option<&str>, kind: Option<&str>) 
             let chunks = pages
                 .into_iter()
                 .enumerate()
-                .map(|(i, img)| Chunk { snippet: format!("Page {} (scanned)", i + 1), text: None, image: Some(img) })
+                .map(|(i, img)| Chunk { snippet: format!("Page {} (scanned)", i + 1), text: None, image: Some(img), page: Some(i as u32 + 1) })
                 .collect();
             return Ok(Extracted { kind, chunks });
         }
@@ -327,9 +328,9 @@ pub fn extract(path: &Path, size: u64, title: Option<&str>, kind: Option<&str>) 
         }
     };
     let title = title.map(str::to_string).unwrap_or(name);
-    let chunks: Vec<Chunk> = chunk_text(&text)
+    let chunks: Vec<Chunk> = chunk_pages(&text)
         .into_iter()
-        .map(|c| Chunk { text: Some(format!("title: {title} | text: {c}")), snippet: c, image: None })
+        .map(|(c, page)| Chunk { text: Some(format!("title: {title} | text: {c}")), snippet: c, image: None, page })
         .collect();
     if chunks.is_empty() {
         return Err(ReadError::Skip("no_text"));
@@ -524,12 +525,33 @@ fn rfind(window: &[char], sep: &[char]) -> Option<usize> {
 }
 
 pub fn chunk_text(text: &str) -> Vec<String> {
-    chunks_of(&tidy(text))
+    chunks_of(&tidy(text)).into_iter().map(|(_, c)| c).collect()
 }
 
-/// Passages of a tidied text: windows of CHUNK_CHARS, each ending at the strongest boundary in
-/// its back half, overlapping by CHUNK_OVERLAP.
-fn chunks_of(text: &[char]) -> Vec<String> {
+/// Passages with the page each starts on, for a text that marks where its pages start
+/// (paged::PAGE_MARK, as a PDF's text does); without marks, no pages. The marks leave the passages.
+pub fn chunk_pages(text: &str) -> Vec<(String, Option<u32>)> {
+    use crate::paged::PAGE_MARK;
+    let tidied = tidy(text);
+    if !tidied.contains(&PAGE_MARK) {
+        return chunks_of(&tidied).into_iter().map(|(_, c)| (c, None)).collect();
+    }
+    let mut out = Vec::new();
+    for (start, chunk) in chunks_of(&tidied) {
+        // (a passage that starts on a page's mark is on that page)
+        let page = tidied[..=start.min(tidied.len() - 1)].iter().filter(|&&c| c == PAGE_MARK).count().max(1) as u32;
+        let chunk: String = chunk.chars().filter(|&c| c != PAGE_MARK).collect();
+        let chunk = chunk.trim();
+        if !chunk.is_empty() {
+            out.push((chunk.to_string(), Some(page)));
+        }
+    }
+    out
+}
+
+/// Passages of a tidied text, each with where it starts: windows of CHUNK_CHARS, each ending at
+/// the strongest boundary in its back half, overlapping by CHUNK_OVERLAP.
+fn chunks_of(text: &[char]) -> Vec<(usize, String)> {
     if text.is_empty() {
         return vec![];
     }
@@ -554,7 +576,7 @@ fn chunks_of(text: &[char]) -> Vec<String> {
         }
         let chunk = strip_chars(&text[start..end]);
         if !chunk.is_empty() {
-            chunks.push(chunk.iter().collect());
+            chunks.push((start, chunk.iter().collect()));
         }
         if end >= n {
             break;
@@ -648,7 +670,7 @@ mod tests {
         // Longer than the passages can reach: the same passages as from the whole text.
         let long: String = (0..700_000).map(|_| pieces[next(pieces.len())].as_str()).collect();
         assert!(long.chars().count() > 2 * config::MAX_CHUNKS_PER_FILE * config::CHUNK_CHARS);
-        let all = chunks_of(&tidy_reference(&long));
+        let all: Vec<String> = chunks_of(&tidy_reference(&long)).into_iter().map(|(_, c)| c).collect();
         assert_eq!(all.len(), config::MAX_CHUNKS_PER_FILE);
         assert_eq!(chunk_text(&long), all);
     }
@@ -656,6 +678,21 @@ mod tests {
     #[test]
     fn short_text_is_one_chunk() {
         assert_eq!(chunk_text("  Hello   world  \r\n\r\n\r\n\r\nBye\t "), vec!["Hello world\n\nBye"]);
+    }
+
+    #[test]
+    fn passages_know_the_page_they_start_on() {
+        use crate::paged::PAGE_MARK;
+        // Three pages as a PDF's text marks them; the passages are cut as without the marks.
+        let page = |w: &str| format!("{PAGE_MARK}{}\n", format!("{w} ").repeat(300).trim_end());
+        let text = [page("eins"), page("zwei"), page("drei")].join("\n\n");
+        let passages = chunk_pages(&text);
+        assert!(passages.len() >= 3);
+        assert!(passages.iter().all(|(c, _)| !c.contains(PAGE_MARK)));
+        let first_page_of = |w: &str| passages.iter().find(|(c, _)| c.starts_with(w)).and_then(|(_, p)| *p);
+        assert_eq!((first_page_of("eins"), first_page_of("zwei"), first_page_of("drei")), (Some(1), Some(2), Some(3)));
+        // Text without marks (any other document): no pages, the same passages as before.
+        assert_eq!(chunk_pages("Hello world"), vec![("Hello world".to_string(), None)]);
     }
 
     #[test]

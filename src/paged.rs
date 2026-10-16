@@ -18,6 +18,9 @@ use crate::pictures;
 
 /// Files that can be shown as a picture of their first page (and, by content, any PDF).
 pub const PREVIEW_EXTS: [&str; 2] = crate::extract::PAGED_EXTS;
+/// Where each page starts in a PDF's text, so passages know their page (extract::chunk_pages): a
+/// character from the private use area, which the cleaned text never holds.
+pub const PAGE_MARK: char = '\u{e000}';
 const MAX_PART_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A book's text by page (or chapter), and where its pictures are, first ones first.
@@ -79,10 +82,18 @@ pub fn read_paged(path: &Path) -> ReadResult<(String, Vec<RgbImage>)> {
 
 /// The first page as a picture, `size` pixels on its longer side (for previews).
 pub fn first_page(path: &Path, size: u32) -> ReadResult<RgbImage> {
+    page_picture(path, 1, size)
+}
+
+/// A page as a picture (from 1; past the last, the last), `size` pixels on its longer side. A book
+/// shows its first page.
+pub fn page_picture(path: &Path, number: u32, size: u32) -> ReadResult<RgbImage> {
     if is_pdf(path) || suffix(&path.to_string_lossy()) == ".pdf" {
         let (_one, pdfium) = pdfium()?; // (dropped last, after the document)
         let doc = open_pdf(pdfium, path)?;
-        let page = doc.pages().get(0).map_err(|_| ReadError::Skip("nothing_to_show"))?;
+        let pages = doc.pages();
+        let index = (number.max(1) - 1).min((pages.len() as u32).saturating_sub(1)) as u16;
+        let page = pages.get(index).map_err(|_| ReadError::Skip("nothing_to_show"))?;
         let zoom = size as f64 / (page.width().value.max(page.height().value) as f64).max(1.0);
         return render(&page, zoom);
     }
@@ -158,6 +169,7 @@ fn read_pdf(path: &Path) -> ReadResult<(String, Vec<RgbImage>)> {
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }
+        text.insert(0, PAGE_MARK); // (where this page starts)
         total += text.chars().count();
         parts.push(text);
         if total > MAX_CHARS {

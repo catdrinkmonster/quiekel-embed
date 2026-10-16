@@ -1152,6 +1152,16 @@ fn temp_dir(prefix: &str) -> io::Result<PathBuf> {
     }
 }
 
+/// Bytes as a file of that name, in a temp folder that goes with the returned value (a file
+/// dropped on the window or pasted, to be read like any other).
+pub fn temp_copy(name: &str, data: &[u8]) -> io::Result<Extracted> {
+    let dir = temp_dir("quiekel-rs-")?;
+    let file = dir.join(crate::config::file_name(name));
+    let out = Extracted { dir, file };
+    std::fs::write(&out.file, data)?;
+    Ok(out)
+}
+
 pub fn extracted(path: &str, limit: u64) -> Result<Extracted> {
     let data = read(path, limit)?;
     let dir = temp_dir("quiekel-rs-")?;

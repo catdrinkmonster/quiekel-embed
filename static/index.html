@@ -48,10 +48,6 @@
           <button type="button" data-kind="images" data-icon="image"></button>
         </div>
         <div class="scope" id="scope-search"></div>
-        <div class="chip" id="similar-chip" hidden>
-          <span data-icon="similar"></span><span class="chip-name" id="similar-name"></span>
-          <button type="button" class="chip-x" id="similar-clear" data-icon="close" data-i18n-tip="search.back"></button>
-        </div>
         <div class="toolbar-end">
           <span class="hint-icon" id="notice" data-icon="timer" hidden></span>
           <button type="button" class="tool-btn" id="sort-btn" data-icon="sort" aria-haspopup="menu"></button>
@@ -200,8 +196,9 @@
   <button class="lb-btn" id="lb-prev" data-icon="chevronLeft" data-i18n-tip="common.previous"></button>
   <figure>
     <img id="lb-img" alt="">
+    <div class="lb-text" id="lb-text" hidden></div>
     <figcaption>
-      <div class="lb-name" id="lb-name"></div>
+      <div class="lb-title"><span class="lb-name" id="lb-name"></span><span class="lb-page" id="lb-page"></span></div>
       <div class="actions" id="lb-actions"></div>
     </figcaption>
   </figure>
@@ -278,6 +275,7 @@
 </div>
 
 
+<div class="drop-veil" id="drop-veil" hidden><div class="drop-box"><span data-icon="similar"></span><span data-i18n="search.drop"></span></div></div>
 <div class="menu" id="scope-menu" hidden></div>
 <div class="menu sort-menu" id="sort-menu" role="menu" hidden></div>
 <div class="menu ctx" id="ctx-menu" role="menu" hidden></div>

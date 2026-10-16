@@ -77,12 +77,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 );
 -- How many passages hold each word (read from the keyword index itself; nothing is stored).
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vocab USING fts5vocab(chunks_fts, 'row');
--- The passages' vectors (EMBED_DIM float32 each), id as in chunks_fts.
+-- The passages' vectors (EMBED_DIM float32 each), id as in chunks_fts; page: the page a passage
+-- starts on, where the file has pages (added in 1.2: see add_columns).
 CREATE TABLE IF NOT EXISTS vectors (
     id INTEGER PRIMARY KEY,
     folder_id INTEGER NOT NULL,
     kind INTEGER NOT NULL,
-    vector BLOB NOT NULL
+    vector BLOB NOT NULL,
+    page INTEGER
 );
 CREATE INDEX IF NOT EXISTS vectors_folder ON vectors(folder_id);
 ";
@@ -104,6 +106,32 @@ pub fn kind_code(kind: &str) -> i8 {
 
 fn now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// The last part of a path.
+fn split_last(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+/// What a folder in a folder list is, when it's a file the app looks into: "archive" or "mail".
+fn dir_kind(name: &str) -> Option<&'static str> {
+    match crate::archive::container_type(name)? {
+        "mail" => Some("mail"),
+        _ => Some("archive"),
+    }
+}
+
+/// Columns newer versions added to tables an older version made (SQLite has no ADD COLUMN IF NOT
+/// EXISTS): files indexed before simply have none there.
+fn add_columns(db: &Connection) -> Result<()> {
+    let has = |table: &str, column: &str| -> rusqlite::Result<bool> {
+        db.query_row(&format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?"), [column], |r| r.get::<_, i64>(0))
+            .map(|n| n > 0)
+    };
+    if !has("vectors", "page")? {
+        db.execute_batch("ALTER TABLE vectors ADD COLUMN page INTEGER")?;
+    }
+    Ok(())
 }
 
 fn fts_range(file_id: i64) -> (i64, i64) {
@@ -329,6 +357,7 @@ pub struct VectorRow {
     pub kind: String,
     pub text: String,
     pub vector: Vec<f32>,
+    pub page: Option<i64>, // the page the passage starts on, where the file has pages
 }
 
 // ---- vectors in memory -------------------------------------------------------------------------
@@ -546,6 +575,7 @@ impl Store {
         db.pragma_update(None, "synchronous", "NORMAL")?;
         db.pragma_update(None, "foreign_keys", "ON")?;
         db.execute_batch(SCHEMA)?;
+        add_columns(&db)?;
         let reader = Connection::open(path)?;
         reader.busy_timeout(std::time::Duration::from_secs(30))?;
         reader.pragma_update(None, "query_only", "ON")?;
@@ -1015,6 +1045,54 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// PDFs indexed before passages knew their page (rows without one), a few at a time: (id, path,
+    /// passages). Not those inside archives or emails (Indexer::backfill_pages gives them 0).
+    pub fn pdfs_without_pages(&self, limit: usize) -> Vec<(i64, String, i64)> {
+        let db = self.db.lock();
+        let sql = format!(
+            "SELECT f.id, f.path, f.chunks FROM files f WHERE f.status = 'indexed' AND f.kind = 'doc' AND f.chunks > 0
+               AND lower(f.path) LIKE '%.pdf'
+               AND EXISTS (SELECT 1 FROM vectors v WHERE v.id BETWEEN (f.id << {FTS_SHIFT}) AND ((f.id << {FTS_SHIFT}) | {CHUNK_MASK})
+                           AND v.page IS NULL)
+             LIMIT ?"
+        );
+        db.prepare(&sql)
+            .and_then(|mut st| st.query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect())
+            .unwrap_or_default()
+    }
+
+    /// A file's passages' pages, in passage order (0: not known, so it isn't asked for again).
+    pub fn set_pages(&self, file_id: i64, pages: &[i64]) -> Result<()> {
+        let mut db = self.db.lock();
+        let tx = db.transaction()?;
+        {
+            let mut st = tx.prepare_cached("UPDATE vectors SET page = ? WHERE id = ?")?;
+            for (chunk, page) in pages.iter().enumerate() {
+                st.execute(params![page, (file_id << FTS_SHIFT) | chunk as i64])?;
+            }
+            // (passages past the ones given, if any: not known either)
+            let (lo, hi) = fts_range(file_id);
+            tx.execute("UPDATE vectors SET page = 0 WHERE id BETWEEN ? AND ? AND page IS NULL", [lo, hi])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The page each passage starts on (keys: file_id << FTS_SHIFT | chunk), where it's known.
+    pub fn pages(&self, keys: &[i64]) -> HashMap<i64, i64> {
+        let mut out = HashMap::new();
+        let db = self.reader.lock();
+        for part in keys.chunks(500) {
+            let sql = format!("SELECT id, page FROM vectors WHERE page > 0 AND id IN ({})", ids_sql(part));
+            if let Ok(mut st) = db.prepare(&sql) {
+                if let Ok(rows) = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))) {
+                    out.extend(rows.flatten());
+                }
+            }
+        }
+        out
+    }
+
     pub fn files_by_ids(&self, ids: &[i64]) -> HashMap<i64, FileRecord> {
         let mut out = HashMap::new();
         if ids.is_empty() {
@@ -1207,13 +1285,13 @@ impl Store {
         }
         let (mut b_ids, mut b_chunks, mut b_kinds, mut b_folders, mut b_vecs) = (vec![], vec![], vec![], vec![], vec![]);
         {
-            let mut vec_insert = tx.prepare("INSERT OR REPLACE INTO vectors (id, folder_id, kind, vector) VALUES (?, ?, ?, ?)")?;
+            let mut vec_insert = tx.prepare("INSERT OR REPLACE INTO vectors (id, folder_id, kind, vector, page) VALUES (?, ?, ?, ?, ?)")?;
             let mut fts = tx.prepare("INSERT INTO chunks_fts (rowid, name, text) VALUES (?, ?, ?)")?;
             for r in &vector_rows {
                 let Some(&file_id) = ids.get(&r.path) else { continue };
                 let key = (file_id << FTS_SHIFT) | r.chunk;
                 let kind = kind_code(&r.kind);
-                vec_insert.execute(params![key, r.folder_id, kind as i64, to_blob(&r.vector)])?;
+                vec_insert.execute(params![key, r.folder_id, kind as i64, to_blob(&r.vector), r.page])?;
                 let name = if r.chunk == 0 { names.get(&r.path).cloned().unwrap_or_default() } else { String::new() };
                 fts.execute(params![key, name, r.text])?;
                 b_ids.push(file_id);
@@ -1510,7 +1588,52 @@ impl Store {
         }
         let mut list: Vec<(&str, i64)> = counts.into_iter().collect();
         list.sort_by_cached_key(|(name, _)| name.to_lowercase());
-        list.into_iter().map(|(name, count)| json!({"path": format!("{prefix}{name}"), "name": name, "count": count})).collect()
+        list.into_iter()
+            .map(|(name, count)| json!({"path": format!("{prefix}{name}"), "name": name, "count": count, "kind": dir_kind(name)}))
+            .collect()
+    }
+
+    /// Folders anywhere in the indexed ones whose name holds `text` (any case): the best `limit`,
+    /// names that start with it first, then by how many files they hold.
+    pub fn find_dirs(&self, text: &str, limit: usize) -> Vec<Value> {
+        let needle = text.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let roots: Vec<String> = self.folders().into_iter().map(|f| f.path.trim_end_matches(['\\', '/']).to_string()).collect();
+        let db = self.reader.lock();
+        let rows: Vec<String> = db
+            .prepare_cached("SELECT path FROM files WHERE status IN ('indexed', 'pending')")
+            .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+            .unwrap_or_default();
+        drop(db);
+        let mut counts: HashMap<String, i64> = HashMap::new();
+        for p in &rows {
+            let under = |r: &&String| p.get(..r.len()).is_some_and(|h| h.eq_ignore_ascii_case(r)) && p.as_bytes().get(r.len()) == Some(&b'\\');
+            let Some(root) = roots.iter().find(under) else { continue };
+            // Each folder between the root and the file (not the root, not the file).
+            let rest = &p[root.len()..];
+            let mut end = 0;
+            for (i, c) in rest.char_indices().skip(1) {
+                if c == '\\' {
+                    let dir = &rest[end + 1..i];
+                    if dir.to_lowercase().contains(&needle) {
+                        *counts.entry(format!("{root}{}", &rest[..i])).or_insert(0) += 1;
+                    }
+                    end = i;
+                }
+            }
+        }
+        let mut list: Vec<(String, i64)> = counts.into_iter().collect();
+        let starts = |path: &str| !split_last(path).to_lowercase().starts_with(&needle);
+        list.sort_by(|a, b| starts(&a.0).cmp(&starts(&b.0)).then(b.1.cmp(&a.1)).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+        list.into_iter()
+            .take(limit)
+            .map(|(path, count)| {
+                let name = split_last(&path).to_string();
+                json!({"path": path, "kind": dir_kind(&name), "name": name, "count": count})
+            })
+            .collect()
     }
 
     /// Each file's best cosine similarity to `vector`, over its chunks.
@@ -1625,7 +1748,7 @@ mod tests {
             chunks: 1, error: None, search_name: "rent contract".into(),
         };
         let row = |p: &str, i: usize, text: &str| VectorRow {
-            path: p.into(), folder_id: folder, chunk: 0, kind: "text".into(), text: text.into(), vector: unit(i),
+            path: p.into(), folder_id: folder, chunk: 0, kind: "text".into(), text: text.into(), vector: unit(i), page: None,
         };
         s.save_files(&[entry(r"C:\docs\a.txt"), entry(r"C:\docs\b.txt")],
                      &[row(r"C:\docs\a.txt", 0, "rent is due"), row(r"C:\docs\b.txt", 1, "holiday photos")]).unwrap();
@@ -1662,7 +1785,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, t)| VectorRow {
-                path: path.into(), folder_id, chunk: i as i64, kind: kind.into(), text: t.to_string(), vector: vec![1.0; EMBED_DIM],
+                path: path.into(), folder_id, chunk: i as i64, kind: kind.into(), text: t.to_string(), vector: vec![1.0; EMBED_DIM], page: None,
             })
             .collect();
         s.save_files(&[entry], &rows).unwrap();
@@ -1695,7 +1818,7 @@ mod tests {
         let rows: Vec<VectorRow> = vectors
             .into_iter()
             .enumerate()
-            .map(|(i, v)| VectorRow { path: path.into(), folder_id, chunk: i as i64, kind: kind.into(), text: format!("{path} #{i}"), vector: v })
+            .map(|(i, v)| VectorRow { path: path.into(), folder_id, chunk: i as i64, kind: kind.into(), text: format!("{path} #{i}"), vector: v, page: None })
             .collect();
         s.save_files(&[entry], &rows).unwrap();
     }
@@ -1984,6 +2107,46 @@ mod tests {
         assert_eq!(s.common_terms(&terms(&["rent", "holiday"]), false), HashSet::from(["rent".to_string()]));
         assert_eq!(s.common_terms(&terms(&["holiday", "ren"]), true), HashSet::from(["ren".to_string()])); // (as the start of "rent")
         assert!(s.common_terms(&terms(&["holi"]), true).is_empty());
+        drop(s);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn folders_are_found_by_their_name_anywhere() {
+        let (s, dir) = store();
+        let fid = s.add_folder(r"C:\docs").unwrap();
+        for p in [r"C:\docs\Urlaub 2024\a.jpg", r"C:\docs\Urlaub 2024\b.jpg", r"C:\docs\Fotos\urlaub\c.jpg",
+                  r"C:\docs\Bergurlaub.zip\d.jpg", r"C:\docs\Arbeit\e.txt", r"C:\docs\urlaub.txt"] {
+            save(&s, fid, p, "text", &["x"], "n");
+        }
+        let found = s.find_dirs("URLAUB", 10);
+        let names: Vec<(&str, i64)> = found.iter().map(|d| (d["name"].as_str().unwrap(), d["count"].as_i64().unwrap())).collect();
+        // Names that start with it first, then by size; files and the indexed folder itself aren't folders.
+        assert_eq!(names, [("Urlaub 2024", 2), ("urlaub", 1), ("Bergurlaub.zip", 1)]);
+        assert_eq!(found[1]["path"], r"C:\docs\Fotos\urlaub");
+        assert_eq!((found[0]["kind"].clone(), found[2]["kind"].clone()), (json!(null), json!("archive")));
+        assert!(s.find_dirs("  ", 10).is_empty());
+        drop(s);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pdfs_indexed_before_pages_get_them_once() {
+        let (s, dir) = store();
+        let fid = s.add_folder(r"C:\docs").unwrap();
+        save(&s, fid, r"C:\docs\old.pdf", "doc", &["one", "two", "three"], "old.pdf");
+        save(&s, fid, r"C:\docs\notes.txt", "text", &["text"], "notes.txt"); // (not a PDF)
+        let todo = s.pdfs_without_pages(10);
+        assert_eq!(todo.iter().map(|t| (t.1.as_str(), t.2)).collect::<Vec<_>>(), [(r"C:\docs\old.pdf", 3)]);
+        let id = todo[0].0;
+        s.set_pages(id, &[1, 1, 2]).unwrap();
+        assert!(s.pdfs_without_pages(10).is_empty());
+        let key = |chunk: i64| (id << FTS_SHIFT) | chunk;
+        let pages = s.pages(&[key(0), key(1), key(2)]);
+        assert_eq!((pages[&key(0)], pages[&key(2)]), (1, 2));
+        // Not known (0): not shown, and not asked for again.
+        s.set_pages(id, &[0, 0, 0]).unwrap();
+        assert!(s.pages(&[key(0)]).is_empty() && s.pdfs_without_pages(10).is_empty());
         drop(s);
         let _ = std::fs::remove_dir_all(dir);
     }
