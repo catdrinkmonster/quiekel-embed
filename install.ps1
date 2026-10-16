@@ -30,7 +30,8 @@
 
     Step "Looking for the latest release..."
     $headers = @{ "Accept" = "application/vnd.github+json"; "User-Agent" = "quiekel-embed-installer" }
-    $releases = @(Invoke-RestMethod -Uri $api -Headers $headers)
+    # (Windows PowerShell hands the whole list over as one item: unrolled into the releases.)
+    $releases = @(Invoke-RestMethod -Uri $api -Headers $headers | ForEach-Object { $_ })
     $zipOf = { param($r) @($r.assets) | Where-Object { $_.name -like "*-windows-x64.zip" -and "$($_.digest)" -like "sha256:*" } | Select-Object -First 1 }
     $release = $releases |
         Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v\d+\.\d+\.\d+$' -and (& $zipOf $_) } |
