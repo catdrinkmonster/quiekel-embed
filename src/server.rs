@@ -269,6 +269,14 @@ type Query = HashMap<String, String>;
 
 /// A request that doesn't fit (a body, number or field the API can't read): 422 with the reason.
 /// The model couldn't do it (busy, out of memory): try again in a moment.
+/// A file's passages the map's Indexing view shows, at most.
+const MAP_PASSAGES: usize = 8;
+
+/// A vector to send: 3 decimals are plenty to draw it.
+fn rounded(v: &[f32]) -> Vec<f64> {
+    v.iter().map(|x| (*x as f64 * 1000.0).round() / 1000.0).collect()
+}
+
 fn model_failed(e: crate::embedder::EmbedError) -> ApiError {
     log::info!("Comparing a file failed: {e}");
     fail(503, "model_busy", json!({}))
@@ -548,6 +556,7 @@ impl Server {
             return Ok(json_reply(&json!({"results": [], "semantic": e.ready()})));
         }
         self.b.indexer.wake_model(); // if it went to sleep; this search uses keywords meanwhile
+        let started = std::time::Instant::now();
         let query_vec = if e.ready() {
             match e.query(&text) {
                 Ok(v) => Some(v),
@@ -559,6 +568,7 @@ impl Server {
         } else {
             None
         };
+        let model_ms = started.elapsed().as_secs_f64() * 1000.0;
         let hits = match &query_vec {
             Some(v) => self.vector_hits(v, limit * 6, kind, folder, under),
             None => Vec::new(),
@@ -581,6 +591,7 @@ impl Server {
         let likely = flags.iter().filter(|x| **x).count();
         let (top, rest): (Vec<(Value, bool)>, Vec<(Value, bool)>) = items.into_iter().zip(flags).partition(|(_, f)| *f);
         let items: Vec<Value> = top.into_iter().chain(rest).map(|(v, _)| v).collect();
+        self.b.diagnostics.note_search(started.elapsed().as_secs_f64() * 1000.0, model_ms);
         Ok(json_reply(&json!({"results": items, "likely": likely, "semantic": e.ready()})))
     }
 
@@ -853,7 +864,7 @@ impl Server {
                 Ok(r)
             }
             ["api", "status"] if get => Ok(json_reply(&self.status())),
-            ["api", "diagnostics"] if get => Ok(json_reply(&b.diagnostics.view(&b.embedder))),
+            ["api", "diagnostics"] if get => Ok(json_reply(&b.diagnostics.view(&b.embedder, &b.store))),
             ["api", "settings"] if post => self.update_settings(body_json(body)?),
             ["api", "update", "check"] if post => {
                 b.updater.check();
@@ -1064,6 +1075,36 @@ impl Server {
                 let v = self.mean_vector(path_int("file_id", id)?)?;
                 Ok(json_reply(&b.maps.related(&v)))
             }
+            // How a file came to its dot: its passages, each one's numbers, and their mean.
+            ["api", "map", "passages", id] if get => {
+                let id = path_int("file_id", id)?;
+                let Some(f) = b.store.file(id) else { return Err(fail(404, "file_not_found", json!({}))) };
+                let mean = self.mean_vector(id)?;
+                let (dir, name) = split_path(&f.path);
+                let passages: Vec<Value> = b
+                    .store
+                    .file_passages(id, MAP_PASSAGES)
+                    .into_iter()
+                    .map(|(n, text, page, v)| json!({"n": n, "text": text.chars().take(320).collect::<String>(), "page": page, "vector": rounded(&v)}))
+                    .collect();
+                Ok(json_reply(&json!({
+                    "file": {"id": id, "name": name, "dir": dir, "kind": f.kind, "size": f.size, "mtime": f.mtime,
+                             "preview": has_preview(&f.path, &f.kind)},
+                    "count": f.chunks, "passages": passages, "mean": rounded(&mean),
+                })))
+            }
+            // How a search sees the map: the words' numbers, how like them every dot is, and where
+            // they'd sit.
+            ["api", "map", "query"] if get => {
+                let text = q.get("q").map(|s| s.trim()).filter(|s| !s.is_empty()).ok_or_else(|| unreadable("q: missing"))?;
+                let e = &b.embedder;
+                if !e.ready() {
+                    b.indexer.wake_model();
+                    return Err(fail(503, "model_waking", json!({})));
+                }
+                let v = e.query(text).map_err(model_failed)?;
+                Ok(json_reply(&json!({"vector": rounded(&v), "sims": b.maps.related(&v), "spot": b.maps.spot(&v)})))
+            }
             ["api", "map", "dimension", index] if get => {
                 let index = path_int("index", index)?;
                 if !(0..EMBED_DIM as i64).contains(&index) {
@@ -1104,7 +1145,8 @@ fn known_path(parts: &[&str]) -> bool {
             | ["api", "folders", _]
             | ["api", "folders", _, "rescan" | "pause" | "resume" | "watch" | "errors" | "details" | "reveal" | "leave-out" | "locate"]
             | ["api", "folders", _, "errors", "seen"]
-            | ["api", "map", "vector" | "related" | "dimension", _]
+            | ["api", "map", "vector" | "related" | "dimension" | "passages", _]
+            | ["api", "map", "query"]
             | ["api", "similar" | "thumb" | "preview" | "open" | "reveal", _]
     )
 }
@@ -1743,5 +1785,29 @@ mod tests {
         let photo = c.get(&format!("/api/map/vector/{}", ids["IMG_1.jpg"])).json()["file"].clone();
         assert!(photo["preview"] == true && photo["passage"] == "");
         assert_eq!(c.get("/api/map/vector/999").status, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn the_indexing_walk_gets_a_files_passages_and_their_mean() {
+        let c = client();
+        let store = &c.b().store;
+        let folder = store.add_folder(r"C:\data").unwrap();
+        let path = r"C:\data\notes.txt";
+        let unit = |k: usize| (0..EMBED_DIM).map(|j| if j == k { 1.0 } else { 0.0 }).collect::<Vec<f32>>();
+        let rows: Vec<VectorRow> =
+            ["first passage", "second passage"].iter().enumerate().map(|(i, t)| row(folder, path, i as i64, "text", t, unit(i))).collect();
+        store.save_files(&[entry(folder, path, "text", "indexed", 2, None)], &rows).unwrap();
+        let id = store.signature(path).unwrap().0;
+        let d = c.get(&format!("/api/map/passages/{id}")).json();
+        assert_eq!((d["file"]["name"].as_str(), d["count"].as_i64()), (Some("notes.txt"), Some(2)));
+        let texts: Vec<&str> = d["passages"].as_array().unwrap().iter().map(|p| p["text"].as_str().unwrap()).collect();
+        assert_eq!(texts, ["first passage", "second passage"]);
+        assert_eq!((d["passages"][1]["n"].as_i64(), d["passages"][1]["vector"][1].as_f64()), (Some(1), Some(1.0)));
+        let mean: Vec<f64> = d["mean"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        assert!((mean[0] - 0.707).abs() < 0.01 && (mean[1] - 0.707).abs() < 0.01); // (their mean, at unit length)
+        assert_eq!(c.get("/api/map/passages/999").status, StatusCode::NOT_FOUND);
+        // Diagnostics counts the index, and a search's words need the model.
+        assert_eq!(c.get("/api/diagnostics").json()["index"]["files"], 1);
+        assert_eq!(c.get("/api/map/query?q=rent").json()["detail"]["key"], "err.model_waking");
     }
 }

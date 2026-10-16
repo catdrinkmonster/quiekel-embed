@@ -69,6 +69,9 @@ const ICONS = {
   monitor: '<rect x="3" y="4.5" width="18" height="12" rx="1.8"/><path d="M9 20h6M12 16.5V20"/>',
   contrast: '<circle cx="12" cy="12" r="8.5"/><path class="solid" d="M12 3.5a8.5 8.5 0 0 1 0 17z"/>',
   cube: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>',
+  near: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12h.01"/>',
+  searchSteps: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M9.3 8.2v4.6l3.6-2.3z"/>',
+  docSteps: '<path d="M14 3H7.5A1.5 1.5 0 0 0 6 4.5v15A1.5 1.5 0 0 0 7.5 21h9a1.5 1.5 0 0 0 1.5-1.5V7z"/><path d="M14 3v4h4M10.5 11.5v5l4-2.5z"/>',
   focus: '<circle cx="12" cy="12" r="3"/><path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15"/>',
   mouse: '<rect x="6.5" y="3.5" width="11" height="17" rx="5.5"/><path d="M12 7.5v3"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6v.2"/>',
@@ -1395,8 +1398,9 @@ $("check-now").addEventListener("click", async () => {
 
 // ---------- diagnostics ----------
 
-// What the app uses, the last ten minutes: small line charts (newest on the right), and where
-// indexing time went. Fetched every two seconds while the tab is open.
+// What the app uses: a strip of facts (where the model runs and why, the index, how long searches
+// take, what's waiting), small line charts of the last ten minutes that fill up from when it was
+// switched on, and where indexing time went. Fetched every two seconds while the tab is open.
 let diagTimer = null;
 
 async function refreshDiagnostics() {
@@ -1409,28 +1413,62 @@ async function refreshDiagnostics() {
 }
 
 const DIAG_COLORS = { app: "var(--orange)", model: "var(--blue)", others: "var(--faint)", files: "var(--green)" };
+const DIAG_KINDS = [["doc", "docs", "--kind-docs"], ["text", "text", "--kind-text"], ["code", "code", "--kind-code"],
+  ["image", "images", "--kind-images"]];
 
-function diagChart(title, lines, unit, top = null) {
+// A round top for a chart, a little above its highest value: 1, 2, 2.5 or 5 times a power of ten.
+function niceTop(v) {
+  if (!(v > 0)) return 1;
+  const p = 10 ** Math.floor(Math.log10(v * 1.1));
+  return [1, 2, 2.5, 5, 10].map((m) => m * p).find((x) => x >= v * 1.1);
+}
+
+const megabytes = (v) => (v >= 1000 ? `${fmt(v / 1000, v >= 10000 ? 0 : 1)} GB` : `${fmt(Math.round(v))} MB`);
+const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
+
+// One chart: the lines from t0 to t1 (seconds), its top value beside the title, each line's last
+// value in the legend.
+function diagChart(title, lines, { show, top = null, t0, t1, more = null }) {
   const W = 300, H = 80;
-  const all = lines.flatMap((l) => l.points);
-  const t1 = Date.now() / 1000, t0 = t1 - 600;
-  const max = top ?? Math.max(1, ...all.map((p) => p[1]));
+  const max = top ?? niceTop(Math.max(0, ...lines.flatMap((l) => l.points.map((p) => p[1]))));
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("preserveAspectRatio", "none");
   svg.classList.add("dg-svg");
+  for (const y of [1, H / 2]) {
+    const grid = document.createElementNS(ns, "line");
+    grid.setAttribute("x1", 0); grid.setAttribute("x2", W); grid.setAttribute("y1", y); grid.setAttribute("y2", y);
+    grid.classList.add("dg-grid");
+    svg.append(grid);
+  }
+  const x = (tt) => ((tt - t0) / Math.max(1, t1 - t0)) * W;
+  const y = (v) => H - (Math.min(v, max) / max) * (H - 3) - 1.5;
   for (const l of lines) {
-    if (l.points.length < 2) continue;
+    const pts = l.points.filter(([tt]) => tt >= t0);
+    if (pts.length < 2) continue;
     const pl = document.createElementNS(ns, "polyline");
-    pl.setAttribute("points", l.points.map(([t, v]) => `${((t - t0) / (t1 - t0)) * W},${H - (Math.min(v, max) / max) * (H - 3) - 1.5}`).join(" "));
+    pl.setAttribute("points", pts.map(([tt, v]) => `${x(tt).toFixed(1)},${y(v).toFixed(1)}`).join(" "));
     pl.style.stroke = l.color;
     svg.append(pl);
   }
   const last = (l) => (l.points.length ? l.points[l.points.length - 1][1] : null);
   const legend = h("div", { class: "dg-legend" }, ...lines.map((l) => h("span", {},
-    h("i", { style: `background: ${l.color}` }), l.name, h("b", {}, last(l) == null ? "–" : `${fmt(Math.round(last(l)))}${unit}`))));
-  return h("div", { class: "card dg-chart" }, h("div", { class: "dg-title" }, title), svg, legend);
+    h("i", { style: `background: ${l.color}` }), l.name, h("b", {}, last(l) == null ? "–" : show(last(l))))));
+  return h("div", { class: "card dg-chart" }, h("div", { class: "dg-title" }, h("span", {}, title), h("span", { class: "dg-top" }, show(max))),
+    svg, legend, more);
+}
+
+// Where the model runs, and why there.
+function setupChip(d) {
+  const s = d.setup;
+  if (!s) return null;
+  const why = s.gpu
+    ? (s.shared ? t("diag.setup_shared", { gb: fmt(d.pc.ram_gb, 0) }) : t("diag.setup_graphics", { gb: fmt(d.pc.card_gb, 0) }))
+    : s.name === "light" ? t("diag.setup_light", { gb: fmt(d.pc.ram_gb, 0), cores: d.pc.cores })
+      : t(`device.why_${d.cpu_because || (d.pc.card ? "shared" : "none")}`);
+  const on = t("settings.model_on", { device: s.gpu ? `${s.card} (DirectML)` : tp("device.cpu", s.threads) });
+  return stat("chip", s.gpu ? shortGpu(s.card) : t("diag.cpu"), `${on}\n${why}`, "chip");
 }
 
 function renderDiagnostics(d) {
@@ -1442,34 +1480,63 @@ function renderDiagnostics(d) {
     const a = s[i - 5].pipeline, b = s[i].pipeline;
     if (a && b && s[i].t > s[i - 5].t) files.push([s[i].t, Math.max(0, (b.files - a.files) / (s[i].t - s[i - 5].t))]);
   }
+  // The charts start when Diagnostics was switched on and fill up to ten minutes.
+  const t1 = s.length ? s[s.length - 1].t : Date.now() / 1000;
+  const t0 = Math.min(t1 - 30, Math.max(s.length ? s[0].t : t1, t1 - 600));
+  // What's waiting, and how long it takes at the last minute's pace.
+  const minute = s.filter((x) => x.t >= t1 - 60 && x.pipeline);
+  const pace = minute.length > 1 && minute[minute.length - 1].t > minute[0].t
+    ? (minute[minute.length - 1].pipeline.files - minute[0].pipeline.files) / (minute[minute.length - 1].t - minute[0].t) : 0;
+  const waiting = (state.last?.folders || []).reduce((n, f) => n + (f.pending || 0), 0);
+  const ix = d.index || {};
+  const searches = (d.searches || []).map((x) => x.ms);
+  const strip = [
+    setupChip(d),
+    stat("doc", fmt(ix.files || 0), [t("diag.index", { files: fmt(ix.files || 0), passages: fmt(ix.passages || 0) }),
+      t("diag.on_disk", { size: megabytes(ix.disk_mb || 0) }),
+      ix.memory_mb > 0 ? t("diag.in_memory", { size: megabytes(ix.memory_mb) }) : t("diag.searched_on_disk")].join("\n"), "chip"),
+    searches.length ? stat("search", t("diag.ms", { n: fmt(Math.round(median(searches))) }), t("diag.search_tip", {
+      n: fmt(searches.length), model: fmt(Math.round(median(d.searches.map((x) => x.model_ms)))) }), "chip") : null,
+    waiting ? stat("hourglass", pace > 0 ? `${fmt(waiting)} · ${eta(waiting / pace)}` : fmt(waiting), t("diag.waiting_tip"), "chip") : null,
+    // How far back the charts go (the same for all of them).
+    stat("clock", t1 - t0 >= 60 ? t("diag.minutes", { n: fmt(Math.round((t1 - t0) / 60)) }) : t("diag.seconds", { n: fmt(Math.round(t1 - t0)) }),
+      t("diag.span_tip"), "chip"),
+  ];
   const now = files.length ? files[files.length - 1][1] : 0;
-  const lastS = s[s.length - 1];
-  $("dg-strip").replaceChildren(
-    h("div", { class: "dg-headline" }, h("b", {}, fmt(Math.round(now * 10) / 10)), h("span", {}, t("diag.files"))),
-    d.device ? h("span", { class: "chip" }, d.device === "processor" ? t("diag.cpu") : d.device) : "",
-    lastS && lastS.pipeline ? h("span", { class: "chip" }, `${t("diag.readers")}: ${lastS.pipeline.readers}`) : "",
-  );
+  $("dg-strip").replaceChildren(...[
+    s.length && s[s.length - 1].state === "indexing"
+      ? h("div", { class: "dg-headline" }, h("b", {}, fmt(Math.round(now * 10) / 10)), h("span", {}, t("diag.files"))) : null,
+    ...strip].filter(Boolean));
+  // Which kinds of files were read in the charts' time.
+  const ps = s.map((x) => x.pipeline).filter(Boolean);
+  const first = ps[0], lastP = ps[ps.length - 1];
+  const kinds = first?.kinds && lastP?.kinds
+    ? DIAG_KINDS.map(([k, name, color]) => ({ name, color, n: (lastP.kinds[k] || 0) - (first.kinds[k] || 0) })).filter((k) => k.n > 0) : [];
+  const byKind = kinds.length ? h("div", { class: "dg-legend dg-kinds" }, ...kinds.map((k) => h("span", {},
+    h("i", { style: `background: var(${k.color})` }), t(`search.kind.${k.name}`), h("b", {}, fmt(k.n))))) : null;
+  const pctShow = (v) => pct(Math.round(v));
+  const vramShared = d.setup?.shared;
   $("dg-charts").replaceChildren(
-    diagChart(t("diag.files"), [{ name: t("diag.files_short"), color: DIAG_COLORS.files, points: files }], "/s"),
+    diagChart(t("diag.files"), [{ name: t("diag.files_short"), color: DIAG_COLORS.files, points: files }],
+      { show: (v) => `${fmt(Math.round(v * 10) / 10)}/s`, t0, t1, more: byKind }),
     diagChart(t("diag.cpu"), [
       { name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.app.cpu) },
       { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.cpu) },
-      { name: t("diag.pc"), color: DIAG_COLORS.others, points: at((x) => x.pc.cpu) }], " %", 100),
+      { name: t("diag.pc"), color: DIAG_COLORS.others, points: at((x) => x.pc.cpu) }], { show: pctShow, top: 100, t0, t1 }),
     diagChart(t("diag.memory"), [
       { name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.app.mb) },
-      { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.mb) }], " MB"),
+      { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.mb) }], { show: megabytes, t0, t1 }),
     diagChart(t("diag.gpu"), [
       { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.gpu) },
-      { name: t("diag.others"), color: DIAG_COLORS.others, points: at((x) => x.pc.gpu_others) }], " %", 100),
-    diagChart(t("diag.vram"), [{ name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.vram_mb) }], " MB"),
+      { name: t("diag.others"), color: DIAG_COLORS.others, points: at((x) => x.pc.gpu_others) }], { show: pctShow, top: 100, t0, t1 }),
+    diagChart(vramShared ? t("diag.shared_memory") : t("diag.vram"), [{ name: t("diag.model"), color: DIAG_COLORS.model,
+      points: at((x) => (vramShared ? x.model.shared_mb : x.model.vram_mb)) }], { show: megabytes, t0, t1 }),
   );
-  // Where indexing time went in these ten minutes: one bar.
-  const ps = s.map((x) => x.pipeline).filter(Boolean);
+  // Where indexing time went in these minutes: one bar.
   const box = $("dg-time");
   if (ps.length < 2) { box.hidden = true; return; }
-  const a = ps[0], b = ps[ps.length - 1];
-  const parts = [["diag.reading", b.read_ms - a.read_ms, "var(--orange)"], ["diag.waiting", b.wait_ms - a.wait_ms, "var(--pink)"],
-    ["diag.model", b.embed_ms - a.embed_ms, "var(--blue)"], ["diag.saving", b.save_ms - a.save_ms, "var(--green)"]];
+  const parts = [["diag.reading", lastP.read_ms - first.read_ms, "var(--orange)"], ["diag.waiting", lastP.wait_ms - first.wait_ms, "var(--pink)"],
+    ["diag.model", lastP.embed_ms - first.embed_ms, "var(--blue)"], ["diag.saving", lastP.save_ms - first.save_ms, "var(--green)"]];
   const total = parts.reduce((sum, p) => sum + p[1], 0);
   box.hidden = total <= 0;
   if (total <= 0) return;
@@ -2172,6 +2239,9 @@ const map = {
   highlight: null, dim: null, dimValues: null, dimCache: new Map(),
   show: { docs: true, text: true, code: true, images: true },
   drag: null, animStart: 0, last: 0, raf: 0, timer: 0, spinTimer: 0, screen: [],
+  // the views (see "map views"): which one, the explanation panel, Neighbours' layout, a walk's step
+  // and what it shows, a "show me" under way, the files only roughly placed so far
+  view: "map", help: false, near: null, nearZoom: 1, steps: null, query: null, walkFile: null, flash: null, rough: new Set(),
 };
 let mapSearchTimer = null;
 
@@ -2226,6 +2296,7 @@ function setPoints(points, total) {
     return q;
   });
   map.total = total;
+  map.rough = new Set(points.filter((p) => p.r).map((p) => p.id));
   map.animStart = performance.now();
   map.dimCache.clear();
   map.history = map.history.filter((id) => map.byId.has(id));
@@ -2269,8 +2340,10 @@ function drawMap(now) {
   if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
   const dt = map.last ? Math.min(now - map.last, 50) : 16;
   map.last = now;
-  // It turns while you look at it: not while another window has the focus (a game, say).
-  const turning = map.spin && document.hasFocus();
+  const near = map.view === "near" && map.near;
+  // It turns while you look at it: not while another window has the focus (a game, say), and not in
+  // Neighbours, whose directions come from it.
+  const turning = map.spin && document.hasFocus() && !near;
   if (turning && !map.drag && !map.hover) map.yaw += dt * 0.00012;
   if (map.spin) setSpinCube((map.yaw * 180) / Math.PI);
   if (map.fly) {
@@ -2281,6 +2354,10 @@ function drawMap(now) {
   }
   const appear = Math.min(1, (now - map.animStart) / 900);
   const ease = 1 - (1 - appear) ** 3;
+  // "Show me": what a line of the explanation is about pulses for a moment.
+  const flash = map.flash && now < map.flash.until ? map.flash.what : null;
+  if (map.flash && !flash) map.flash = null;
+  const pulse = flash ? 0.5 + 0.5 * Math.sin(now / 150) : 0;
 
   const { tx, ty, tz, zoom } = map.cam;
   const cy = Math.cos(map.yaw), sy = Math.sin(map.yaw), cp = Math.cos(map.pitch), sp = Math.sin(map.pitch);
@@ -2297,88 +2374,136 @@ function drawMap(now) {
   ctx.clearRect(0, 0, W, H);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-
-  // A faint grid on the cube's floor, then its edges: nearer ones a little stronger.
   const ink = (a) => `rgba(${theme.ink}, ${a.toFixed(3)})`;
-  ctx.lineWidth = dpr;
-  ctx.strokeStyle = ink(0.05);
-  ctx.beginPath();
-  for (let i = 1; i < 5; i++) {
-    const v = -1.15 + i * 0.46;
-    for (const [a, b] of [[[v, -1.15, -1.15], [v, -1.15, 1.15]], [[-1.15, -1.15, v], [1.15, -1.15, v]]]) {
-      const pa = project(...a), pb = project(...b);
-      ctx.moveTo(pa[0], pa[1]);
-      ctx.lineTo(pb[0], pb[1]);
+
+  let NX = 0, NY = 0, NR = 1; // Neighbours: the middle and the 0 % ring, in pixels
+  if (near) {
+    ({ x: NX, y: NY, r: NR } = nearFrame(W, H, dpr));
+    NR *= map.nearZoom;
+    // The rings: how alike, on the card's scale (the middle is 100 %).
+    ctx.font = `600 ${11 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
+    ctx.textBaseline = "bottom";
+    for (const share of [0.75, 0.5, 0.25, 0]) {
+      const r = (1 - share) * NR;
+      ctx.setLineDash([3 * dpr, 5 * dpr]);
+      ctx.lineWidth = (flash === "rings" ? 1.5 + pulse : 1) * dpr;
+      ctx.strokeStyle = ink(flash === "rings" ? 0.25 + 0.35 * pulse : 0.14);
+      ctx.beginPath();
+      ctx.arc(NX, NY, r, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = ink(flash === "rings" ? 0.5 + 0.4 * pulse : 0.35);
+      ctx.fillText(pct(Math.round(share * 100)), NX + 5 * dpr, NY - r - 3 * dpr);
+    }
+  } else {
+    // A faint grid on the cube's floor, then its edges: nearer ones a little stronger.
+    ctx.lineWidth = dpr;
+    ctx.strokeStyle = ink(0.05);
+    ctx.beginPath();
+    for (let i = 1; i < 5; i++) {
+      const v = -1.15 + i * 0.46;
+      for (const [a, b] of [[[v, -1.15, -1.15], [v, -1.15, 1.15]], [[-1.15, -1.15, v], [1.15, -1.15, v]]]) {
+        const pa = project(...a), pb = project(...b);
+        ctx.moveTo(pa[0], pa[1]);
+        ctx.lineTo(pb[0], pb[1]);
+      }
+    }
+    ctx.stroke();
+    const c = CUBE.map(([x, y, z]) => project(x, y, z));
+    ctx.lineWidth = 1.2 * dpr;
+    for (const [a, b] of CUBE_EDGES) {
+      const nearer = Math.max(0, Math.min(1, ((c[a][2] + c[b][2]) / 2 + 1.6) / 3.2));
+      ctx.strokeStyle = ink(0.08 + 0.1 * nearer);
+      ctx.beginPath();
+      ctx.moveTo(c[a][0], c[a][1]);
+      ctx.lineTo(c[b][0], c[b][1]);
+      ctx.stroke();
     }
   }
-  ctx.stroke();
-  const c = CUBE.map(([x, y, z]) => project(x, y, z));
-  ctx.lineWidth = 1.2 * dpr;
-  for (const [a, b] of CUBE_EDGES) {
-    const near = Math.max(0, Math.min(1, ((c[a][2] + c[b][2]) / 2 + 1.6) / 3.2));
-    ctx.strokeStyle = ink(0.08 + 0.1 * near);
-    ctx.beginPath();
-    ctx.moveTo(c[a][0], c[a][1]);
-    ctx.lineTo(c[b][0], c[b][1]);
-    ctx.stroke();
-  }
 
-  // The dots, far ones first. Each keeps its screen record between frames (no garbage).
+  // The dots, far ones first (in Neighbours: the least alike first). Each keeps its screen record
+  // between frames (no garbage).
   const list = [];
   const frame = (map.frame = (map.frame || 0) + 1);
-  let fading = false;
+  let fading = false, moving = false;
+  const glide = near ? 1 - (1 - Math.min(1, (now - map.near.start) / 700)) ** 3 : 1;
   for (const p of map.points) {
     if (!visible(p)) continue;
-    const [px, py, pz, s] = project(p.fx + (p.x - p.fx) * ease, p.fy + (p.y - p.fy) * ease, p.fz + (p.z - p.fz) * ease);
-    if (pz > CAMERA_D - 0.5) continue; // right in front of the camera
+    let px, py, pz, s;
+    if (near) {
+      const to = map.near.pos.get(p.id);
+      if (!to) continue;
+      const gx = NX + to[0] * NR, gy = NY - to[1] * NR;
+      const from = map.near.from.get(p.id) || [NX, NY];
+      px = from[0] + (gx - from[0]) * glide;
+      py = from[1] + (gy - from[1]) * glide;
+      pz = -Math.hypot(to[0], to[1]);
+      s = 1;
+    } else {
+      [px, py, pz, s] = project(p.fx + (p.x - p.fx) * ease, p.fy + (p.y - p.fy) * ease, p.fz + (p.z - p.fz) * ease);
+      if (pz > CAMERA_D - 0.5) continue; // right in front of the camera
+    }
     const q = p.q || (p.q = { p });
     q.px = px; q.py = py; q.pz = pz; q.s = s; q.r = 0; q.frame = frame;
     q.fade = p.born ? Math.min(1, (now - p.born) / 700) : 1;
     if (q.fade < 1) fading = true;
     list.push(q);
   }
+  if (near && glide < 1) moving = true;
   list.sort((a, b) => a.pz - b.pz);
   const at = { get: (id) => { const q = map.byId.get(id)?.q; return q && q.frame === frame ? q : undefined; } };
 
+  // What the walks show on the map, step by step.
+  const step = map.steps?.at ?? 0;
+  const walk = map.view === "search" && map.query?.weights ? map.query : null;
+  const walkFile = map.view === "index" && map.walkFile?.passages && step < WALK.index.length - 1 ? map.walkFile.id : null;
+  const spot = walk && step >= 1 && walk.spot ? project(...walk.spot) : null;
+
   const sel = map.selected && at.get(map.selected.id);
   const dims = map.dimValues;
-  if (sel && map.closest.length && !dims) { // dashed lines to the closest files
-    ctx.setLineDash([4 * dpr, 4 * dpr]);
-    ctx.lineWidth = 1.3 * dpr;
-    map.closest.forEach((cl, i) => {
-      const q = at.get(cl.id);
-      if (!q) return;
-      ctx.strokeStyle = ink(0.5 - i * 0.06);
-      ctx.beginPath();
-      ctx.moveTo(sel.px, sel.py);
-      ctx.lineTo(q.px, q.py);
-      ctx.stroke();
-    });
-    ctx.setLineDash([]);
+  const lines = (from, to, i, strong) => {
+    ctx.strokeStyle = strong ? `rgba(245, 78, 0, ${(0.55 + 0.4 * pulse).toFixed(3)})` : ink(0.5 - i * 0.06);
+    ctx.lineWidth = (strong ? 2 + pulse : 1.3) * dpr;
+    ctx.beginPath();
+    ctx.moveTo(from[0], from[1]);
+    ctx.lineTo(to.px, to.py);
+    ctx.stroke();
+  };
+  ctx.setLineDash([4 * dpr, 4 * dpr]);
+  if (sel && map.closest.length && !dims && !walk && !walkFile) { // dashed lines to the closest files
+    map.closest.forEach((cl, i) => { const q = at.get(cl.id); if (q) lines([sel.px, sel.py], q, i, flash === "lines"); });
   }
+  if (spot && step >= 3) { // the search's best results
+    (walk.results || []).slice(0, 8).forEach((r, i) => { const q = at.get(r.file_id); if (q) lines(spot, q, i, false); });
+  }
+  ctx.setLineDash([]);
 
   const base = Math.max(2.2, Math.min(5.5, 7.5 - 1.6 * Math.log10(Math.max(10, map.points.length))));
-  const hl = map.highlight;
-  const rel = map.related;
+  const hl = walk && step >= 2 ? walk.words : walkFile ? map.walkFile.only : flash === "rough" ? map.rough : map.highlight;
+  const rel = walk ? (step >= 1 ? walk.weights : null) : walkFile ? null : map.related;
+  const dimmed = walk && step === 0; // (the words first: the map waits behind them)
   for (const q of list) {
     const p = q.p;
-    const depth = Math.min(1, Math.max(0, (q.s - 0.75) / 0.6));
+    const depth = near ? 1 : Math.min(1, Math.max(0, (q.s - 0.75) / 0.6));
     let color = KIND_COLOR[p.g];
     let alpha = 0.4 + 0.6 * depth;
     let size = 1;
     if (dims) {
       color = diverging((dims.values.get(p.id) ?? 0) / dims.scale);
       alpha = 0.95;
-    } else if (rel && p !== map.selected) {
+    } else if (dimmed) {
+      alpha = 0.12;
+    } else if (rel && (walk || p !== map.selected)) {
       const w = rel.get(p.id)?.w ?? 0; // 1 = the most related file, 0 = the least
       alpha = (0.05 + 0.95 * w ** 6) * (0.7 + 0.3 * depth);
       size = 0.75 + 0.6 * w ** 4;
+      if (hl && hl.has(p.id)) { alpha = Math.max(alpha, 0.85); size = Math.max(size, 1.2); }
     } else if (hl) {
       const lit = hl.has(p.id);
       alpha = lit ? 1 : 0.1;
       size = lit ? 1.4 : 1;
     }
-    q.r = base * (0.5 + 0.5 * q.s) * dpr * Math.sqrt(zoom) * size;
+    q.r = base * (0.5 + 0.5 * q.s) * dpr * Math.sqrt(near ? 1 : zoom) * size * (near && p === map.selected ? 1.5 : 1);
     q.color = color;
     // One fill per dot: a canvas draws 6,000 single circles faster than a few paths holding
     // them all (measured: 12 ms against 19 ms a frame).
@@ -2388,7 +2513,7 @@ function drawMap(now) {
     ctx.fillStyle = color;
     ctx.fill();
     if (hl && hl.has(p.id) && !dims) {
-      ctx.lineWidth = 1.5 * dpr;
+      ctx.lineWidth = (flash === "rough" ? 1.5 + pulse : 1.5) * dpr;
       ctx.strokeStyle = ink(0.8);
       ctx.stroke();
     }
@@ -2396,7 +2521,9 @@ function drawMap(now) {
   ctx.globalAlpha = 1;
   // The file pointed at and the selected one go on top, at full strength, with their rings: a dot
   // in front of them (a copy, a close neighbour) would cover them, and the ring would look off.
-  for (const [p, color] of [[map.hover || map.rowHover, ink(0.8)], [map.selected, "#f54e00"]]) {
+  const marked = walk ? [[map.hover || map.rowHover, ink(0.8)]] : [[map.hover || map.rowHover, ink(0.8)], [map.selected, "#f54e00"]];
+  if (walkFile) marked.push([map.byId.get(walkFile), "#f54e00"]);
+  for (const [p, color] of marked) {
     const q = p && at.get(p.id);
     if (!q) continue;
     ctx.globalAlpha = q.fade;
@@ -2405,14 +2532,30 @@ function drawMap(now) {
     ctx.arc(q.px, q.py, q.r, 0, TAU);
     ctx.fill();
     ctx.globalAlpha = 1;
+    const ring = p === map.selected && flash === "center" ? 4 + 6 * pulse : 4;
     ctx.lineWidth = 2.5 * dpr;
     ctx.strokeStyle = color;
     ctx.beginPath();
-    ctx.arc(q.px, q.py, q.r + 4 * dpr, 0, TAU);
+    ctx.arc(q.px, q.py, q.r + ring * dpr, 0, TAU);
     ctx.stroke();
   }
+  // Your words, where the map would put them: a ring of their own.
+  if (spot) {
+    const r = 6 * dpr;
+    ctx.fillStyle = `rgb(${theme.card.join(", ")})`;
+    ctx.strokeStyle = ink(0.9);
+    ctx.lineWidth = 2.5 * dpr;
+    ctx.beginPath();
+    ctx.arc(spot[0], spot[1], r, 0, TAU);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = ink(0.9);
+    ctx.beginPath();
+    ctx.arc(spot[0], spot[1], 2 * dpr, 0, TAU);
+    ctx.fill();
+  }
   map.screen = list;
-  if (map.drag || map.fly || appear < 1 || fading) {
+  if (map.drag || map.fly || appear < 1 || fading || moving || flash) {
     startMapLoop();
   } else if (turning) {
     // The slow turn looks the same at 30 frames a second as at a 144 Hz screen's rate,
@@ -2480,6 +2623,7 @@ function setRelated(p, rel) {
   map.related = new Map(pairs.map(([id, s], i) => [id, { w: n > 1 ? 1 - i / (n - 1) : 1, s }]));
   map.closest = pairs.filter(([id]) => visible(map.byId.get(id))).slice(0, 6).map(([id, s]) => ({ id, s }));
   renderRelatedList();
+  layoutNear(); // (in Neighbours: this file goes in the middle)
 }
 
 function clearSelection() {
@@ -2497,6 +2641,7 @@ function clearSelection() {
     map.spinBefore = null;
     updateSpin();
   }
+  if (map.view === "near") setMapView("map"); // (Neighbours needs a file in the middle)
 }
 
 // Back to the file you looked at before, and forward again.
@@ -2515,7 +2660,7 @@ function updateSteps() {
 }
 
 function showCard(p) {
-  $("map-card").hidden = false;
+  $("map-card").hidden = map.view === "search" || map.view === "index"; // (a walk is its own card)
   const name = $("mc-name");
   name.textContent = p.name;
   setTip(name, p.name);
@@ -2597,8 +2742,7 @@ for (const b of $("mc-tabs").querySelectorAll("button")) b.addEventListener("cli
 setCardTab("preview");
 
 // The file's 256 numbers as a 16 × 16 grid: pink above zero, blue below.
-function drawFingerprint(v, active = null) {
-  const canvas = $("mc-print");
+function drawFingerprint(v, active = null, canvas = $("mc-print")) {
   const ctx = canvas.getContext("2d");
   const n = 16;
   const cell = canvas.width / n;
@@ -2657,11 +2801,13 @@ function setSpinCube(deg) {
 }
 
 function resetMapView() {
-  Object.assign(map, { yaw: 0.7, pitch: 0.35 });
+  Object.assign(map, { yaw: 0.7, pitch: 0.35, nearZoom: 1 });
+  layoutNear();
   flyTo(map.selected ? { zoom: FOCUS_ZOOM } : OVERVIEW);
 }
 
 async function mapSearch() {
+  if (map.view === "search") return loadSearchWalk();
   const q = $("map-q").value.trim();
   if (!q) {
     map.highlight = null;
@@ -2691,6 +2837,10 @@ async function mapSearch() {
       Object.assign(map.drag, { x: e.clientX, y: e.clientY, moved: map.drag.moved + Math.abs(dx) + Math.abs(dy) });
       map.yaw += dx * 0.008;
       map.pitch = Math.max(-1.45, Math.min(1.45, map.pitch + dy * 0.008));
+      if (map.view === "near" && map.near) {
+        layoutNear();
+        map.near.start = 0; // (straight there while it's being turned)
+      }
       hideTip();
       startMapLoop();
       return;
@@ -2699,7 +2849,9 @@ async function mapSearch() {
     if (p !== map.hover) { map.hover = p; startMapLoop(); }
     canvas.style.cursor = p ? "pointer" : "grab";
     if (p) {
-      showTipAt(e.clientX, e.clientY, `${p.name}\n${p.dir.split(/[\\/]/).slice(-2).join("\\")}`);
+      const s = map.view === "near" && p !== map.selected ? map.related?.get(p.id)?.s : null;
+      const how = s != null ? `\n${t("match.share", { pct: pct(Math.round(Math.max(0, Math.min(1, (s - NEAR_BOTTOM) / (NEAR_TOP - NEAR_BOTTOM))) * 100)) })}` : "";
+      showTipAt(e.clientX, e.clientY, `${p.name}\n${p.dir.split(/[\\/]/).slice(-2).join("\\")}${how}`);
     } else if (tipFor === "point") {
       hideTip();
     }
@@ -2709,14 +2861,21 @@ async function mapSearch() {
     map.drag = null;
     if (!click) return;
     const p = mapHit(e);
+    if (p && map.view === "search") return; // (the search walk is about your words)
     if (p) selectPoint(p);
-    else if (map.selected) clearSelection();
+    else if (map.selected && map.view === "map") clearSelection();
+    if (p && map.view === "index") loadIndexWalk(); // (the walk goes on with this file)
   });
   canvas.addEventListener("pointerleave", () => { map.hover = null; if (tipFor === "point") hideTip(); });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-    map.fly = null;
-    map.cam.zoom = Math.max(0.5, Math.min(6, map.cam.zoom * Math.exp(-e.deltaY * 0.0012)));
+    const by = Math.exp(-e.deltaY * 0.0012);
+    if (map.view === "near") {
+      map.nearZoom = Math.max(0.5, Math.min(6, map.nearZoom * by)); // (Neighbours zooms on its own)
+    } else {
+      map.fly = null;
+      map.cam.zoom = Math.max(0.5, Math.min(6, map.cam.zoom * by));
+    }
     startMapLoop();
   }, { passive: false });
   canvas.addEventListener("dblclick", resetMapView);
@@ -2764,6 +2923,308 @@ for (const b of $("map-kinds").querySelectorAll("button")) {
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.page === "map") startMapLoop(); });
 window.addEventListener("focus", () => { if (state.page === "map") startMapLoop(); });
 
+// ---------- map views ----------
+//
+// Four views of the same files: the map itself; Neighbours, one file in the middle and the others at
+// their true distance from it; and two walks through how it works, a search and the indexing of one
+// file, step by step. The map and Neighbours explain themselves in a panel that stays closed until
+// you ask; a walk is its panel.
+
+const VIEW_ICON = { map: "cube", near: "near", search: "searchSteps", index: "docSteps" };
+const NEAR_TOP = 0.95, NEAR_BOTTOM = 0.55; // the card's scale: 100 % and 0 % alike
+const NEAR_EDGE = 1.2; // files less alike than 0 % wait just outside the outer ring
+
+// The steps of the walks: what each says.
+const WALK = {
+  search: ["map.s1", "map.s2", "map.s3", "map.s4", "map.s5"],
+  index: ["map.i1", "map.i2", "map.i3", "map.i4", "map.i5"],
+};
+
+function setMapView(view) {
+  if (map.view === view) return;
+  const was = map.view;
+  map.view = view;
+  map.flash = null;
+  for (const b of $("map-views").querySelectorAll("button")) {
+    b.classList.toggle("active", b.dataset.view === view);
+    b.setAttribute("aria-checked", b.dataset.view === view);
+  }
+  const walk = view === "search" || view === "index";
+  map.steps = walk ? { at: 0 } : null;
+  if (view === "near") {
+    if (map.spinBefore === null) map.spinBefore = map.spin;
+    map.spin = false;
+    updateSpin();
+    if (!map.selected) {
+      const c = centralPoint();
+      if (c) selectPoint(c, { fly: false });
+    } else {
+      layoutNear();
+    }
+  } else if (was === "near") {
+    map.near = null;
+  }
+  if (view === "search") loadSearchWalk();
+  if (view === "index") loadIndexWalk();
+  if (!walk && (was === "search" || was === "index")) flyTo(map.selected ? { zoom: FOCUS_ZOOM } : OVERVIEW);
+  $("map-card").hidden = walk || !map.selected;
+  $("map-q").placeholder = `${view === "search" ? walkWords() : t("nav.search")}…`;
+  renderExplain();
+  startMapLoop();
+}
+
+// The file nearest the middle of the map: where Neighbours and the walks start when none is picked.
+function centralPoint() {
+  let best = null, dist = Infinity;
+  for (const p of map.points) {
+    if (!visible(p)) continue;
+    const d = p.x * p.x + p.y * p.y + p.z * p.z;
+    if (d < dist) { dist = d; best = p; }
+  }
+  return best;
+}
+
+// Neighbours: its middle and the radius of the 0 % ring, in pixels. It's as big as the room left of
+// the card allows; its middle is in the middle of what the panel and the card leave free, so the
+// file there and its closest ones stay in sight (the outer rings may reach under them).
+function nearFrame(W, H, dpr) {
+  const side = (el) => (el.hidden ? 0 : el.getBoundingClientRect().width + 14);
+  const left = side($("map-explain")) * dpr, right = side($("map-card")) * dpr;
+  const room = W - right;
+  const r = Math.max(60 * dpr, Math.min(room / 2 - 24 * dpr, H / 2 - 30 * dpr) / NEAR_EDGE);
+  return { x: (left + room) / 2, y: H / 2, r };
+}
+
+// Where each file goes around the one in the middle: as far out as it's unlike it (the middle is
+// 100 % alike, the outer ring 0 %), in the direction it has on the map as you looked at it last.
+// The dots glide there from where they are now.
+function layoutNear() {
+  const c = map.selected;
+  if (map.view !== "near" || !c || !map.related) return;
+  const cy = Math.cos(map.yaw), sy = Math.sin(map.yaw), cp = Math.cos(map.pitch), sp = Math.sin(map.pitch);
+  const flat = (p) => { const x1 = p.x * cy - p.z * sy, z1 = p.x * sy + p.z * cy; return [x1, p.y * cp - z1 * sp]; };
+  const [cx, cyy] = flat(c);
+  const pos = new Map([[c.id, [0, 0]]]);
+  for (const p of map.points) {
+    if (p === c) continue;
+    const s = map.related.get(p.id)?.s;
+    if (s == null) continue;
+    const r = Math.max(0.02, Math.min(NEAR_EDGE, (NEAR_TOP - s) / (NEAR_TOP - NEAR_BOTTOM)));
+    const [x, y] = flat(p);
+    const a = Math.atan2(y - cyy, x - cx) || (p.id * 2.399) % TAU; // (the same spot: a direction all its own)
+    pos.set(p.id, [Math.cos(a) * r, Math.sin(a) * r]);
+  }
+  const from = new Map();
+  for (const id of pos.keys()) {
+    const q = map.byId.get(id)?.q;
+    if (q && q.frame === map.frame) from.set(id, [q.px, q.py]); // (drawn last frame: on the map, or here)
+  }
+  map.near = { center: c.id, pos, from, start: performance.now() };
+  startMapLoop();
+}
+
+// "Show me": what a line of the explanation is about pulses for a moment.
+function showMe(what) {
+  if (what === "lines" && !map.selected) {
+    const c = centralPoint();
+    if (c) selectPoint(c);
+  }
+  if (what === "near") return setMapView("near");
+  map.flash = { what, until: performance.now() + 2600 };
+  startMapLoop();
+}
+
+const toggleHelp = (open = !map.help) => { map.help = open; renderExplain(); startMapLoop(); };
+
+// The panel: for the map and Neighbours, a few lines on what you see, each with a "show me"; for a
+// walk, its steps.
+function renderExplain() {
+  const box = $("map-explain");
+  const walk = map.view === "search" || map.view === "index";
+  const help = $("map-help");
+  help.hidden = walk;
+  help.classList.toggle("on", map.help && !walk);
+  box.hidden = !(walk || map.help);
+  if (map.view === "near") layoutNear(); // (the free part of the map changed)
+  if (box.hidden) return;
+  const head = h("div", { class: "mx-head" }, icon(VIEW_ICON[map.view]), h("b", {}, t(`map.view.${map.view}`)),
+    iconButton("close", t("common.close"), () => (walk ? setMapView("map") : toggleHelp(false)), "chip-x"));
+  const show = (what, label = t("map.show_me")) => h("button", { type: "button", class: "mx-show", onclick: () => showMe(what) },
+    icon(what === "near" ? "near" : "eye"), label);
+  if (!walk) {
+    const items = map.view === "near"
+      ? [["map.n1", "center"], ["map.n2", "rings"], ["map.n3"], ["map.n4"]]
+      : [["map.m1"], ["map.m2", "lines"], ["map.m3", "near", t("map.true_distances")], ["map.m4", map.rough?.size ? "rough" : null]];
+    box.replaceChildren(head, ...items.map(([key, what, label]) => h("p", { class: "mx-line" }, t(key), what ? show(what, label) : null)));
+    return;
+  }
+  const keys = WALK[map.view];
+  const at = map.steps.at;
+  const dots = h("span", { class: "mx-dots" }, ...keys.map((_, i) => {
+    const dot = h("button", { type: "button", class: i === at ? "on" : "", onclick: () => goStep(i) });
+    setTip(dot, t("map.step", { n: i + 1, total: keys.length }));
+    return dot;
+  }));
+  const back = iconButton("chevronLeft", t("common.previous"), () => goStep(at - 1));
+  back.disabled = at === 0;
+  const next = iconButton("chevronRight", t("common.next"), () => goStep(at + 1), "primary");
+  next.disabled = at === keys.length - 1;
+  box.replaceChildren(...[head, h("div", { class: "mx-step" }, t("map.step", { n: at + 1, total: keys.length })),
+    h("p", { class: "mx-text" }, t(keys[at])), walkVisual(), h("div", { class: "mx-nav" }, back, dots, next)].filter(Boolean));
+}
+
+function goStep(i) {
+  const keys = WALK[map.view];
+  if (!keys || i < 0 || i >= keys.length) return;
+  map.steps.at = i;
+  applyStep();
+  renderExplain();
+  startMapLoop();
+}
+
+// The map's part in a step: where the camera goes.
+function applyStep() {
+  const at = map.steps?.at ?? 0;
+  if (map.view === "search") {
+    const spot = map.query?.spot;
+    if (at >= 1 && spot) flyTo({ tx: spot[0], ty: spot[1], tz: spot[2], zoom: 1.6 });
+    else flyTo(OVERVIEW);
+  } else if (map.view === "index") {
+    const p = map.walkFile && map.byId.get(map.walkFile.id);
+    if (!p) return;
+    if (at === WALK.index.length - 1) selectPoint(p);
+    else flyTo({ tx: p.x, ty: p.y, tz: p.z, zoom: 1.4 });
+  }
+}
+
+// What a step shows in the panel: the numbers, the passages, the results.
+function walkVisual() {
+  const at = map.steps.at;
+  if (map.view === "search") {
+    const q = map.query;
+    if (!q || q.loading) return h("div", { class: "mx-visual" }, h("span", { class: "skeleton mx-skel" }));
+    if (q.error) return h("p", { class: "mx-error" }, q.error);
+    if (at === 0) {
+      return h("div", { class: "mx-visual" }, h("div", { class: "mx-words" }, `“${q.text}”`), printCanvas(q.vector, 128),
+        h("div", { class: "mx-caption" }, t("map.numbers")));
+    }
+    if (at === 2 && !q.words.size) return h("div", { class: "mx-caption" }, t("map.no_words"));
+    if (at >= 3) {
+      // The first likely ones, the line, and the first of the rest: as the search shows them.
+      const all = q.results || [];
+      const likely = Math.min(q.likely ?? all.length, all.length);
+      const row = (r) => {
+        const p = map.byId.get(r.file_id);
+        const el = h("div", { class: "mc-rel mx-result" },
+          h("i", { class: "mc-dot", style: `background: ${KIND_COLOR[KIND_GROUP[r.kind] || "text"]}` }),
+          h("span", { class: "mc-rel-name" }, r.name), matchBadge(r));
+        el.addEventListener("pointerenter", () => { map.rowHover = p || null; startMapLoop(); });
+        el.addEventListener("pointerleave", () => { map.rowHover = null; startMapLoop(); });
+        return el;
+      };
+      const line = (text) => h("div", { class: "more-divider static" }, h("span", { class: "more-label" }, text));
+      const rest = all.slice(likely, likely + 2);
+      const rows = !likely && all.length
+        ? [line(t("search.no_clear_match")), ...all.slice(0, 4).map(row)] // (nothing clears the bar: the search says so)
+        : [...all.slice(0, Math.min(likely, rest.length ? 4 : 6)).map(row),
+          ...(rest.length ? [line(tp("search.less_likely", all.length - likely)), ...rest.map(row)] : [])];
+      const open = at === 4 ? iconButton("search", t("map.open_search"), () => {
+        $("q").value = q.text;
+        goTo("search");
+        runSearch();
+      }, "primary mx-open") : null;
+      return h("div", { class: "mx-visual" }, h("div", { class: "mc-related mx-results" }, ...rows), open);
+    }
+    return null;
+  }
+  const f = map.walkFile;
+  if (!f || f.loading) return h("div", { class: "mx-visual" }, h("span", { class: "skeleton mx-skel" }));
+  if (f.error) return h("p", { class: "mx-error" }, f.error);
+  if (at === 0) {
+    const pic = f.file.preview
+      ? h("img", { class: "mx-thumb", alt: "", src: thumbUrl({ file_id: f.id, mtime: f.file.mtime, size: f.file.size }) })
+      : h("div", { class: "mx-sample" }, h("p", {}, f.passages[0]?.text || ""));
+    return h("div", { class: "mx-visual" }, h("div", { class: "mx-file" }, icon(f.file.kind in ICONS ? f.file.kind : "doc"),
+      h("b", {}, f.file.name)), h("div", { class: "mx-dir" }, f.file.dir), pic, h("div", { class: "mx-caption" }, t("map.pick_another")));
+  }
+  if (at === 1 || at === 2) {
+    const rows = f.passages.map((ps) => h("div", { class: "mx-passage" },
+      at === 2 ? printCanvas(ps.vector, 40) : null,
+      h("span", {}, ps.page ? h("em", {}, t("result.page", { n: ps.page })) : null,
+        ps.text || (f.file.preview ? h("img", { class: "mx-thumb small", alt: "", src: thumbUrl({ file_id: f.id, mtime: f.file.mtime, size: f.file.size }) }) : "…"))));
+    const more = f.count > f.passages.length ? h("div", { class: "mx-caption" }, tp("map.more_passages", f.count - f.passages.length)) : null;
+    return h("div", { class: "mx-visual" }, h("div", { class: "mx-caption" }, tp("map.passages", f.count)), h("div", { class: "mx-passages" }, ...rows), more);
+  }
+  if (at === 3) {
+    return h("div", { class: "mx-visual" }, h("div", { class: "mx-prints" }, ...f.passages.slice(0, 6).map((ps) => printCanvas(ps.vector, 28))),
+      h("div", { class: "mx-arrow" }, icon("chevronDown")), printCanvas(f.mean, 112), h("div", { class: "mx-caption" }, t("map.average")));
+  }
+  return h("button", { type: "button", class: "mx-show mx-near", onclick: () => setMapView("near") }, icon("near"), t("map.true_distances"));
+}
+
+// A vector as its 16 × 16 grid, `size` pixels wide.
+function printCanvas(v, size) {
+  const c = h("canvas", { class: "mx-print", width: 160, height: 160, style: `width: ${size}px; height: ${size}px` });
+  drawFingerprint(v, null, c);
+  return c;
+}
+
+// The search walk's words: what's in the map's search field, or the search field's example.
+const walkWords = () => $("map-q").value.trim() || t("search.examples").split("|")[0];
+
+async function loadSearchWalk(tries = 0) {
+  const text = walkWords();
+  const key = `${text}|${state.scope?.path || ""}`; // (the search goes where the map is narrowed to)
+  if (map.query?.key === key && !map.query.error) return;
+  map.query = { key, text, loading: true };
+  renderExplain();
+  try {
+    const qs = new URLSearchParams({ q: text, limit: 40 });
+    if (state.scope) qs.set("under", state.scope.path);
+    const [m, r] = await Promise.all([api(`/api/map/query?${new URLSearchParams({ q: text })}`), api(`/api/search?${qs}`)]);
+    if (map.query?.key !== key) return;
+    // How alike each dot is, as the map shows a picked file's: by rank (1 = the most alike).
+    const order = m.sims.ids.map((id, i) => [id, m.sims.sims[i]]).sort((a, b) => b[1] - a[1]);
+    const n = order.length;
+    map.query = {
+      key, text, vector: m.vector, spot: m.spot, results: r.results, likely: r.likely,
+      weights: new Map(order.map(([id, s], i) => [id, { w: n > 1 ? 1 - i / (n - 1) : 1, s }])),
+      words: new Set(r.results.filter((x) => x.keyword || x.exact).map((x) => x.file_id)),
+    };
+  } catch (e) {
+    if (map.query?.key !== key) return;
+    map.query = { key, text, error: e.message };
+    // (the model may still be waking up: a few more tries while the walk is open)
+    if (tries < 5) setTimeout(() => { if (map.view === "search" && map.query?.key === key) loadSearchWalk(tries + 1); }, 3000);
+  }
+  if (map.view !== "search") return;
+  applyStep();
+  renderExplain();
+  startMapLoop();
+}
+
+async function loadIndexWalk() {
+  const p = map.selected || centralPoint();
+  if (!p) return;
+  if (map.walkFile?.id === p.id && !map.walkFile.error) return;
+  map.walkFile = { id: p.id, loading: true, only: new Set([p.id]) };
+  renderExplain();
+  try {
+    const d = await api(`/api/map/passages/${p.id}`);
+    if (map.walkFile?.id !== p.id) return;
+    map.walkFile = { ...d, id: p.id, only: new Set([p.id]) };
+  } catch (e) {
+    if (map.walkFile?.id === p.id) map.walkFile = { id: p.id, error: e.message, only: new Set([p.id]) };
+  }
+  if (map.view !== "index") return;
+  applyStep();
+  renderExplain();
+  startMapLoop();
+}
+
+for (const b of $("map-views").querySelectorAll("button")) b.addEventListener("click", () => setMapView(b.dataset.view));
+$("map-help").addEventListener("click", () => toggleHelp());
+
 // ---------- folder scope ----------
 
 // Search and the map can be narrowed to one folder: any folder inside the indexed ones.
@@ -2773,7 +3234,7 @@ function setScope(path) {
   if (state.similar) runSimilar(state.similar);
   else if ($("q").value.trim()) runSearch();
   if (map.selected && !visible(map.selected)) clearSelection();
-  if ($("map-q").value.trim()) mapSearch();
+  if ($("map-q").value.trim() || map.view === "search") mapSearch(); // (the search walk too)
   startMapLoop();
 }
 

@@ -141,7 +141,9 @@ pub fn to_3d(vectors: &[f32], init: Option<&[f32]>) -> Vec<f32> {
     }
     let fitted = fit(&coords);
     match init {
-        Some(target) => align(&fitted, target),
+        // Turned and mirrored to match the picture there was, then spread out again: matched to a
+        // layout that many new files had crowded, the map would shrink.
+        Some(target) => fit(&align(&fitted, target).iter().map(|&v| v as f64).collect::<Vec<_>>()),
         None => fitted,
     }
 }
@@ -362,6 +364,16 @@ impl FileMap {
         json!({"ids": layout.ids, "sims": sims})
     }
 
+    /// Where a vector would go on the map: among the dots most like it, as a new file is placed.
+    pub fn spot(&self, vector: &[f32]) -> Option<[f32; 3]> {
+        let layout = self.state.lock().layout.clone()?;
+        if layout.len() == 0 {
+            return None;
+        }
+        let p = place(vector, &layout.vectors, &layout.coords, &[0]);
+        Some([p[0], p[1], p[2]])
+    }
+
     /// Every dot's value in one of the dimensions.
     pub fn dimension(&self, index: usize) -> serde_json::Value {
         let Some(layout) = self.state.lock().layout.clone() else { return json!({"ids": [], "values": []}) };
@@ -425,8 +437,12 @@ impl FileMap {
                 .enumerate()
                 .map(|(i, id)| {
                     let f = &files[id];
-                    json!({"id": id, "x": r4(layout.coords[i * 3]), "y": r4(layout.coords[i * 3 + 1]),
-                           "z": r4(layout.coords[i * 3 + 2]), "k": f.kind, "p": f.path})
+                    let mut point = json!({"id": id, "x": r4(layout.coords[i * 3]), "y": r4(layout.coords[i * 3 + 1]),
+                           "z": r4(layout.coords[i * 3 + 2]), "k": f.kind, "p": f.path});
+                    if layout.rough[i] {
+                        point["r"] = json!(1); // placed next to similar files, not laid out yet
+                    }
+                    point
                 })
                 .collect();
         }
@@ -631,6 +647,21 @@ mod tests {
         let mirrored: Vec<f32> = pts.iter().enumerate().map(|(i, x)| if i % 3 == 0 { -x } else { *x }).collect();
         let back = align(&mirrored, &pts);
         assert!(back.iter().zip(&pts).all(|(a, b)| (a - b).abs() < 1e-4), "{back:?}");
+    }
+
+    #[test]
+    fn a_new_layout_keeps_its_spread() {
+        // Four kinds of files; the layout before had them all crowded in the middle.
+        let n = 200;
+        let mut v = vec![0f32; n * EMBED_DIM];
+        for i in 0..n {
+            v[i * EMBED_DIM + i % 4] = 1.0;
+            v[i * EMBED_DIM + 10 + i % 7] = 0.3;
+        }
+        let crowded: Vec<f32> = (0..n * 3).map(|i| ((i * 37 % 100) as f32 / 100.0 - 0.5) * 0.1).collect();
+        let c = to_3d(&v, Some(&crowded));
+        let spread = quantile(c.iter().map(|x| x.abs() as f64).collect(), 0.98);
+        assert!(spread > 0.8, "{spread}");
     }
 
     #[test]

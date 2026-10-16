@@ -548,6 +548,7 @@ pub struct Store {
     structure: AtomicU64, // goes up when folders are added, removed or changed (not just their files)
     folders_cache: Mutex<Option<FoldersCache>>,
     passages_cache: Mutex<Option<(u64, i64)>>, // (version, passages in the keyword index)
+    facts_cache: Mutex<Option<(u64, Value)>>,  // (version, the index in a few numbers)
     keep_vectors: AtomicBool,
     too_many: AtomicBool, // more passages than fit in memory: search them on disk
     loading: Mutex<()>,
@@ -601,6 +602,7 @@ impl Store {
             structure: AtomicU64::new(0),
             folders_cache: Mutex::new(None),
             passages_cache: Mutex::new(None),
+            facts_cache: Mutex::new(None),
             keep_vectors: AtomicBool::new(true),
             too_many: AtomicBool::new(false),
             loading: Mutex::new(()),
@@ -763,6 +765,29 @@ impl Store {
     pub fn vectors_mb(&self) -> f64 {
         let v = self.vectors.read();
         if v.ready { (v.rows * EMBED_DIM * 2) as f64 / 1e6 } else { 0.0 }
+    }
+
+    /// The index in a few numbers, for Diagnostics: the files that can be searched, their passages,
+    /// what it takes on disk, and what its vectors take in memory (0: they're searched on disk).
+    pub fn facts(&self) -> Value {
+        let version = self.version();
+        if let Some((v, facts)) = self.facts_cache.lock().as_ref() {
+            if *v == version {
+                return facts.clone();
+            }
+        }
+        let db = self.reader.lock();
+        let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+        let (files, passages) = (count("SELECT COUNT(*) FROM files WHERE status = 'indexed'"), count("SELECT COUNT(*) FROM vectors"));
+        drop(db);
+        let size = |name: &str| std::fs::metadata(self.dir.join(name)).map(|m| m.len()).unwrap_or(0);
+        let disk = size("state.db") + size("state.db-wal") + size("map.bin");
+        let facts = json!({
+            "files": files, "passages": passages, "disk_mb": (disk as f64 / 1e5).round() / 10.0,
+            "memory_mb": (self.vectors_mb() * 10.0).round() / 10.0,
+        });
+        *self.facts_cache.lock() = Some((version, facts.clone()));
+        facts
     }
 
     // ---- meta & settings ------------------------------------------------------------------
@@ -1149,6 +1174,25 @@ impl Store {
             .and_then(|mut st| st.query_row([file_id], FileRecord::from_row).optional())
             .ok()
             .flatten()
+    }
+
+    /// A file's first passages, in order (at most `limit`): their number, text ("" for a
+    /// picture), the page they start on (0: none) and vector.
+    pub fn file_passages(&self, file_id: i64, limit: usize) -> Vec<(i64, String, i64, Vec<f32>)> {
+        let (lo, hi) = fts_range(file_id);
+        let db = self.reader.lock();
+        let Ok(mut st) = db.prepare_cached(
+            "SELECT v.id, COALESCE(f.text, ''), COALESCE(v.page, 0), v.vector FROM vectors v
+             LEFT JOIN chunks_fts f ON f.rowid = v.id WHERE v.id BETWEEN ? AND ? ORDER BY v.id LIMIT ?",
+        ) else {
+            return Vec::new();
+        };
+        let rows = st.query_map(params![lo, hi, limit as i64], |r| {
+            let mut vector = Vec::with_capacity(EMBED_DIM);
+            from_blob(r.get_ref(3)?.as_blob()?, &mut vector);
+            Ok((r.get::<_, i64>(0)? & CHUNK_MASK, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, vector))
+        });
+        rows.map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
     /// The start of a file's text, as shown in search results ("" for pictures).
