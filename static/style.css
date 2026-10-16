@@ -577,16 +577,22 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 #map-kinds button.active[data-kind="text"] { color: var(--kind-text); }
 #map-kinds button.active[data-kind="code"] { color: var(--kind-code); }
 #map-kinds button.active[data-kind="images"] { color: var(--kind-images); }
-/* The map's own controls, on the map */
+/* The map's own controls, on the map: turning and resetting at the bottom left, how it works at the
+   top right (next to the column it opens in). */
 .map-tools { position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; gap: var(--gap); }
+.map-corner { position: absolute; top: 12px; right: 12px; }
 .map-count { font: 600 12px var(--mono); color: var(--muted); cursor: help; }
 /* The map, and beside it what's open about it: the picked file's card and the panel that explains
    the view (or walks through it). Nothing lies on the map; the column is there while something's in
-   it. A walk is the view's content, so its panel goes first; else the card does. */
+   it, as tall as the map: the panel is as tall as what it says, the card takes the rest (its
+   preview grows with it), and one alone fills the column; only a window too short for both
+   scrolls it. A walk is the view's content, so its panel goes first (else the card does) and
+   shares the column evenly with the card, so the card keeps its size from step to step. */
 .map-main { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
-.map-side { flex: none; width: 284px; min-height: 0; display: flex; flex-direction: column; gap: var(--gap); overflow: auto; }
+.map-side { flex: none; width: clamp(280px, 36%, 460px); min-height: 0; display: flex; flex-direction: column; gap: var(--gap); overflow: auto; }
 .map-side:not(:has(> :not([hidden]))) { display: none; }
-.map-side.walk > .map-explain { order: -1; }
+.map-side.walk > .map-explain { order: -1; flex: 1 1 0; }
+.map-side:not(:has(> .map-card:not([hidden]))) > .map-explain { flex-grow: 1; }
 .map-stage {
   position: relative; flex: 1; min-width: 0; min-height: 280px;
   background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
@@ -596,8 +602,12 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 /* The first layout is being worked out: the waiting hourglass in the middle of the cube. */
 .map-busy { color: var(--muted); cursor: help; }
 .map-busy svg.i { width: 30px; height: 30px; }
-.map-card { flex: none; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
-.mc-head { display: flex; align-items: flex-start; gap: 2px; }
+.map-card {
+  flex: 1 1 0; display: flex; flex-direction: column;
+  padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+}
+/* The name, preview or fingerprint, close; the folder under them. */
+.mc-head { display: flex; align-items: center; gap: 2px; }
 .mc-head .chip-x { flex: none; color: var(--muted); }
 .mc-head .chip-x:hover { color: var(--ink); background: var(--hover); }
 .mc-name {
@@ -609,11 +619,12 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
   font: 11px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mc-dir:hover { color: var(--muted); text-decoration: underline; }
-.mc-tabs { margin: 10px 0 8px; }
+.mc-tabs { margin-right: 4px; }
 .mc-tabs button { width: 30px; height: 24px; }
 .mc-tabs button svg.i { width: 15px; height: 15px; }
-/* One fixed-size spot for the preview or the fingerprint: switching files never resizes the card. */
-.mc-view { height: 150px; margin-bottom: 10px; }
+/* One spot for the preview or the fingerprint that takes what the card has left (at least a small
+   picture's worth): switching files never resizes the card. */
+.mc-view { flex: 1 1 0; min-height: 72px; margin: 10px 0; container-type: size; }
 .mc-preview {
   height: 100%; display: grid; place-items: center; overflow: hidden;
   border-radius: 6px;
@@ -622,13 +633,14 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mc-text {
   margin: 0; padding: 0; align-self: start; justify-self: stretch; font-size: 12px; line-height: 1.45;
   color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: var(--lines, 8); -webkit-box-orient: vertical; overflow: hidden;
 }
-.mc-text.mono { font: 11px/1.45 var(--mono); }
+.mc-text.mono { font: 11px/1.45 var(--mono); -webkit-line-clamp: var(--lines-mono, 9); }
 .mc-none svg.i { width: 34px; height: 34px; color: var(--faint); }
+/* (square, as big as the spot allows) */
 .mc-print {
-  display: block; width: 150px; height: 150px; margin: 0 auto; border-radius: 6px; background: var(--well);
-  image-rendering: pixelated; cursor: crosshair;
+  display: block; width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); margin: 0 auto; border-radius: 6px;
+  background: var(--well); image-rendering: pixelated; cursor: crosshair;
 }
 .mc-label { font-size: 11px; font-weight: 700; color: var(--faint); margin: 0 0 2px 6px; }
 .mc-label:has(+ .mc-related:empty) { display: none; }
@@ -660,15 +672,26 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 /* The map's views, at the bar's end like the search page's; the panel that explains them, in the
    column beside the map (a card like the file's). */
 .map-views { margin-left: auto; }
-.map-explain { flex: none; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
+.map-explain {
+  flex: 0 0 auto; display: flex; flex-direction: column;
+  padding: 12px 14px; background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+}
 .mx-head { display: flex; align-items: center; gap: 8px; }
 .mx-head > svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
 .mx-head b { flex: 1; min-width: 0; color: var(--ink); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-head .chip-x { flex: none; color: var(--muted); }
-.mx-line { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text); }
+/* How it works: point by point, an icon beside a few bold words and a line or two; "show me" at the
+   end of the bold line. */
+.mx-items { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.mx-item { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: start; }
+.mx-item > svg.i { width: 18px; height: 18px; color: var(--faint); }
+.mx-item-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.mx-item-head b { color: var(--ink); font-weight: 600; font-size: 13px; line-height: 18px; }
+.mx-item-head .mx-show { margin-left: auto; }
+.mx-item p { margin: 3px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text); }
 .mx-show {
-  display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 0; border: 0; background: none; cursor: pointer;
-  font: inherit; font-weight: 600; color: var(--muted); white-space: nowrap; vertical-align: baseline;
+  display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap;
 }
 .mx-show:hover { color: var(--ink); text-decoration: underline; }
 .mx-show svg.i { width: 14px; height: 14px; align-self: center; }
@@ -690,7 +713,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mx-file svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
 .mx-file b { min-width: 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-dir { align-self: stretch; font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mx-thumb { display: block; max-width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; }
+.mx-thumb { display: block; max-width: 100%; max-height: 104px; object-fit: contain; border-radius: 6px; }
 .mx-thumb.small { max-height: 48px; }
 .mx-sample { align-self: stretch; }
 .mx-sample p {
@@ -701,10 +724,11 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mx-results .more-divider { margin: 4px 0; min-height: 22px; cursor: default; }
 .mx-open { align-self: flex-end; }
 .mx-result { cursor: default; }
-.mx-near { margin: 10px 0 0; }
+.mx-near { margin: 10px 0 0; align-self: flex-start; }
 .mx-skel { width: 100%; height: 120px; }
 .mx-error { margin: 10px 0 0; font-size: 12px; color: var(--red); }
-.mx-nav { display: flex; align-items: center; gap: var(--gap); margin-top: 12px; }
+/* (at the panel's foot: the buttons stay put from step to step) */
+.mx-nav { display: flex; align-items: center; gap: var(--gap); margin-top: auto; padding-top: 12px; }
 .mx-dots { flex: 1; display: flex; justify-content: center; gap: 6px; }
 .mx-dots button { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 50%; background: var(--border-strong); cursor: pointer; }
 .mx-dots button:hover { background: var(--faint); }

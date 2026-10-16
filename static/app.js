@@ -93,6 +93,12 @@ const ICONS = {
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.3-.9.8-.9 1.4v.3M12 16.6v.2"/>',
   sort: '<path d="M7.5 4.5v15M4 16l3.5 3.5L11 16M16.5 19.5v-15M13 8l3.5-3.5L20 8"/>',
   size: '<rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M14 4h6v6M20 4l-7.5 7.5"/>',
+  // (the map's "How it works": dots, lines to the closest, distances, a ring, directions)
+  scatter: '<circle cx="6.5" cy="15.5" r="2"/><circle cx="12" cy="7" r="2"/><circle cx="17.5" cy="14.5" r="2"/><circle cx="12.5" cy="19" r="1.2"/>',
+  spokes: '<circle cx="12" cy="12" r="2.2"/><circle cx="5" cy="6" r="1.5"/><circle cx="19" cy="7" r="1.5"/><circle cx="16.5" cy="19" r="1.5"/><path d="M10.3 10.5 6.1 7M13.9 11l3.8-2.9M13.1 14l2.6 3.6"/>',
+  ruler: '<path d="M3.5 16 16 3.5l4.5 4.5L8 20.5z"/><path d="m7.5 12 2 2M10.5 9l2 2M13.5 6l2 2"/>',
+  ring: '<path d="M12 3.5a8.5 8.5 0 1 1-8.1 5.9"/>',
+  compass: '<circle cx="12" cy="12" r="8.5"/><path d="m15 9-1.8 4.2L9 15l1.8-4.2z"/>',
 };
 
 // The map's auto-rotate button: a cube on a turntable, with an orbit arrow around its base. While
@@ -2826,6 +2832,12 @@ function renderRelatedList() {
 
 for (const b of $("mc-tabs").querySelectorAll("button")) b.addEventListener("click", () => setCardTab(b.dataset.tab));
 setCardTab("preview");
+// The preview grows and shrinks with the column: a text shows as many whole lines as fit.
+new ResizeObserver(([e]) => {
+  const box = $("mc-preview"), height = e.contentRect.height;
+  box.style.setProperty("--lines", Math.max(2, Math.floor(height / 17.4))); // (12px, line-height 1.45)
+  box.style.setProperty("--lines-mono", Math.max(2, Math.floor(height / 15.95))); // (11px)
+}).observe($("mc-preview"));
 
 // The file's 256 numbers as a 16 × 16 grid: pink above zero, blue below.
 function drawFingerprint(v, active = null, canvas = $("mc-print")) {
@@ -3115,7 +3127,7 @@ function showMe(what) {
   startMapLoop();
 }
 
-// (opened, it's scrolled into sight: under the file's card, the column may be taller than the map)
+// (opened, it's scrolled into sight: in a very short window the column scrolls)
 const toggleHelp = (open = !map.help) => {
   map.help = open;
   renderExplain();
@@ -3123,8 +3135,8 @@ const toggleHelp = (open = !map.help) => {
   startMapLoop();
 };
 
-// The panel: for the map and Neighbours, a few lines on what you see, each with a "show me"; for a
-// walk, its steps.
+// The panel: for the map and Neighbours, what you see, point by point (an icon, a few words, a line
+// or two, and a "show me" where there's something to show); for a walk, its steps.
 function renderExplain() {
   const box = $("map-explain");
   const walk = map.view === "search" || map.view === "index";
@@ -3139,10 +3151,16 @@ function renderExplain() {
   const show = (what, label = t("map.show_me")) => h("button", { type: "button", class: "mx-show", onclick: () => showMe(what) },
     icon(what === "near" ? "near" : "eye"), label);
   if (!walk) {
-    const items = map.view === "near"
-      ? [["map.n1", "center"], ["map.n2", "rings"], ["map.n3"], ["map.n4"]]
-      : [["map.m1"], ["map.m2", "lines"], ["map.m3", "near", t("map.true_distances")], ["map.m4", map.rough?.size ? "rough" : null]];
-    box.replaceChildren(head, ...items.map(([key, what, label]) => h("p", { class: "mx-line" }, t(key), what ? show(what, label) : null)));
+    const near = map.view === "near";
+    const items = near
+      ? [["near", "map.n1", "center"], ["ring", "map.n2", "rings"], ["compass", "map.n3"]]
+      : [["scatter", "map.m1"], ["spokes", "map.m2", "lines"], ["ruler", "map.m3", "near", t("map.true_distances")],
+        map.rough?.size ? ["plus", "map.m4", "rough"] : null].filter(Boolean); // (new files: only while some are placed roughly)
+    box.replaceChildren(head,
+      h("div", { class: "mx-items" }, ...items.map(([ic, key, what, label]) => h("div", { class: "mx-item" }, icon(ic),
+        h("div", { class: "mx-item-text" },
+          h("div", { class: "mx-item-head" }, h("b", {}, t(key)), what ? show(what, label) : null),
+          h("p", {}, t(`${key}_d`)))))));
     return;
   }
   const keys = WALK[map.view];
@@ -3192,7 +3210,7 @@ function walkVisual() {
     if (!q || q.loading) return h("div", { class: "mx-visual" }, h("span", { class: "skeleton mx-skel" }));
     if (q.error) return h("p", { class: "mx-error" }, q.error);
     if (at === 0) {
-      return h("div", { class: "mx-visual" }, h("div", { class: "mx-words" }, `“${q.text}”`), printCanvas(q.vector, 128),
+      return h("div", { class: "mx-visual" }, h("div", { class: "mx-words" }, `“${q.text}”`), printCanvas(q.vector, 112),
         h("div", { class: "mx-caption" }, t("map.numbers")));
     }
     if (at === 2 && !q.words.size) return h("div", { class: "mx-caption" }, t("map.no_words"));
@@ -3245,7 +3263,7 @@ function walkVisual() {
   }
   if (at === 3) {
     return h("div", { class: "mx-visual" }, h("div", { class: "mx-prints" }, ...f.passages.slice(0, 6).map((ps) => printCanvas(ps.vector, 28))),
-      h("div", { class: "mx-arrow" }, icon("chevronDown")), printCanvas(f.mean, 112), h("div", { class: "mx-caption" }, t("map.average")));
+      h("div", { class: "mx-arrow" }, icon("chevronDown")), printCanvas(f.mean, 96), h("div", { class: "mx-caption" }, t("map.average")));
   }
   return h("button", { type: "button", class: "mx-show mx-near", onclick: () => setMapView("near") }, icon("near"), t("map.true_distances"));
 }
