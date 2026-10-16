@@ -1847,6 +1847,8 @@ pub fn defaults() -> Map<String, Value> {
         "kinds_off": [], "formats_off": [], "hidden_files": false, "program_folders": false,
         // Settings -> Diagnostics: a tab with what the app uses
         "diagnostics": false,
+        // The map's side column, as wide as it was dragged to (pixels; 0: its own width)
+        "map_side": 0,
     });
     match v {
         Value::Object(m) => m,

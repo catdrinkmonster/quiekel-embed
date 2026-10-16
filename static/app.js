@@ -70,7 +70,6 @@ const ICONS = {
   contrast: '<circle cx="12" cy="12" r="8.5"/><path class="solid" d="M12 3.5a8.5 8.5 0 0 1 0 17z"/>',
   cube: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>',
   near: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12h.01"/>',
-  tour: '<circle cx="12" cy="12" r="8.5"/><path d="M10.2 8.4v7.2l5.6-3.6z"/>',
   focus: '<circle cx="12" cy="12" r="3"/><path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15"/>',
   mouse: '<rect x="6.5" y="3.5" width="11" height="17" rx="5.5"/><path d="M12 7.5v3"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6v.2"/>',
@@ -92,12 +91,6 @@ const ICONS = {
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.3-.9.8-.9 1.4v.3M12 16.6v.2"/>',
   sort: '<path d="M7.5 4.5v15M4 16l3.5 3.5L11 16M16.5 19.5v-15M13 8l3.5-3.5L20 8"/>',
   size: '<rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M14 4h6v6M20 4l-7.5 7.5"/>',
-  // (the map's "How it works": dots, lines to the closest, distances, a ring, directions)
-  scatter: '<circle cx="6.5" cy="15.5" r="2"/><circle cx="12" cy="7" r="2"/><circle cx="17.5" cy="14.5" r="2"/><circle cx="12.5" cy="19" r="1.2"/>',
-  spokes: '<circle cx="12" cy="12" r="2.2"/><circle cx="5" cy="6" r="1.5"/><circle cx="19" cy="7" r="1.5"/><circle cx="16.5" cy="19" r="1.5"/><path d="M10.3 10.5 6.1 7M13.9 11l3.8-2.9M13.1 14l2.6 3.6"/>',
-  ruler: '<path d="M3.5 16 16 3.5l4.5 4.5L8 20.5z"/><path d="m7.5 12 2 2M10.5 9l2 2M13.5 6l2 2"/>',
-  ring: '<path d="M12 3.5a8.5 8.5 0 1 1-8.1 5.9"/>',
-  compass: '<circle cx="12" cy="12" r="8.5"/><path d="m15 9-1.8 4.2L9 15l1.8-4.2z"/>',
 };
 
 // The map's auto-rotate button: a cube on a turntable, with an orbit arrow around its base. While
@@ -276,6 +269,7 @@ function setLanguage(lang) {
     setTip(b, t(`view.${b.dataset.view}`));
   }
   setTip($("nav-map"), t("nav.map"));
+  if (map.help) renderExplain();
   renderSort();
   renderKeys();
   renderScopes();
@@ -1169,6 +1163,7 @@ function renderSettings({ settings, resources, model }) {
   const key = JSON.stringify([settings, i18n.lang]);
   if (key !== state.settingsKey) {
     state.settingsKey = key;
+    sideWidth(settings.map_side);
     $("autostart-row").hidden = settings.autostart == null;
     $("autostart").checked = !!settings.autostart;
     $("autostart").setAttribute("aria-label", t("settings.autostart"));
@@ -2331,9 +2326,9 @@ const map = {
   info: null, tab: "preview",
   highlight: null, dim: null, dimValues: null, dimCache: new Map(),
   drag: null, animStart: 0, last: 0, raf: 0, timer: 0, spinTimer: 0, screen: [],
-  // the views (see "map views"): which one, the explanation panel, Neighbours' layout, a walk's step
-  // and what it shows, a "show me" under way, the files only roughly placed so far
-  view: "map", help: false, near: null, nearZoom: 1, steps: null, query: null, walkFile: null, flash: null, rough: new Set(),
+  // the views (see "map views"): which one, Neighbours' layout, How it works (the tour: its step and
+  // what it shows)
+  view: "map", near: null, nearZoom: 1, help: false, steps: null, query: null, walkFile: null,
 };
 let mapSearchTimer = null;
 
@@ -2389,7 +2384,6 @@ function setPoints(points, total) {
     return q;
   });
   map.total = total;
-  map.rough = new Set(points.filter((p) => p.r).map((p) => p.id));
   map.animStart = performance.now();
   map.dimCache.clear();
   map.history = map.history.filter((id) => map.byId.has(id));
@@ -2447,10 +2441,6 @@ function drawMap(now) {
   }
   const appear = Math.min(1, (now - map.animStart) / 900);
   const ease = 1 - (1 - appear) ** 3;
-  // "Show me": what a line of the explanation is about pulses for a moment.
-  const flash = map.flash && now < map.flash.until ? map.flash.what : null;
-  if (map.flash && !flash) map.flash = null;
-  const pulse = flash ? 0.5 + 0.5 * Math.sin(now / 150) : 0;
 
   const { tx, ty, tz, zoom } = map.cam;
   const cy = Math.cos(map.yaw), sy = Math.sin(map.yaw), cp = Math.cos(map.pitch), sp = Math.sin(map.pitch);
@@ -2479,13 +2469,13 @@ function drawMap(now) {
     for (const share of [0.75, 0.5, 0.25, 0]) {
       const r = (1 - share) * NR;
       ctx.setLineDash([3 * dpr, 5 * dpr]);
-      ctx.lineWidth = (flash === "rings" ? 1.5 + pulse : 1) * dpr;
-      ctx.strokeStyle = ink(flash === "rings" ? 0.25 + 0.35 * pulse : 0.14);
+      ctx.lineWidth = dpr;
+      ctx.strokeStyle = ink(0.14);
       ctx.beginPath();
       ctx.arc(NX, NY, r, 0, TAU);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = ink(flash === "rings" ? 0.5 + 0.4 * pulse : 0.35);
+      ctx.fillStyle = ink(0.35);
       ctx.fillText(pct(Math.round(share * 100)), NX + 5 * dpr, NY - r - 3 * dpr);
     }
   } else {
@@ -2548,7 +2538,7 @@ function drawMap(now) {
 
   // What the tour shows on the map, step by step: a file's dot (its first steps), then a search;
   // age: how long the step has been shown, for its animations.
-  const tour = map.view === "tour" && map.steps ? map.steps : null;
+  const tour = map.help && map.steps ? map.steps : null;
   const step = tour ? tour.at : 0, age = tour ? now - tour.start : 0;
   const walkFile = tour && step < TOUR_SEARCH - 1 && map.walkFile?.passages ? map.walkFile.id : null;
   const walk = tour && step >= TOUR_SEARCH && map.query?.weights ? map.query : null;
@@ -2558,10 +2548,10 @@ function drawMap(now) {
 
   const sel = map.selected && at.get(map.selected.id);
   const dims = map.dimValues;
-  const lines = (from, to, i, strong, k = 1) => {
+  const lines = (from, to, i, k = 1) => {
     if (k <= 0) return;
-    ctx.strokeStyle = strong ? `rgba(245, 78, 0, ${(0.55 + 0.4 * pulse).toFixed(3)})` : ink(0.5 - i * 0.06);
-    ctx.lineWidth = (strong ? 2 + pulse : 1.3) * dpr;
+    ctx.strokeStyle = ink(0.5 - i * 0.06);
+    ctx.lineWidth = 1.3 * dpr;
     ctx.beginPath();
     ctx.moveTo(from[0], from[1]);
     ctx.lineTo(from[0] + (to.px - from[0]) * k, from[1] + (to.py - from[1]) * k);
@@ -2570,15 +2560,15 @@ function drawMap(now) {
   ctx.setLineDash([4 * dpr, 4 * dpr]);
   if (sel && map.closest.length && !dims && !walk && !walkFile) { // dashed lines to the closest files
     const placing = tour && step === TOUR_SEARCH - 1; // (the tour's file takes its place: drawn one by one)
-    map.closest.forEach((cl, i) => { const q = at.get(cl.id); if (q) lines([sel.px, sel.py], q, i, flash === "lines", placing ? drawn(500, i, 170) : 1); });
+    map.closest.forEach((cl, i) => { const q = at.get(cl.id); if (q) lines([sel.px, sel.py], q, i, placing ? drawn(500, i, 170) : 1); });
   }
   if (spot && ws >= 3) { // the search's best results, drawn one by one
-    (walk.results || []).slice(0, 8).forEach((r, i) => { const q = at.get(r.file_id); if (q) lines(spot, q, i, false, drawn(250, i, 110)); });
+    (walk.results || []).slice(0, 8).forEach((r, i) => { const q = at.get(r.file_id); if (q) lines(spot, q, i, drawn(250, i, 110)); });
   }
   ctx.setLineDash([]);
 
   const base = Math.max(2.2, Math.min(5.5, 7.5 - 1.6 * Math.log10(Math.max(10, map.points.length))));
-  const hl = walk && ws >= 2 ? walk.words : walkFile ? map.walkFile.only : flash === "rough" ? map.rough : map.highlight;
+  const hl = walk && ws >= 2 ? walk.words : walkFile ? map.walkFile.only : map.highlight;
   const rel = walk ? (ws >= 1 ? walk.weights : null) : walkFile ? null : map.related;
   const dimmed = walk && ws === 0; // (the words first: the map waits behind them)
   for (const q of list) {
@@ -2620,7 +2610,7 @@ function drawMap(now) {
       // (in the tour, the files with your words get their rings one after another)
       const k = walk && ws === 2 ? popIn((age - 250 - (walk.rank.get(p.id) ?? 0) * 90) / 360) : 1;
       if (k > 0) {
-        ctx.lineWidth = (flash === "rough" ? 1.5 + pulse : 1.5) * dpr;
+        ctx.lineWidth = 1.5 * dpr;
         ctx.strokeStyle = ink(0.8 * Math.min(1, k));
         ctx.beginPath();
         ctx.arc(q.px, q.py, q.r * k, 0, TAU);
@@ -2642,11 +2632,10 @@ function drawMap(now) {
     ctx.arc(q.px, q.py, q.r, 0, TAU);
     ctx.fill();
     ctx.globalAlpha = 1;
-    const ring = p === map.selected && flash === "center" ? 4 + 6 * pulse : 4;
     ctx.lineWidth = 2.5 * dpr;
     ctx.strokeStyle = color;
     ctx.beginPath();
-    ctx.arc(q.px, q.py, q.r + ring * dpr, 0, TAU);
+    ctx.arc(q.px, q.py, q.r + 4 * dpr, 0, TAU);
     ctx.stroke();
   }
   // Your words, where the map would put them: a ring of their own.
@@ -2743,7 +2732,7 @@ function drawMap(now) {
   if (fileDot) ripple(fileDot.px, fileDot.py, fileDot.r + 4 * dpr, "245, 78, 0");
   if (spot) ripple(spot[0], spot[1], 7 * dpr, theme.ink);
   map.screen = list;
-  if (map.drag || map.fly || appear < 1 || fading || moving || flash || (tour && age < 2600)) {
+  if (map.drag || map.fly || appear < 1 || fading || moving || (tour && age < 2600)) {
     startMapLoop();
   } else if (turning || (tour && document.hasFocus())) {
     // The slow turn (and the tour's rings) look the same at 30 frames a second as at a 144 Hz
@@ -2853,7 +2842,7 @@ function updateSteps() {
 }
 
 function showCard(p) {
-  $("map-card").hidden = map.view === "tour"; // (the tour shows its file itself: it has the column)
+  $("map-card").hidden = map.help; // (one thing at a time beside the map: How it works has it)
   const name = $("mc-name");
   name.textContent = p.name;
   setTip(name, p.name);
@@ -2875,29 +2864,61 @@ function showCard(p) {
     h("i", { class: "skeleton sk-dot" }), h("span", { class: "skeleton sk-line", style: `width: ${w}%` }))));
 }
 
-// The card's preview: the picture for photos and PDFs, else the start of the text.
+// The card's preview, the whole file to look through: a picture whole, a PDF's pages (each loaded as
+// it scrolls near), any other document's, email's, text or code file's whole text (scrolling,
+// selectable). A file that can't be read so shows the start of its text, or its kind.
+const docCache = new Map(); // (a file's text or page count, by file and version)
+
 function showPreview(p, info) {
   const box = $("mc-preview");
   const key = info ? `${p.id}:${info.mtime}:${info.size}` : "";
   if (key && box.dataset.key === key) return; // already showing it
   box.dataset.key = key;
+  box.scrollTop = 0;
   if (!info) {
     box.className = "mc-preview";
     return box.replaceChildren();
   }
-  const text = () => {
-    box.className = "mc-preview";
+  const r = { file_id: p.id, mtime: info.mtime, size: info.size };
+  const open = () => openFile({ file_id: p.id });
+  const fallback = () => {
+    box.className = "mc-preview doc";
     box.replaceChildren(info.passage
-      ? h("p", { class: `mc-text${info.kind === "code" ? " mono" : ""}` }, info.passage)
+      ? h("p", { class: `mc-doc${info.kind === "code" ? " mono" : ""}` }, info.passage)
       : h("span", { class: "mc-none" }, icon(info.kind in ICONS ? info.kind : "doc")));
   };
-  if (!info.preview) return text();
-  const img = h("img", { src: thumbUrl({ file_id: p.id, mtime: info.mtime, size: info.size }), alt: "",
-    onclick: () => openFile({ file_id: p.id }) });
-  // (a picture still loading for a file you've since left must not touch the card)
-  img.addEventListener("load", () => { if (img.isConnected) box.classList.remove("loading"); }, { once: true });
-  img.addEventListener("error", () => { if (img.isConnected) text(); }, { once: true });
-  box.replaceChildren(img);
+  if (info.kind === "image") {
+    const img = h("img", { src: previewUrl(r), alt: "", onclick: open });
+    // (a picture still loading for a file you've since left must not touch the card)
+    img.addEventListener("load", () => { if (img.isConnected) box.classList.remove("loading"); }, { once: true });
+    img.addEventListener("error", () => { if (img.isConnected) fallback(); }, { once: true });
+    box.className = "mc-preview picture loading";
+    return box.replaceChildren(img);
+  }
+  box.className = "mc-preview loading";
+  box.replaceChildren();
+  const show = (d) => {
+    if (box.dataset.key !== key) return; // (another file since)
+    box.className = "mc-preview doc";
+    if (d.pdf_pages) {
+      return box.replaceChildren(...Array.from({ length: Math.min(d.pdf_pages, 300) }, (_, i) => {
+        const img = h("img", { class: "mc-page", alt: "", loading: "lazy", src: previewUrl(r, i + 1), onclick: open });
+        setTip(img, t("result.page", { n: fmt(i + 1) }));
+        return img;
+      }));
+    }
+    const pages = d.pages || [];
+    if (!pages.length) return fallback();
+    box.replaceChildren(...[...pages.flatMap((text, i) => [
+      pages.length > 1 ? h("div", { class: "mc-page-label" }, t("result.page", { n: fmt(i + 1) })) : null,
+      h("p", { class: `mc-doc${info.kind === "code" ? " mono" : ""}` }, text.trim()),
+    ]), d.cut ? h("div", { class: "mc-cut" }, "…") : null].filter(Boolean));
+  };
+  if (docCache.has(key)) return show(docCache.get(key));
+  api(`/api/text/${p.id}`).then((d) => {
+    docCache.set(key, d);
+    show(d);
+  }).catch(() => { if (box.dataset.key === key) fallback(); });
 }
 
 // Preview or fingerprint: one place in the card, two ways to look at the file.
@@ -2933,12 +2954,6 @@ function renderRelatedList() {
 
 for (const b of $("mc-tabs").querySelectorAll("button")) b.addEventListener("click", () => setCardTab(b.dataset.tab));
 setCardTab("preview");
-// The preview grows and shrinks with the column: a text shows as many whole lines as fit.
-new ResizeObserver(([e]) => {
-  const box = $("mc-preview"), height = e.contentRect.height;
-  box.style.setProperty("--lines", Math.max(2, Math.floor(height / 17.4))); // (12px, line-height 1.45)
-  box.style.setProperty("--lines-mono", Math.max(2, Math.floor(height / 15.95))); // (11px)
-}).observe($("mc-preview"));
 
 // The file's 256 numbers as a 16 × 16 grid: pink above zero, blue below.
 function drawFingerprint(v, active = null, canvas = $("mc-print"), reveal = 1) {
@@ -3009,7 +3024,7 @@ function resetMapView() {
 }
 
 async function mapSearch() {
-  if (map.view === "tour") return loadSearchWalk();
+  if (map.help) return loadSearchWalk();
   const q = $("map-q").value.trim();
   if (!q) {
     map.highlight = null;
@@ -3063,7 +3078,7 @@ async function mapSearch() {
     map.drag = null;
     if (!click) return;
     const p = mapHit(e);
-    if (p && map.view === "tour") { // (the tour keeps its view; in the file's steps, it follows the file you click)
+    if (p && map.help) { // (the tour goes on; in the file's steps, with the file you click)
       selectPoint(p, { fly: false });
       if (map.steps.at < TOUR_SEARCH) loadIndexWalk();
       return;
@@ -3123,34 +3138,29 @@ window.addEventListener("focus", () => { if (state.page === "map") startMapLoop(
 
 // ---------- map views ----------
 //
-// Three views of the same files: the map itself; Neighbours, one file in the middle and the others at
-// their true distance from it; and the tour: how a file comes to its dot, then how a search finds
-// files, step by step. The map and Neighbours explain themselves in a panel that stays closed until
-// you ask; the tour is its panel.
+// Two views of the same files: the map itself, and Neighbours: one file in the middle and the others
+// at their true distance from it. How it works (the ? on the map) is a tour beside the map: how a
+// file comes to its dot, then how a search finds files, step by step, shown on the map as it goes.
 
-const VIEW_ICON = { map: "cube", near: "near", tour: "tour" };
 const NEAR_TOP = 0.95, NEAR_BOTTOM = 0.55; // the card's scale: 100 % and 0 % alike
 const NEAR_EDGE = 1.2; // files less alike than 0 % wait just outside the outer ring
 
 // The tour's steps: a file is read, cut into passages, turned into numbers and given its place;
 // then your words are turned into numbers, compared with every file, their words looked for, and
-// the results put in order.
+// the results put in order. (Each has a title, map.tN, and a sentence, map.tN_d.)
 const TOUR = ["map.t1", "map.t2", "map.t3", "map.t4", "map.t5", "map.t6", "map.t7", "map.t8"];
 const TOUR_SEARCH = 4; // (the search's first step)
 const TOUR_PASSAGES = 6; // a file's passages the tour shows, at most
 
 function setMapView(view) {
   if (map.view === view) return;
+  if (map.help) toggleHelp(false); // (the tour shows the map)
   const was = map.view;
   map.view = view;
-  map.flash = null;
   for (const b of $("map-views").querySelectorAll("button")) {
     b.classList.toggle("active", b.dataset.view === view);
     b.setAttribute("aria-checked", b.dataset.view === view);
   }
-  const tour = view === "tour";
-  map.steps = tour ? { at: 0, start: performance.now() } : null;
-  if (tour) $("map-side").scrollTop = 0; // (the tour's steps first, from the top)
   if (view === "near") {
     if (map.spinBefore === null) map.spinBefore = map.spin;
     map.spin = false;
@@ -3164,14 +3174,7 @@ function setMapView(view) {
   } else if (was === "near") {
     map.near = null;
   }
-  if (tour) {
-    loadIndexWalk();
-    loadSearchWalk();
-  }
-  if (!tour && was === "tour") flyTo(map.selected ? { zoom: FOCUS_ZOOM } : OVERVIEW);
-  $("map-card").hidden = !map.selected || tour;
-  $("map-q").placeholder = `${tour ? walkWords() : t("nav.search")}…`;
-  renderExplain();
+  renderSide();
   startMapLoop();
 }
 
@@ -3219,54 +3222,40 @@ function layoutNear() {
   startMapLoop();
 }
 
-// "Show me": what a line of the explanation is about pulses for a moment.
-function showMe(what) {
-  if (what === "lines" && !map.selected) {
-    const c = centralPoint();
-    if (c) selectPoint(c);
+// How it works: the tour, in the column beside the map instead of the file's card (which comes back
+// when it closes). It shows on the map, so it leaves Neighbours.
+function toggleHelp(open = !map.help) {
+  if (open === map.help) return;
+  if (open && map.view !== "map") setMapView("map");
+  map.help = open;
+  map.steps = open ? { at: 0, start: performance.now() } : null;
+  if (open) {
+    loadIndexWalk();
+    loadSearchWalk();
+  } else {
+    flyTo(map.selected ? { zoom: FOCUS_ZOOM } : OVERVIEW);
   }
-  if (what === "near") return setMapView("near");
-  map.flash = { what, until: performance.now() + 2600 };
+  $("map-q").placeholder = `${open ? walkWords() : t("nav.search")}…`;
+  renderSide();
   startMapLoop();
 }
 
-// (opened, it's scrolled into sight: in a very short window the column scrolls)
-const toggleHelp = (open = !map.help) => {
-  map.help = open;
+// Beside the map, one thing at a time: How it works while it's open, else the file picked.
+function renderSide() {
+  $("map-card").hidden = !map.selected || map.help;
   renderExplain();
-  if (open) $("map-explain").scrollIntoView({ block: "nearest", behavior: "smooth" });
-  startMapLoop();
-};
+}
 
-// The panel: for the map and Neighbours, what you see, point by point (an icon, a few words, a line
-// or two, and a "show me" where there's something to show); for the tour, its steps.
+// How it works, a step at a time: which part (a file, a search), its title and one sentence, what it
+// shows in the room left, and ‹ dots › to go through.
 function renderExplain() {
   const box = $("map-explain");
-  const walk = map.view === "tour";
-  const help = $("map-help");
-  help.hidden = walk;
-  help.classList.toggle("on", map.help && !walk);
-  box.hidden = !(walk || map.help);
-  $("map-side").classList.toggle("walk", walk);
+  $("map-help").classList.toggle("on", map.help);
+  box.hidden = !map.help;
   if (box.hidden) return;
-  const head = h("div", { class: "mx-head" }, icon(VIEW_ICON[map.view]), h("b", {}, t(`map.view.${map.view}`)),
-    iconButton("close", t("common.close"), () => (walk ? setMapView("map") : toggleHelp(false)), "chip-x"));
-  const show = (what, label = t("map.show_me")) => h("button", { type: "button", class: "mx-show", onclick: () => showMe(what) },
-    icon(what === "near" ? "near" : "eye"), label);
-  if (!walk) {
-    const near = map.view === "near";
-    const items = near
-      ? [["near", "map.n1", "center"], ["ring", "map.n2", "rings"], ["compass", "map.n3"]]
-      : [["scatter", "map.m1"], ["spokes", "map.m2", "lines"], ["ruler", "map.m3", "near", t("map.true_distances")],
-        map.rough?.size ? ["plus", "map.m4", "rough"] : null].filter(Boolean); // (new files: only while some are placed roughly)
-    box.replaceChildren(head,
-      h("div", { class: "mx-items" }, ...items.map(([ic, key, what, label]) => h("div", { class: "mx-item" }, icon(ic),
-        h("div", { class: "mx-item-text" },
-          h("div", { class: "mx-item-head" }, h("b", {}, t(key)), what ? show(what, label) : null),
-          h("p", {}, t(`${key}_d`)))))));
-    return;
-  }
   const at = map.steps.at;
+  const head = h("div", { class: "mx-head" }, icon("help"), h("b", {}, t("map.help")),
+    iconButton("close", t("common.close"), () => toggleHelp(false), "chip-x"));
   const dots = h("span", { class: "mx-dots" }, ...TOUR.map((_, i) => {
     const dot = h("button", { type: "button", class: `${i === at ? "on" : ""}${i === TOUR_SEARCH ? " part" : ""}`, onclick: () => goStep(i) });
     setTip(dot, t("map.step", { n: i + 1, total: TOUR.length }));
@@ -3274,15 +3263,19 @@ function renderExplain() {
   }));
   const back = iconButton("chevronLeft", t("common.previous"), () => goStep(at - 1));
   back.disabled = at === 0;
-  const next = iconButton("chevronRight", t("common.next"), () => goStep(at + 1), "primary");
+  const next = iconButton("chevronRight", t("common.next"), () => goStep(at + 1));
   next.disabled = at === TOUR.length - 1;
-  // (with its part: the file's steps, then the search's)
-  const step = h("div", { class: "mx-step" }, icon(at < TOUR_SEARCH ? "doc" : "search"), t("map.step", { n: at + 1, total: TOUR.length }));
-  box.replaceChildren(...[head, step, h("p", { class: "mx-text" }, t(TOUR[at])), walkVisual(), h("div", { class: "mx-nav" }, back, dots, next)].filter(Boolean));
+  box.replaceChildren(head,
+    h("div", { class: "mx-body" },
+      h("div", { class: "mx-part" }, t(at < TOUR_SEARCH ? "map.part.file" : "map.part.search")),
+      h("div", { class: "mx-title" }, t(TOUR[at])),
+      h("p", { class: "mx-text" }, t(`${TOUR[at]}_d`)),
+      h("div", { class: "mx-stage" }, walkVisual())),
+    h("div", { class: "mx-nav" }, back, dots, next));
 }
 
 function goStep(i) {
-  if (map.view !== "tour" || i < 0 || i >= TOUR.length) return;
+  if (!map.help || i < 0 || i >= TOUR.length) return;
   map.steps = { at: i, start: performance.now() };
   applyStep();
   renderExplain();
@@ -3325,10 +3318,9 @@ function fileVisual(at) {
   if (at === 0) {
     const page = f.file.preview ? thumb("mx-thumb") : h("p", {}, f.passages[0]?.text || "");
     return h("div", { class: "mx-visual" },
-      nth(h("div", { class: "mx-file mx-in" }, icon(f.file.kind in ICONS ? f.file.kind : "doc"), h("b", {}, f.file.name)), 0),
-      nth(h("div", { class: "mx-dir mx-in" }, f.file.dir), 1),
-      nth(h("div", { class: `mx-read mx-in${f.file.preview ? "" : " text"}` }, page), 2),
-      nth(h("div", { class: "mx-caption mx-in" }, t("map.pick_another")), 3));
+      nth(h("div", { class: `mx-read mx-in${f.file.preview ? "" : " text"}` }, page), 0),
+      nth(h("div", { class: "mx-file mx-in" }, icon(f.file.kind in ICONS ? f.file.kind : "doc"), h("b", {}, f.file.name)), 1),
+      nth(h("div", { class: "mx-dir mx-in" }, f.file.dir), 2));
   }
   if (at === 1 || at === 2) {
     const shown = f.passages.slice(0, TOUR_PASSAGES);
@@ -3337,7 +3329,7 @@ function fileVisual(at) {
       h("span", {}, ps.page ? h("em", {}, t("result.page", { n: ps.page })) : null,
         ps.text || (f.file.preview ? thumb("mx-thumb small") : "…"))), i));
     const more = f.count > shown.length ? h("div", { class: "mx-caption" }, tp("map.more_passages", f.count - shown.length)) : null;
-    return h("div", { class: "mx-visual" }, h("div", { class: "mx-caption" }, tp("map.passages", f.count)), h("div", { class: "mx-passages" }, ...rows), more);
+    return h("div", { class: "mx-visual" }, stat("text", tp("map.passages", f.count), t("map.t2")), h("div", { class: "mx-passages" }, ...rows), more);
   }
   const small = f.passages.slice(0, TOUR_PASSAGES);
   const prints = small.map((ps, i) => {
@@ -3345,7 +3337,7 @@ function fileVisual(at) {
     c.style.setProperty("--dx", `${((small.length - 1) / 2 - i) * 32}px`); // (to the middle, where the average comes)
     return nth(c, i);
   });
-  return h("div", { class: "mx-visual" }, h("div", { class: "mx-prints merge" }, ...prints), printCanvas(f.mean, 96, 650),
+  return h("div", { class: "mx-visual" }, h("div", { class: "mx-prints merge" }, ...prints), printCanvas(f.mean, 120, 650),
     h("div", { class: "mx-caption mx-in late" }, t("map.average")));
 }
 
@@ -3358,7 +3350,7 @@ function searchVisual(s) {
   const all = q.results || [];
   const dot = (r) => h("i", { class: "mc-dot", style: `background: ${KIND_COLOR[KIND_GROUP[r.kind] || "text"]}` });
   if (s === 0) {
-    return h("div", { class: "mx-visual" }, h("div", { class: "mx-words mx-in" }, `“${q.text}”`), printCanvas(q.vector, 112, 450),
+    return h("div", { class: "mx-visual" }, h("div", { class: "mx-words mx-in" }, `“${q.text}”`), printCanvas(q.vector, 120, 450),
       h("div", { class: "mx-caption mx-in late" }, t("map.numbers")));
   }
   if (s === 1) {
@@ -3392,11 +3384,11 @@ function searchVisual(s) {
     ? [line(t("search.no_clear_match")), ...all.slice(0, 4).map(row)] // (nothing clears the bar: the search says so)
     : [...all.slice(0, Math.min(likely, rest.length ? 4 : 6)).map(row),
       ...(rest.length ? [line(tp("search.less_likely", all.length - likely)), ...rest.map(row)] : [])];
-  const open = nth(iconButton("search", t("map.open_search"), () => {
+  const open = nth(h("button", { type: "button", class: "mx-link mx-in", onclick: () => {
     $("q").value = q.text;
     goTo("search");
     runSearch();
-  }, "primary mx-open mx-in"), i);
+  } }, icon("search"), t("map.open_search")), i);
   return h("div", { class: "mx-visual" }, h("div", { class: "mc-related mx-results" }, ...rows), open);
 }
 
@@ -3446,7 +3438,7 @@ async function loadSearchWalk(tries = 0) {
   const text = walkWords();
   const key = `${text}|${state.kind}|${state.scope?.path || ""}`; // (the search goes where the map is narrowed to)
   if (map.query?.key === key && !map.query.error) return;
-  const shown = () => map.view === "tour" && map.steps.at >= TOUR_SEARCH;
+  const shown = () => map.help && map.steps.at >= TOUR_SEARCH;
   map.query = { key, text, loading: true };
   if (shown()) renderExplain();
   try {
@@ -3467,7 +3459,7 @@ async function loadSearchWalk(tries = 0) {
     if (map.query?.key !== key) return;
     map.query = { key, text, error: e.message };
     // (the model may still be waking up: a few more tries while the tour is open)
-    if (tries < 5) setTimeout(() => { if (map.view === "tour" && map.query?.key === key) loadSearchWalk(tries + 1); }, 3000);
+    if (tries < 5) setTimeout(() => { if (map.help && map.query?.key === key) loadSearchWalk(tries + 1); }, 3000);
   }
   if (!shown()) return;
   map.steps.start = performance.now(); // (its animations from the start, now that there's something to show)
@@ -3492,7 +3484,7 @@ function tourFile() {
 // The tour's file: its passages, their numbers and where they'd sit, and their average. (Shown again
 // only while one of the file's steps is on.)
 async function loadIndexWalk() {
-  const shown = () => map.view === "tour" && map.steps.at < TOUR_SEARCH;
+  const shown = () => map.help && map.steps.at < TOUR_SEARCH;
   const p = tourFile();
   if (!p) { // (no file on the map yet)
     map.walkFile = { empty: true };
@@ -3519,6 +3511,43 @@ async function loadIndexWalk() {
 for (const b of $("map-views").querySelectorAll("button")) b.addEventListener("click", () => setMapView(b.dataset.view));
 $("map-help").addEventListener("click", () => toggleHelp());
 
+// The column beside the map is as wide as you drag its edge to (kept in the settings; a double-click
+// gives it its own width back).
+function sideWidth(w) {
+  const main = $("map-resize").parentElement;
+  if (w > 0) main.style.setProperty("--side-w", `${w}px`);
+  else main.style.removeProperty("--side-w");
+}
+
+{
+  const handle = $("map-resize");
+  let drag = null;
+  handle.addEventListener("pointerdown", (e) => {
+    drag = { w: 0 };
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("drag");
+    e.preventDefault();
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const r = handle.parentElement.getBoundingClientRect();
+    drag.w = Math.round(Math.max(260, Math.min(r.width - 320, r.right - e.clientX - handle.offsetWidth / 2)));
+    sideWidth(drag.w);
+  });
+  const end = () => {
+    if (!drag) return;
+    handle.classList.remove("drag");
+    if (drag.w) saveSettings({ map_side: drag.w });
+    drag = null;
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  handle.addEventListener("dblclick", () => {
+    sideWidth(0);
+    saveSettings({ map_side: 0 });
+  });
+}
+
 // ---------- kind and folder ----------
 
 // Search and the map show one kind of files, or all: one choice for both, as the folder is.
@@ -3530,7 +3559,7 @@ function setKind(kind) {
   runSearch();
   if (map.selected && !visible(map.selected)) clearSelection();
   else if (map.related) setClosest();
-  if ($("map-q").value.trim() || map.view === "tour") mapSearch(); // (the tour's search too)
+  if ($("map-q").value.trim() || map.help) mapSearch(); // (the tour's search too)
   startMapLoop();
 }
 
@@ -3542,7 +3571,7 @@ function setScope(path) {
   else if ($("q").value.trim()) runSearch();
   if (map.selected && !visible(map.selected)) clearSelection();
   else if (map.related) setClosest();
-  if ($("map-q").value.trim() || map.view === "tour") mapSearch(); // (the tour's search too)
+  if ($("map-q").value.trim() || map.help) mapSearch(); // (the tour's search too)
   startMapLoop();
 }
 
@@ -3753,6 +3782,11 @@ document.addEventListener("keydown", (e) => {
     goTo("search");
     q.focus();
     q.select();
+    return;
+  }
+  if (state.page === "map" && map.help && e.key === "Escape") {
+    e.preventDefault();
+    toggleHelp(false);
     return;
   }
   if (state.page === "map" && map.selected) { // ← (or Backspace): back to the file before; →: forward
