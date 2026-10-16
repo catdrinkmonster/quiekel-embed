@@ -8,6 +8,7 @@ const state = {
   results: [], selected: -1, terms: [], lightbox: -1,
   update: null, resultShown: false, applying: false, last: null, statusClick: null,
   views: { view_files: "cards", view_images: "grid" }, viewSaved: {},
+  sort: { key: "relevance", desc: false }, fetched: null,
 };
 let searchCtl = null;
 let searchTimer = null;
@@ -87,6 +88,8 @@ const ICONS = {
   bang: '<path d="M12 5.5v8M12 18v.5"/>',
   camera: '<path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.3l1.4-2h5.6l1.4 2h2.3A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.5" r="3.5"/>',
   help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.3-.9.8-.9 1.4v.3M12 16.6v.2"/>',
+  sort: '<path d="M7.5 4.5v15M4 16l3.5 3.5L11 16M16.5 19.5v-15M13 8l3.5-3.5L20 8"/>',
+  size: '<rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M14 4h6v6M20 4l-7.5 7.5"/>',
 };
 
 // The map's auto-rotate button: a cube on a turntable, with an orbit arrow around its base. While
@@ -265,6 +268,7 @@ function setLanguage(lang) {
     setTip(b, t(`view.${b.dataset.view}`));
   }
   setTip($("nav-map"), t("nav.map"));
+  renderSort();
   renderKeys();
   renderScopes();
   $("map-q").placeholder = `${t("nav.search")}…`;
@@ -390,6 +394,7 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 // removed and re-added, so the URL carries the file's version.
 const thumbUrl = (r) => `/api/thumb/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}`;
 const previewUrl = (r) => `/api/preview/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}`;
+const pictureUrl = (r) => r.picture || thumbUrl(r); // (the empty page's examples bring their own)
 
 // Wrap query words in <mark>, building DOM nodes (never innerHTML with file content).
 function highlighted(text, terms) {
@@ -442,6 +447,7 @@ let exampleAt = 0;
 function rotatePlaceholder() {
   const examples = t("search.examples").split("|");
   $("q").placeholder = `${examples[exampleAt++ % examples.length]}…`;
+  if (!$("q").value.trim() && !state.similar && state.hasFolders) renderEmpty(); // (its example result too)
 }
 setInterval(() => { if (!$("q").value) rotatePlaceholder(); }, 4500);
 
@@ -457,6 +463,7 @@ function route() {
   }
   hideTip();
   closeScopeMenu();
+  closeSortMenu();
   if (state.page === "search") $("q").focus();
   if (state.page === "map") openMap();
   if (state.page === "diagnostics") refreshDiagnostics();
@@ -980,6 +987,7 @@ function renderSettings({ settings, resources, model }) {
           state.views[key] = settings[key];
           updateViews();
           if (key === viewKey() && state.results.length) renderResults(state.results, state.likely);
+          else if (key === viewKey() && !$("q").value.trim() && !state.similar) renderEmpty(); // (the example)
         }
       }
     }
@@ -1382,6 +1390,7 @@ async function fetchResults(url) {
     const data = await res.json();
     state.semantic = data.semantic;
     state.expanded = false; // each search shows its likely results first
+    state.fetched = { items: data.results, likely: data.likely };
     updateNotice();
     renderResults(data.results, data.likely);
   } catch (e) {
@@ -1412,18 +1421,87 @@ function waitingText() {
   return h("p", { class: "waiting" }, before, link, after);
 }
 
-// Nothing searched yet. Quiekel stays the logo at the top of the rail, nowhere else.
+// Nothing searched yet: with no folders, the sentence that adds one; else what the search box's
+// example would find. (Quiekel stays the logo at the top of the rail, nowhere else.)
 function renderEmpty() {
   const empty = $("empty");
-  empty.hidden = state.hasFolders !== false;
-  empty.replaceChildren(...(state.hasFolders === false ? [waitingText()] : []));
+  empty.classList.remove("examples");
+  if (state.hasFolders === false) {
+    empty.hidden = false;
+    return empty.replaceChildren(waitingText());
+  }
+  if (state.hasFolders && !$("q").value.trim() && !state.similar) return renderSample();
+  empty.hidden = true;
+  empty.replaceChildren();
 }
 
 function renderMessage(msg) {
   state.results = [];
   $("results").replaceChildren();
   $("empty").hidden = false;
+  $("empty").classList.remove("examples");
   $("empty").replaceChildren(h("p", {}, msg));
+}
+
+// ---------- examples on the empty page ----------
+//
+// The search box shows an example search; under it, what that search finds, as the current view
+// shows it: made-up files with drawn pictures, muted so they read as examples. A click runs the
+// example on your own files. They change with the search box's example.
+
+const svgData = (svg) => `data:image/svg+xml,${encodeURIComponent(svg)}`;
+const SAMPLE_PICTURES = {
+  board: svgData('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120"><rect width="160" height="120" fill="#d9d4ca"/>'
+    + '<rect x="14" y="13" width="132" height="84" rx="3" fill="#fbfbf8" stroke="#8f8f8a" stroke-width="3"/>'
+    + '<rect x="30" y="99" width="100" height="5" rx="2" fill="#8f8f8a"/><rect x="38" y="95" width="15" height="5" rx="2" fill="#1d4aff"/>'
+    + '<path d="M28 33h34M28 43h22" stroke="#1d4aff" stroke-width="3" stroke-linecap="round"/>'
+    + '<g fill="none" stroke="#d93025" stroke-width="2.5"><rect x="76" y="26" width="22" height="16" rx="3"/><rect x="110" y="26" width="22" height="16" rx="3"/><path d="M98 34h12"/></g>'
+    + '<path d="M28 63c12-8 22 8 34 0s22 8 34 0 22 8 34 0" fill="none" stroke="#2f9e44" stroke-width="2.5" stroke-linecap="round"/>'
+    + '<path d="M28 80h46M84 80h40" stroke="#6b6d65" stroke-width="2.5" stroke-linecap="round"/></svg>'),
+  beach: svgData('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120"><rect width="160" height="120" fill="#bfe3f7"/>'
+    + '<circle cx="122" cy="30" r="13" fill="#ffd166"/><path d="M0 64h160v28H0z" fill="#3d8fd1"/>'
+    + '<path d="M0 72c20-4 40 4 60 0s40-4 60 0 30 3 40 0" fill="none" stroke="#bfe3f7" stroke-width="2"/>'
+    + '<path d="M0 88c40-10 100-7 160 2v30H0z" fill="#f2d7a0"/>'
+    + '<path d="M24 62a20 12 0 0 1 40 0z" fill="#f2547f"/><path d="M44 62v34" stroke="#6b4b2a" stroke-width="2"/></svg>'),
+};
+const DAY = 86400;
+// In the order of the examples in search.examples. similarity is the meaning score (see matchShare).
+const SAMPLES = [
+  { key: "board", name: () => "IMG_2041.jpg", kind: "image", picture: "board", similarity: 0.782, size: 2.4e6, age: 3 * DAY },
+  { key: "letter", name: () => t("sample.letter.name"), kind: "doc", similarity: 0.776, size: 184e3, age: 16 * DAY, text: true },
+  { key: "photo", name: () => "IMG_0042.jpg", kind: "image", picture: "beach", exact: true, similarity: 0.7, size: 3.1e6, age: 6 * 365 * DAY },
+  { key: "script", name: () => t("sample.script.name"), kind: "code", similarity: 0.765, size: 2.1e3, age: 5 * DAY, text: true },
+];
+
+function renderSample() {
+  const empty = $("empty");
+  const examples = t("search.examples").split("|");
+  const at = (exampleAt - 1 + examples.length) % examples.length;
+  const s = SAMPLES[at];
+  if (!s) {
+    empty.hidden = true;
+    return empty.replaceChildren();
+  }
+  const r = {
+    file_id: 0, name: s.name(), dir: t(`sample.${s.key}.dir`), path: "", kind: s.kind, mtime: Date.now() / 1000 - s.age,
+    size: s.size, similarity: s.similarity, exact: !!s.exact, keyword: !!s.exact,
+    snippet: s.text ? t(`sample.${s.key}.text`) : "", preview: !!s.picture, picture: SAMPLE_PICTURES[s.picture],
+  };
+  const view = currentView();
+  const terms = state.terms;
+  state.terms = queryTerms(examples[at]); // (the example's words light up in its passage)
+  // A copy of a real result's markup, without its handlers and tooltips: nothing in it acts on a file.
+  const card = { cards: row, list: line, grid: tile }[view](r, 0).cloneNode(true);
+  state.terms = terms;
+  card.querySelectorAll(".actions").forEach((a) => a.remove());
+  card.querySelectorAll("[data-tip]").forEach((el) => delete el.dataset.tip);
+  card.inert = true; // (its folder button can't be tabbed to; the example as a whole is the one thing to click)
+  const sample = h("div", { class: `sample results ${view}`, onclick: () => { $("q").value = examples[at]; runSearch(); } },
+    view === "list" ? h("div", { class: "list-card" }, card) : card);
+  setTip(sample, t("search.try", { q: examples[at] }));
+  empty.classList.add("examples");
+  empty.hidden = false;
+  empty.replaceChildren(sample);
 }
 
 // The likely results first (the server puts them on top); the rest behind a divider that says how
@@ -1433,8 +1511,10 @@ function renderResults(items, likely) {
   box.replaceChildren();
   hideTip();
   state.selected = -1;
+  state.likely = Math.min(likely ?? (items || []).length, (items || []).length);
+  // Sorted by something else than relevance: the likely ones and the rest each in that order.
+  if (items) items = [...sortPart(items.slice(0, state.likely)), ...sortPart(items.slice(state.likely))];
   state.results = items || [];
-  state.likely = Math.min(likely ?? state.results.length, state.results.length);
   const view = currentView();
   box.className = `results ${view}`;
   if (items === null) {
@@ -1454,6 +1534,12 @@ function renderResults(items, likely) {
       box.append(el);
     }
   };
+  if (!state.likely) {
+    // Nothing clears the bar: say so, and show what there is.
+    state.expanded = true; // (the keyboard steps through all of them)
+    box.append(h("div", { class: "more-divider static" }, h("span", { class: "more-label" }, t("search.no_clear_match"))));
+    return put(items, 0);
+  }
   put(items.slice(0, state.likely), 0);
   if (state.likely < items.length) {
     const more = items.length - state.likely;
@@ -1500,8 +1586,71 @@ for (const b of $("views").querySelectorAll("button")) {
     updateViews();
     saveSettings({ [key]: b.dataset.view });
     if ($("q").value.trim() || state.similar) runSearch(); // the list and grid show more at once
+    else renderEmpty(); // (the example, in the new view)
   });
 }
+
+// ---------- sorting ----------
+
+// By relevance (the server's order), or by date, size, name or type: each with the direction most
+// people want first; choosing the one that's on again turns it round. For this session only.
+const byName = (a, b) => a.name.localeCompare(b.name, i18n.lang, { numeric: true, sensitivity: "base" });
+const extOf = (r) => (r.name.includes(".") ? r.name.split(".").pop().toLowerCase() : "");
+const KIND_ORDER = { doc: 0, text: 1, code: 2, image: 3 };
+const SORTS = {
+  date: { icon: "clock", desc: true, dirs: ["sort.oldest", "sort.newest"], cmp: (a, b) => a.mtime - b.mtime },
+  size: { icon: "size", desc: true, dirs: ["sort.smallest", "sort.largest"], cmp: (a, b) => a.size - b.size },
+  name: { icon: "text", desc: false, dirs: ["sort.az", "sort.za"], cmp: byName },
+  type: {
+    icon: "doc", desc: false, dirs: ["sort.az", "sort.za"],
+    cmp: (a, b) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) || extOf(a).localeCompare(extOf(b)) || byName(a, b),
+  },
+};
+
+function sortPart(part) {
+  const s = SORTS[state.sort.key];
+  if (!s) return part;
+  const dir = state.sort.desc ? -1 : 1;
+  return [...part].sort((a, b) => s.cmp(a, b) * dir); // (stable: ties keep their relevance)
+}
+
+function renderSort() {
+  const b = $("sort-btn");
+  const s = SORTS[state.sort.key];
+  b.classList.toggle("on", !!s);
+  setTip(b, s ? `${t(`sort.${state.sort.key}`)}\n${t(s.dirs[state.sort.desc ? 1 : 0])}` : t("sort.title"));
+}
+
+function setSort(key) {
+  const s = SORTS[key];
+  state.sort = key === state.sort.key && s ? { key, desc: !state.sort.desc } : { key, desc: s ? s.desc : false };
+  renderSort();
+  if (state.fetched) renderResults(state.fetched.items, state.fetched.likely);
+}
+
+function openSortMenu() {
+  const menu = $("sort-menu");
+  const row = (key, name) => {
+    const on = state.sort.key === key;
+    const s = SORTS[key];
+    const el = h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick: () => { setSort(key); openSortMenu(); } },
+      icon(name), h("span", { class: "menu-name" }, t(`sort.${key}`)),
+      on && s ? icon(state.sort.desc ? "chevronDown" : "chevronUp") : null);
+    if (on && s) setTip(el, t(s.dirs[state.sort.desc ? 1 : 0]));
+    return el;
+  };
+  menu.replaceChildren(row("relevance", "similar"), h("div", { class: "menu-sep" }),
+    ...Object.entries(SORTS).map(([key, s]) => row(key, s.icon)));
+  menu.hidden = false;
+  const r = $("sort-btn").getBoundingClientRect();
+  menu.style.transform = `translate(${Math.round(Math.max(8, r.right - menu.offsetWidth))}px, ${Math.round(r.bottom + 6)}px)`;
+}
+
+const closeSortMenu = () => { $("sort-menu").hidden = true; };
+$("sort-btn").addEventListener("click", () => ($("sort-menu").hidden ? openSortMenu() : closeSortMenu()));
+document.addEventListener("pointerdown", (e) => {
+  if (!$("sort-menu").hidden && !e.target.closest("#sort-menu, #sort-btn")) closeSortMenu();
+}, true);
 
 const openFile = (r) => post(`/api/open/${r.file_id}`).catch((e) => toast(e.message, "alert"));
 const revealFile = (r) => post(`/api/reveal/${r.file_id}`).catch((e) => toast(e.message, "alert"));
@@ -1537,46 +1686,70 @@ function matchRing(share) {
   return ring;
 }
 
-// How well a result matches: the ring (meaning) and "Aa" (your words); the number and the words in
-// the tooltip.
+// How sure it is that a result is what you searched for, as one ring: a file with all your words
+// counts as sure (those come first), any other by its meaning, so the rings fall as the list goes
+// down. The tooltip says what matched. Before the model is ready there's no meaning to go by:
+// "Aa" marks a file found by your words.
 function matchBadge(r) {
-  const parts = [];
+  const meaning = r.similarity != null ? matchShare(r.similarity) : null;
   const lines = [];
-  if (r.similarity != null) {
-    const share = matchShare(r.similarity);
-    lines.push(t("match.share", { pct: pct(Math.round(share * 100)) }));
-    parts.push(matchRing(share));
+  let mark;
+  if (r.exact) {
+    mark = matchRing(1);
+    lines.push(t("match.all_words_title"));
+    if (meaning != null) lines.push(t("match.by_meaning", { pct: pct(Math.round(meaning * 100)) }));
+  } else if (meaning != null) {
+    mark = matchRing(meaning);
+    lines.push(t("match.share", { pct: pct(Math.round(meaning * 100)) }));
+    if (r.keyword) lines.push(t("match.some_words_title"));
+  } else {
+    mark = h("span", { class: "aa" }, "Aa");
+    lines.push(t("match.some_words_title"));
   }
-  if (r.exact || r.similarity == null) {
-    lines.push(t(r.exact ? "match.all_words_title" : "match.some_words_title"));
-    parts.push(h("span", { class: `aa${r.exact ? " exact" : ""}` }, "Aa"));
-  }
-  const el = h("span", { class: "match" }, ...parts);
-  setTip(el, lines.join(" · "));
+  const el = h("span", { class: "match" }, mark);
+  setTip(el, lines.join("\n"));
   return el;
 }
 
+// A folder as people think of it: from the indexed folder it's in ("Downloads › Projekte").
+function shortDir(dir) {
+  const lower = dir.toLowerCase();
+  const root = (state.last?.folders || []).map((f) => f.path.replace(/[\\/]+$/, ""))
+    .filter((p) => lower === p.toLowerCase() || lower.startsWith(`${p.toLowerCase()}\\`))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!root) return dir;
+  return [baseName(root), ...dir.slice(root.length).split(/[\\/]/).filter(Boolean)].join(" › ");
+}
+
+// The folder a result is in, short; its whole path in the tooltip. A click searches only there.
+function dirButton(r) {
+  const b = h("button", { type: "button", class: "dir", onclick: () => setScope(r.dir) }, shortDir(r.dir));
+  setTip(b, `${r.dir}\n${t("scope.here")}`);
+  return b;
+}
+
+// Details: the name and the ring, the date and size on the right (the buttons there while you point
+// at it), the folder, and the passage that matched as two lines of running text.
 function row(r, i) {
   let visual;
   if (r.preview) {
-    visual = h("img", { class: "thumb", src: thumbUrl(r), loading: "lazy", alt: "", onclick: () => openLightbox(i) });
+    visual = h("img", { class: "thumb", src: pictureUrl(r), loading: "lazy", alt: "", onclick: () => openLightbox(i) });
     visual.addEventListener("error", () => visual.replaceWith(extBadge(r)), { once: true });
   } else {
     visual = extBadge(r);
   }
-  const dir = h("button", { type: "button", class: "dir mono", onclick: () => setScope(r.dir) }, r.dir);
-  setTip(dir, t("scope.here"));
+  const name = h("span", { class: "name", onclick: () => openFile(r) }, r.name);
+  setTip(name, r.name);
+  name.dataset.tipCut = "";
+  const passage = (r.snippet || "").replace(/\s+/g, " ").trim();
   const el = h("div", { class: "result", "data-i": i },
     visual,
     h("div", { class: "body" },
-      h("div", { class: "title-row" },
-        h("span", { class: "name", onclick: () => openFile(r) }, r.name),
-        matchBadge(r)),
-      actionButtons(r),
-      dir,
-      r.snippet ? h("p", { class: "snippet", onclick: () => el.classList.toggle("expanded") },
-        highlighted(r.snippet, state.terms)) : null,
-      h("div", { class: "info" }, `${ago(r.mtime)} · ${bytes(r.size)}`),
+      h("div", { class: "title-row" }, name, matchBadge(r)),
+      h("div", { class: "side" }, h("span", { class: "info" }, `${ago(r.mtime)} · ${bytes(r.size)}`), actionButtons(r)),
+      dirButton(r),
+      passage ? h("p", { class: "snippet", onclick: () => el.classList.toggle("expanded") },
+        highlighted(passage, state.terms)) : null,
     ),
   );
   el.addEventListener("mouseenter", () => select(i, false));
@@ -1587,7 +1760,7 @@ function row(r, i) {
 function line(r, i) {
   let visual;
   if (r.preview) {
-    visual = h("img", { class: "mini", src: thumbUrl(r), loading: "lazy", alt: "", onclick: () => openLightbox(i) });
+    visual = h("img", { class: "mini", src: pictureUrl(r), loading: "lazy", alt: "", onclick: () => openLightbox(i) });
     visual.addEventListener("error", () => visual.replaceWith(extBadge(r)), { once: true });
   } else {
     visual = extBadge(r);
@@ -1595,10 +1768,8 @@ function line(r, i) {
   const name = h("span", { class: "name", onclick: () => openFile(r) }, r.name);
   const passage = (r.snippet || "").replace(/\s+/g, " ").trim();
   setTip(name, passage ? (passage.length > 280 ? `${passage.slice(0, 280)}…` : passage) : r.path);
-  const dir = h("button", { type: "button", class: "dir mono", onclick: () => setScope(r.dir) }, r.dir);
-  setTip(dir, t("scope.here"));
   const el = h("div", { class: "line", "data-i": i },
-    visual, name, dir,
+    visual, name, dirButton(r),
     h("span", { class: "info" }, ago(r.mtime)), h("span", { class: "info size" }, bytes(r.size)),
     matchBadge(r), actionButtons(r));
   el.addEventListener("mouseenter", () => select(i, false));
@@ -1609,7 +1780,7 @@ function tile(r, i) {
   const name = h("span", { class: "name", onclick: () => openFile(r) }, r.name);
   setTip(name, r.path);
   const picture = r.preview
-    ? h("img", { src: thumbUrl(r), loading: "lazy", alt: r.name, onclick: () => openLightbox(i) })
+    ? h("img", { src: pictureUrl(r), loading: "lazy", alt: r.name, onclick: () => openLightbox(i) })
     : h("div", { class: "tile-ext", onclick: () => openFile(r) }, extBadge(r));
   const el = h("div", { class: "tile", "data-i": i },
     picture,
@@ -2456,6 +2627,11 @@ document.addEventListener("keydown", (e) => {
   if (!$("scope-menu").hidden && e.key === "Escape") {
     e.preventDefault();
     closeScopeMenu();
+    return;
+  }
+  if (!$("sort-menu").hidden && e.key === "Escape") {
+    e.preventDefault();
+    closeSortMenu();
     return;
   }
   if (!$("update-modal").hidden) {

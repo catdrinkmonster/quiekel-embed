@@ -246,14 +246,15 @@ pub fn fuse(
 // Likely what was searched for: all its words, or a meaning score over the bar for its kind and
 // close to the best of that kind. Set on searches with known answers (documents in four languages,
 // photos with people's captions): the right file lands above the divider about nine times in ten,
-// with one or two others. When nothing clears the bar, the best few still come first.
+// with one or two others. When nothing clears the bar, none is likely: the page says so and shows
+// them all. Without meaning scores (the model isn't ready yet), the first few come first.
 pub const LIKELY_TEXT: f64 = 0.73;
 pub const LIKELY_PICTURE: f64 = 0.71;
 pub const LIKELY_MARGIN: f64 = 0.04;
 pub const LIKELY_FALLBACK: usize = 3;
 
 /// Which results (each: meaning score, all words found, a picture) are likely what was searched
-/// for. When none is, the first LIKELY_FALLBACK.
+/// for. When none is and there are no meaning scores at all, the first LIKELY_FALLBACK.
 pub fn likely(results: &[(Option<f64>, bool, bool)]) -> Vec<bool> {
     let best = |picture: bool| results.iter().filter(|r| r.2 == picture).filter_map(|r| r.0).fold(f64::MIN, f64::max);
     let (best_text, best_picture) = (best(false), best(true));
@@ -264,7 +265,7 @@ pub fn likely(results: &[(Option<f64>, bool, bool)]) -> Vec<bool> {
             exact || similarity.is_some_and(|s| s >= bar && s >= best - LIKELY_MARGIN)
         })
         .collect();
-    if !out.contains(&true) {
+    if !out.contains(&true) && results.iter().all(|r| r.0.is_none()) {
         out.iter_mut().take(LIKELY_FALLBACK).for_each(|x| *x = true);
     }
     out
@@ -283,8 +284,9 @@ mod tests {
         assert_eq!(likely(&[text(0.78), text(0.76), text(0.75), text(0.60)]), [true, true, true, false]);
         // All your words count whatever the score; pictures have their own bar and best.
         assert_eq!(likely(&[text(0.80), (Some(0.50), true, false), (Some(0.74), false, true), (Some(0.62), false, true)]), [true, true, true, false]);
-        // Nothing clears the bar: the best few still come first. None at all: none.
-        assert_eq!(likely(&[text(0.60), text(0.59), text(0.58), text(0.57)]), [true, true, true, false]);
+        // Nothing clears the bar: none is likely (the page says so). Without meaning scores (keywords
+        // only, before the model is ready), the first few come first. None at all: none.
+        assert_eq!(likely(&[text(0.60), text(0.59), text(0.58), text(0.57)]), [false, false, false, false]);
         assert_eq!(likely(&[(None, false, false), (None, false, false)]), [true, true]);
         assert!(likely(&[]).is_empty());
     }
