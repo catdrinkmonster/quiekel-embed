@@ -41,19 +41,36 @@ pub struct Types {
     /// Categories switched off.
     pub off: BTreeSet<String>,
     pub rules: BTreeMap<String, bool>,
+    /// Formats switched off on their own, by extension (".ipynb"), for the precise: a kind that's on
+    /// can still leave some of its formats out.
+    pub formats_off: BTreeSet<String>,
+}
+
+/// An extension as File types keeps it: ".ipynb" (a dot, then up to 15 letters or digits).
+pub fn format_key(ext: &str) -> Option<String> {
+    let e = ext.trim().trim_start_matches('.').to_lowercase();
+    (!e.is_empty() && e.len() <= 15 && e.chars().all(|c| c.is_ascii_alphanumeric())).then(|| format!(".{e}"))
 }
 
 impl Types {
     pub fn new(off: &[String], rules: &HashMap<String, bool>) -> Self {
         let off = off.iter().filter(|c| CATEGORIES.contains(&c.as_str())).cloned().collect();
         let rules = RULES.iter().map(|(k, d)| (k.to_string(), *rules.get(*k).unwrap_or(d))).collect();
-        Types { off, rules }
+        Types { off, rules, formats_off: BTreeSet::new() }
     }
 
     pub fn of(settings: &crate::store::Settings) -> Self {
         let off: Vec<String> = serde_json::from_value(settings.get("kinds_off")).unwrap_or_default();
         let rules = RULES.iter().map(|(k, d)| (k.to_string(), settings.get(k).as_bool().unwrap_or(*d))).collect();
-        Types::new(&off, &rules)
+        let formats: Vec<String> = serde_json::from_value(settings.get("formats_off")).unwrap_or_default();
+        let mut types = Types::new(&off, &rules);
+        types.formats_off = formats.iter().filter_map(|f| format_key(f)).collect();
+        types
+    }
+
+    /// Whether a file's format is switched off on its own.
+    fn format_off(&self, name: &str) -> bool {
+        !self.formats_off.is_empty() && self.formats_off.contains(&suffix(name))
     }
 
     pub fn rule(&self, name: &str) -> bool {
@@ -74,7 +91,7 @@ impl Types {
                 why => return Err(why), // programs, media, mailboxes: never read
             },
         };
-        if self.off.contains(category(kind, name)) { Err("off") } else { Ok(kind) }
+        if self.off.contains(category(kind, name)) || self.format_off(name) { Err("off") } else { Ok(kind) }
     }
 
     pub fn kind(&self, name: &str, path: Option<&str>) -> Option<&'static str> {
@@ -83,6 +100,9 @@ impl Types {
 
     /// Whether to look inside a file: an archive, or an email for its attachments.
     pub fn inside(&self, name: &str) -> bool {
+        if self.format_off(name) {
+            return false;
+        }
         match archive::container_type(name) {
             Some("mail") => !self.off.contains("mail"),
             Some(_) => !self.off.contains("archives"),
@@ -135,7 +155,26 @@ impl Types {
 
     /// Changes when what's searched inside containers would change.
     pub fn fingerprint(&self) -> String {
-        serde_json::to_string(&json!([FORMAT, self.off, self.rules])).unwrap_or_default()
+        serde_json::to_string(&json!([FORMAT, self.off, self.rules, self.formats_off])).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_format_can_be_switched_off_on_its_own() {
+        let mut types = Types::new(&[], &HashMap::new());
+        assert_eq!(types.decide("notes.ipynb", None), Ok("code"));
+        types.formats_off = [".ipynb", ".zip"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(types.decide("notes.ipynb", None), Err("off"));
+        assert_eq!(types.decide("readme.md", None), Ok("text")); // (the rest of its kind stays)
+        assert!(!types.inside("photos.zip") && types.inside("photos.7z"));
+        assert_ne!(Types::new(&[], &HashMap::new()).fingerprint(), types.fingerprint()); // (folders get scanned again)
+        assert_eq!((format_key("IPYNB"), format_key(".a b"), format_key("")), (Some(".ipynb".into()), None, None));
+        assert_eq!((format_category(".pdf"), format_category(".jpg"), format_category(".zip"), format_category(".msg")),
+                   ("documents", "pictures", "archives", "mail"));
     }
 }
 
@@ -199,12 +238,34 @@ impl Report {
     }
 }
 
-/// Settings, File types, as the page shows it.
-pub fn menu(types: &Types) -> Value {
+/// File types, as the page shows it. `found`: by category, the formats in your folders and how
+/// many files each (a format switched off is listed too, with what's left of it), by name.
+pub fn menu(types: &Types, found: &BTreeMap<String, BTreeMap<String, i64>>) -> Value {
     let defaults: BTreeMap<&str, bool> = RULES.iter().copied().collect();
+    let formats = |c: &str| {
+        let mut list: BTreeMap<String, i64> = found.get(c).cloned().unwrap_or_default();
+        for f in &types.formats_off {
+            if format_category(f) == c {
+                list.entry(f.clone()).or_insert(0);
+            }
+        }
+        list.into_iter().map(|(ext, n)| json!({"ext": ext, "n": n, "on": !types.formats_off.contains(&ext)})).collect::<Vec<_>>()
+    };
     json!({
-        "categories": CATEGORIES.iter().map(|c| json!({"key": c, "on": !types.off.contains(*c)})).collect::<Vec<_>>(),
+        "categories": CATEGORIES.iter().map(|c| json!({"key": c, "on": !types.off.contains(*c), "formats": formats(c)})).collect::<Vec<_>>(),
         "rules": types.rules,
         "defaults": defaults,
     })
+}
+
+/// The category a format (".pdf") belongs in, by its name alone.
+pub fn format_category(ext: &str) -> &'static str {
+    let name = format!("x{ext}");
+    if archive::container_type(&name).is_some_and(|t| t != "mail") {
+        return "archives";
+    }
+    match kind_of(&name) {
+        Some(kind) => category(kind, &name),
+        None => "text",
+    }
 }

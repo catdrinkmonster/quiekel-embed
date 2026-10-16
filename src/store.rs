@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS vectors (
     page INTEGER
 );
 CREATE INDEX IF NOT EXISTS vectors_folder ON vectors(folder_id);
+-- Folders inside an indexed folder that you left out (scans pass them by).
+CREATE TABLE IF NOT EXISTS left_out (
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    path TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (folder_id, path)
+);
 ";
 
 pub const FTS_SHIFT: i64 = 10; // up to 1024 chunks per file in the keyword index
@@ -442,6 +448,13 @@ impl Vectors {
             self.clear();
         } else if self.blocks.len() > Self::MAX_BLOCKS {
             self.merge();
+        }
+    }
+
+    /// Rows of one folder now count in another (a folder taken over by one around it).
+    fn refolder(&mut self, from: i64, to: i64) {
+        for b in &mut self.blocks {
+            b.folders.iter_mut().filter(|f| **f == from).for_each(|f| *f = to);
         }
     }
 
@@ -923,6 +936,109 @@ impl Store {
             vectors.execute([lo, hi])?;
         }
         tx.execute(&format!("DELETE FROM files WHERE id IN ({})", ids_sql(ids)), [])?;
+        Ok(())
+    }
+
+    /// A folder added around an indexed one takes it over: its files (with their passages and
+    /// vectors), what was found inside its archives and what's left out in it move to the new one,
+    /// and it goes. Nothing is read again. (Its files keep the names they were indexed with, from
+    /// the folder they were in.)
+    pub fn take_over(&self, parent_id: i64, child_id: i64) -> Result<()> {
+        let mut db = self.db.lock();
+        let tx = db.transaction()?;
+        for table in ["files", "containers", "vectors", "left_out"] {
+            tx.execute(&format!("UPDATE OR IGNORE {table} SET folder_id = ? WHERE folder_id = ?"), [parent_id, child_id])?;
+        }
+        tx.execute("DELETE FROM folders WHERE id = ?", [child_id])?;
+        tx.commit()?;
+        drop(db);
+        self.vectors.write().refolder(child_id, parent_id);
+        self.restructured();
+        Ok(())
+    }
+
+    /// A folder that moved (another drive letter, a new name): it and everything in it get the new
+    /// place. What's indexed stays: a scan then reads only what changed.
+    pub fn relocate(&self, folder_id: i64, to: &str) -> Result<()> {
+        let Some(old) = self.folder(folder_id).map(|f| f.path.trim_end_matches(['\\', '/']).to_string()) else {
+            anyhow::bail!("no such folder");
+        };
+        let to = to.trim_end_matches(['\\', '/']);
+        let (lo, hi) = inside(&old);
+        let mut db = self.db.lock();
+        let tx = db.transaction()?;
+        tx.execute("UPDATE folders SET path = ? WHERE id = ?", params![to, folder_id])?;
+        let n = old.chars().count() as i64;
+        for table in ["files", "containers", "left_out"] {
+            tx.execute(
+                &format!("UPDATE {table} SET path = ?1 || substr(path, ?2 + 1) WHERE folder_id = ?3 AND path >= ?4 AND path < ?5"),
+                params![to, n, folder_id, lo, hi],
+            )?;
+        }
+        tx.commit()?;
+        drop(db);
+        self.restructured();
+        Ok(())
+    }
+
+    /// By category (as File types has them), the formats of the files in the index, and how many
+    /// files each; archives by the archives and emails looked into.
+    pub fn format_counts(&self) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, i64>> {
+        let mut out: std::collections::BTreeMap<String, std::collections::BTreeMap<String, i64>> = Default::default();
+        let db = self.reader.lock();
+        let files: Vec<(String, String)> = db
+            .prepare_cached("SELECT path, kind FROM files WHERE status IN ('indexed', 'pending')")
+            .and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+            .unwrap_or_default();
+        let containers: Vec<String> = db
+            .prepare_cached("SELECT path FROM containers")
+            .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
+            .unwrap_or_default();
+        drop(db);
+        for (path, kind) in &files {
+            let name = split_last(path);
+            let ext = config::suffix(name);
+            if ext.is_empty() {
+                continue;
+            }
+            *out.entry(crate::filetypes::category(kind, name).to_string()).or_default().entry(ext).or_insert(0) += 1;
+        }
+        for path in &containers {
+            let name = split_last(path);
+            if crate::archive::container_type(name).is_some_and(|t| t != "mail") {
+                *out.entry("archives".into()).or_default().entry(config::suffix(name)).or_insert(0) += 1;
+            }
+        }
+        out
+    }
+
+    /// The folders inside a folder that aren't searched, because you left them out.
+    pub fn left_out(&self, folder_id: i64) -> Vec<String> {
+        let db = self.reader.lock();
+        db.prepare_cached("SELECT path FROM left_out WHERE folder_id = ? ORDER BY path")
+            .and_then(|mut st| st.query_map([folder_id], |r| r.get(0))?.collect())
+            .unwrap_or_default()
+    }
+
+    /// Leave a folder inside a folder out (its files leave the index now; scans pass it by), or
+    /// take it back in (the next scan reads it).
+    pub fn set_left_out(&self, folder_id: i64, path: &str, out: bool) -> Result<()> {
+        let path = path.trim_end_matches(['\\', '/']);
+        if out {
+            self.db.lock().execute("INSERT OR IGNORE INTO left_out (folder_id, path) VALUES (?, ?)", params![folder_id, path])?;
+            let ids: Vec<i64> = {
+                let (lo, hi) = inside(path);
+                let db = self.db.lock();
+                let mut st = db.prepare("SELECT id FROM files WHERE folder_id = ? AND path >= ? AND path < ?")?;
+                st.query_map(params![folder_id, lo, hi], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+            };
+            self.remove_file_ids(&ids)?;
+            let (lo, hi) = inside(path);
+            self.db.lock().execute("DELETE FROM containers WHERE folder_id = ? AND path >= ? AND path < ?", params![folder_id, lo, hi])?;
+        } else {
+            self.db.lock().execute("DELETE FROM left_out WHERE folder_id = ? AND path = ?", params![folder_id, path])?;
+        }
+        self.restructured();
         Ok(())
     }
 
@@ -1670,8 +1786,8 @@ pub fn defaults() -> Map<String, Value> {
     let v = json!({
         "problems_seen": 0, "auto_update": false, "seen_version": "",
         "language": "auto", "theme": "auto", "view_files": "cards", "view_images": "grid",
-        // Settings -> File types (see filetypes.rs): the kinds switched off, and the rules
-        "kinds_off": [], "hidden_files": false, "program_folders": false,
+        // File types (see filetypes.rs): the kinds and the formats switched off, and the rules
+        "kinds_off": [], "formats_off": [], "hidden_files": false, "program_folders": false,
         // Settings -> Diagnostics: a tab with what the app uses
         "diagnostics": false,
     });
