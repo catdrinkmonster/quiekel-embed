@@ -205,8 +205,9 @@ fn window_processes(app: u32) -> Vec<u32> {
 struct Gpu {
     query: windows::Win32::System::Performance::PDH_HQUERY,
     engines: windows::Win32::System::Performance::PDH_HCOUNTER,
-    dedicated: windows::Win32::System::Performance::PDH_HCOUNTER,
-    shared: windows::Win32::System::Performance::PDH_HCOUNTER,
+    // (processes' video memory: not on every PC; without it, only the load)
+    dedicated: Option<windows::Win32::System::Performance::PDH_HCOUNTER>,
+    shared: Option<windows::Win32::System::Performance::PDH_HCOUNTER>,
 }
 
 unsafe impl Send for Gpu {}
@@ -242,14 +243,17 @@ impl Gpu {
             if PdhOpenQueryW(PCWSTR::null(), 0, &mut query) != 0 {
                 return None;
             }
-            let (mut engines, mut dedicated, mut shared) = (PDH_HCOUNTER::default(), PDH_HCOUNTER::default(), PDH_HCOUNTER::default());
-            if PdhAddEnglishCounterW(query, w!("\\GPU Engine(*)\\Utilization Percentage"), 0, &mut engines) != 0
-                || PdhAddEnglishCounterW(query, w!("\\GPU Process Memory(*)\\Dedicated Usage"), 0, &mut dedicated) != 0
-                || PdhAddEnglishCounterW(query, w!("\\GPU Process Memory(*)\\Shared Usage"), 0, &mut shared) != 0
-            {
+            let mut engines = PDH_HCOUNTER::default();
+            if PdhAddEnglishCounterW(query, w!("\\GPU Engine(*)\\Utilization Percentage"), 0, &mut engines) != 0 {
                 let _ = PdhCloseQuery(query);
                 return None;
             }
+            let optional = |path| {
+                let mut c = PDH_HCOUNTER::default();
+                (PdhAddEnglishCounterW(query, path, 0, &mut c) == 0).then_some(c)
+            };
+            let dedicated = optional(w!("\\GPU Process Memory(*)\\Dedicated Usage"));
+            let shared = optional(w!("\\GPU Process Memory(*)\\Shared Usage"));
             PdhCollectQueryData(query); // (a load needs two readings)
             Some(Gpu { query, engines, dedicated, shared })
         }
@@ -293,14 +297,14 @@ impl Gpu {
             }
         }
         // The model's video memory, by card: where it holds the most is the card it uses.
-        let memory = |counter| -> HashMap<String, f64> {
+        let memory = |counter: Option<windows::Win32::System::Performance::PDH_HCOUNTER>| -> Option<HashMap<String, f64>> {
             let mut by_card = HashMap::new();
-            for (name, v) in self.values(counter).unwrap_or_default() {
+            for (name, v) in self.values(counter?).unwrap_or_default() {
                 if model.is_some() && instance_pid(&name) == model {
                     *by_card.entry(instance_card(&name).unwrap_or("").to_string()).or_insert(0.0) += v;
                 }
             }
-            by_card
+            Some(by_card)
         };
         let dedicated = memory(self.dedicated);
         let shared = memory(self.shared);
@@ -317,13 +321,13 @@ impl Gpu {
                 *theirs.entry(key).or_insert(0.0) += v;
             }
         }
-        let held = dedicated.iter().chain(&shared).max_by(|a, b| a.1.total_cmp(b.1)).filter(|(_, v)| **v > 0.0).map(|(c, _)| c.clone());
+        let held = dedicated.iter().chain(&shared).flatten().max_by(|a, b| a.1.total_cmp(b.1)).filter(|(_, v)| **v > 0.0).map(|(c, _)| c.clone());
         let busy = mine.iter().max_by(|a, b| a.1.total_cmp(b.1)).filter(|(_, v)| **v > 0.0).map(|((c, _), _)| c.clone());
         let card = held.or(busy);
         let busiest = |m: &HashMap<(String, String), f64>| {
             m.iter().filter(|((c, _), _)| card.as_ref().is_none_or(|x| x == c)).map(|(_, v)| *v).fold(0.0f64, f64::max).min(100.0)
         };
-        let total = |m: &HashMap<String, f64>| model.map(|_| m.values().sum::<f64>() / 1e6);
+        let total = |m: &Option<HashMap<String, f64>>| m.as_ref().and_then(|m| model.map(|_| m.values().sum::<f64>() / 1e6));
         Some(GpuNow { model: busiest(&mine), others: busiest(&theirs), vram_mb: total(&dedicated), shared_mb: total(&shared) })
     }
 }
