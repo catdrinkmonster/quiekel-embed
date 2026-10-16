@@ -80,6 +80,17 @@ pub fn read_paged(path: &Path) -> ReadResult<(String, Vec<RgbImage>)> {
     Ok((text, pages))
 }
 
+/// How many pages a PDF has (None: not a PDF, or one that can't be opened).
+pub fn page_count(path: &Path) -> Option<u32> {
+    if !(is_pdf(path) || suffix(&path.to_string_lossy()) == ".pdf") {
+        return None;
+    }
+    let (_one, pdfium) = pdfium().ok()?; // (dropped last, after the document)
+    let doc = open_pdf(pdfium, path).ok()?;
+    let n = doc.pages().len() as u32;
+    Some(n)
+}
+
 /// The first page as a picture, `size` pixels on its longer side (for previews).
 pub fn first_page(path: &Path, size: u32) -> ReadResult<RgbImage> {
     page_picture(path, 1, size)

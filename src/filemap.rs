@@ -364,16 +364,6 @@ impl FileMap {
         json!({"ids": layout.ids, "sims": sims})
     }
 
-    /// Where a vector would go on the map: among the dots most like it, as a new file is placed.
-    pub fn spot(&self, vector: &[f32]) -> Option<[f32; 3]> {
-        let layout = self.state.lock().layout.clone()?;
-        if layout.len() == 0 {
-            return None;
-        }
-        let p = place(vector, &layout.vectors, &layout.coords, &[0]);
-        Some([p[0], p[1], p[2]])
-    }
-
     /// Every dot's value in one of the dimensions.
     pub fn dimension(&self, index: usize) -> serde_json::Value {
         let Some(layout) = self.state.lock().layout.clone() else { return json!({"ids": [], "values": []}) };

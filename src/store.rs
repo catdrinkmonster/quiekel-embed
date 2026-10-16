@@ -322,8 +322,15 @@ pub struct Folder {
     pub bytes: i64,
     pub chunks: i64,
     pub images: i64,
+    // The rest of what's searched, by kind as File types counts them (pictures are `images`).
+    pub docs: i64,
+    pub texts: i64, // text and code
+    pub mails: i64,
     pub unsearched: i64,
 }
+
+/// An email by its name (File types counts emails apart from the documents and texts they are).
+const MAIL_LIKE: &str = "(x.path LIKE '%.eml' OR x.path LIKE '%.msg' OR x.path LIKE '%.mht' OR x.path LIKE '%.mhtml')";
 
 #[derive(Clone, Debug)]
 pub struct FolderRow {
@@ -819,7 +826,7 @@ impl Store {
         }
         let db = self.reader.lock();
         let result = (|| -> rusqlite::Result<Vec<Folder>> {
-            let mut st = db.prepare(
+            let mut st = db.prepare(&format!(
                 "SELECT f.id, f.path, f.watch, f.added_at, f.last_scan_at, f.report,
                        COUNT(x.id) AS files,
                        COALESCE(SUM(x.status = 'indexed'), 0) AS indexed,
@@ -829,10 +836,13 @@ impl Store {
                        COALESCE(SUM(x.status = 'skipped'), 0) AS skipped,
                        COALESCE(SUM(CASE WHEN x.status = 'indexed' THEN x.size ELSE 0 END), 0) AS bytes,
                        COALESCE(SUM(x.chunks), 0) AS chunks,
-                       COALESCE(SUM(x.kind = 'image' AND x.status = 'indexed'), 0) AS images
+                       COALESCE(SUM(x.kind = 'image' AND x.status = 'indexed'), 0) AS images,
+                       COALESCE(SUM(x.status = 'indexed' AND x.kind = 'doc' AND NOT {MAIL_LIKE}), 0) AS docs,
+                       COALESCE(SUM(x.status = 'indexed' AND x.kind IN ('text', 'code') AND NOT {MAIL_LIKE}), 0) AS texts,
+                       COALESCE(SUM(x.status = 'indexed' AND x.kind <> 'image' AND {MAIL_LIKE}), 0) AS mails
                 FROM folders f LEFT JOIN files x ON x.folder_id = f.id
-                GROUP BY f.id ORDER BY f.path",
-            )?;
+                GROUP BY f.id ORDER BY f.path"
+            ))?;
             let rows = st.query_map([], |r| {
                 let report: Option<String> = r.get(5)?;
                 let report: Report = report.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
@@ -852,6 +862,9 @@ impl Store {
                     bytes: r.get(12)?,
                     chunks: r.get(13)?,
                     images: r.get(14)?,
+                    docs: r.get(15)?,
+                    texts: r.get(16)?,
+                    mails: r.get(17)?,
                     // Everything that isn't searched: skipped files, and what the scan left out.
                     unsearched: skipped + report.total(),
                 })
@@ -1174,25 +1187,6 @@ impl Store {
             .and_then(|mut st| st.query_row([file_id], FileRecord::from_row).optional())
             .ok()
             .flatten()
-    }
-
-    /// A file's first passages, in order (at most `limit`): their number, text ("" for a
-    /// picture), the page they start on (0: none) and vector.
-    pub fn file_passages(&self, file_id: i64, limit: usize) -> Vec<(i64, String, i64, Vec<f32>)> {
-        let (lo, hi) = fts_range(file_id);
-        let db = self.reader.lock();
-        let Ok(mut st) = db.prepare_cached(
-            "SELECT v.id, COALESCE(f.text, ''), COALESCE(v.page, 0), v.vector FROM vectors v
-             LEFT JOIN chunks_fts f ON f.rowid = v.id WHERE v.id BETWEEN ? AND ? ORDER BY v.id LIMIT ?",
-        ) else {
-            return Vec::new();
-        };
-        let rows = st.query_map(params![lo, hi, limit as i64], |r| {
-            let mut vector = Vec::with_capacity(EMBED_DIM);
-            from_blob(r.get_ref(3)?.as_blob()?, &mut vector);
-            Ok((r.get::<_, i64>(0)? & CHUNK_MASK, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, vector))
-        });
-        rows.map(|rows| rows.flatten().collect()).unwrap_or_default()
     }
 
     /// The start of a file's text, as shown in search results ("" for pictures).
@@ -1834,6 +1828,8 @@ pub fn defaults() -> Map<String, Value> {
         "kinds_off": [], "formats_off": [], "hidden_files": false, "program_folders": false,
         // Settings -> Diagnostics: a tab with what the app uses
         "diagnostics": false,
+        // The map's side column, as wide as it was dragged to (pixels; 0: its own width)
+        "map_side": 0,
     });
     match v {
         Value::Object(m) => m,

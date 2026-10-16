@@ -318,14 +318,7 @@ pub fn extract(path: &Path, size: u64, title: Option<&str>, kind: Option<&str>) 
         }
         text
     } else {
-        let text = read_text(path)?;
-        if ext == ".ipynb" {
-            notebook_text(&text)
-        } else if HTML_EXTS.contains(&ext.as_str()) || (kind_of(&name).is_none() && looks_like_html(&text)) {
-            strip_html(&text)
-        } else {
-            text
-        }
+        text_file(path, &name)?
     };
     let title = title.map(str::to_string).unwrap_or(name);
     let chunks: Vec<Chunk> = chunk_pages(&text)
@@ -336,6 +329,28 @@ pub fn extract(path: &Path, size: u64, title: Option<&str>, kind: Option<&str>) 
         return Err(ReadError::Skip("no_text"));
     }
     Ok(Extracted { kind, chunks })
+}
+
+/// A text or code file's text as indexing reads it: a notebook's cells, a web page without its tags.
+fn text_file(path: &Path, name: &str) -> ReadResult<String> {
+    let text = read_text(path)?;
+    let ext = suffix(name);
+    Ok(if ext == ".ipynb" {
+        notebook_text(&text)
+    } else if HTML_EXTS.contains(&ext.as_str()) || (kind_of(name).is_none() && looks_like_html(&text)) {
+        strip_html(&text)
+    } else {
+        text
+    })
+}
+
+/// A file's whole text as indexing reads it, to read it in the app: a document's (a PDF's pages
+/// start at PAGE_MARK), an email's, a text or code file's.
+pub fn full_text(path: &Path, kind: &str) -> ReadResult<String> {
+    if kind == "doc" {
+        return Ok(read_document(path)?.0);
+    }
+    text_file(path, &path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
 }
 
 pub fn head(path: &Path, n: usize) -> Option<Vec<u8>> {

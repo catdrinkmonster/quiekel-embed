@@ -505,6 +505,11 @@ impl Indexer {
         self.enqueue_scan(folder_id); // (picks up what's still pending, and what changed meanwhile)
     }
 
+    /// Files found but not read yet, in all folders.
+    pub fn waiting_files(&self) -> i64 {
+        self.store.folders().iter().map(|f| f.pending).sum()
+    }
+
     /// Folders the last scan didn't find.
     pub fn missing_folders(&self) -> HashSet<i64> {
         self.missing.lock().clone()

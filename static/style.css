@@ -163,26 +163,26 @@ kbd {
   display: inline-block; text-align: center; cursor: help;
 }
 
-/* ---- icon buttons: flat; a tint on hover, a deeper one while pressed ---- */
+/* ---- icon buttons: just the icon; a tint on hover, a deeper one while pressed. The frame (card
+   colour, stronger border) only marks one that's on; the one main action is filled. ---- */
 .icon-btn {
-  --face: var(--card); --edge: var(--border-strong); --fg: var(--ink);
+  --face: transparent; --edge: transparent; --fg: var(--muted);
   cursor: pointer; flex: none; display: inline-grid; place-items: center;
   width: var(--ctl); height: var(--ctl); padding: 0;
   background: var(--face); color: var(--fg);
   border: 1px solid var(--edge); border-radius: 8px;
   transition: background-color .1s, color .1s;
 }
-.icon-btn:hover { background: color-mix(in srgb, var(--face) 92%, var(--ink)); }
+.icon-btn:hover { background: color-mix(in srgb, var(--face) 92%, var(--ink)); --fg: var(--ink); }
 .icon-btn:active { background: color-mix(in srgb, var(--face) 84%, var(--ink)); }
 .icon-btn:disabled { opacity: .55; cursor: default; background: var(--face); }
 .icon-btn.small { width: var(--ctl-sm); height: var(--ctl-sm); border-radius: 7px; }
 .icon-btn.small svg.i { width: 16px; height: 16px; }
 .icon-btn.primary { --face: var(--primary); --edge: var(--primary-edge); }
-.icon-btn.on { --fg: var(--blue); }
-.icon-btn:not(.on) .i { opacity: .9; }
+.icon-btn.on { --face: var(--card); --edge: var(--border-strong); --fg: var(--ink); }
 .icon-btn.danger:hover { --fg: var(--red); }
-.icon-btn.danger-solid { --face: var(--red); --edge: var(--red); --fg: #fff; }
-.icon-btn.primary, .icon-btn.primary svg.i { --fg: #151515; } /* dark on the soft yellow in both themes */
+.icon-btn.danger-solid, .icon-btn.danger-solid:hover { --face: var(--red); --edge: var(--red); --fg: #fff; }
+.icon-btn.primary, .icon-btn.primary:hover, .icon-btn.primary svg.i { --fg: #151515; } /* dark on the soft yellow in both themes */
 .icon-btn.working svg.i { animation: spin 1s linear infinite; }
 .icon-btn:focus-visible, .seg button:focus-visible, .nav a:focus-visible, .status:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -218,8 +218,18 @@ kbd {
   background: var(--bg-side); border-right: 1px solid var(--border); padding: 14px 0 16px;
 }
 .brand { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; }
-.brand img { width: 38px; height: auto; display: block; transition: transform .15s ease; }
+.brand img { width: 38px; height: auto; display: block; transition: transform .15s ease; transform-origin: 50% 90%; }
 .brand:hover img { transform: rotate(-8deg) scale(1.06); }
+/* A click on Quiekel: a little hop, crouching first and squashing a bit as it lands. */
+.brand.hop img { animation: quiekel-hop .62s cubic-bezier(.3, .7, .4, 1); }
+@keyframes quiekel-hop {
+  0% { transform: none; }
+  16% { transform: scale(1.12, .86); }
+  42% { transform: translateY(-10px) rotate(-8deg) scale(.94, 1.08); }
+  64% { transform: scale(1.1, .88); }
+  82% { transform: translateY(-2px) scale(.98, 1.03); }
+  100% { transform: none; }
+}
 
 .nav { display: flex; flex-direction: column; gap: var(--gap); }
 .nav a {
@@ -324,8 +334,9 @@ svg.i .frame { stroke-width: 2.6; }
 }
 .seg button:hover { color: var(--ink); background: var(--hover); }
 .seg button.active { background: var(--card); color: var(--ink); border-color: var(--border-strong); }
-.toolbar .seg, .map-bar .seg { gap: var(--gap-in); padding: 0; background: none; border-color: transparent; }
-.toolbar .seg button, .map-bar .seg button { width: var(--ctl); height: var(--ctl); }
+.toolbar .seg, .map-bar .seg, .map-tools .seg, .card .seg, .map-card .seg { gap: var(--gap-in); padding: 0; background: none; border-color: transparent; }
+.card .seg button { width: var(--ctl-sm); height: var(--ctl-sm); }
+.toolbar .seg button, .map-bar .seg button, .map-tools .seg button { width: var(--ctl); height: var(--ctl); }
 
 /* A filter that's on (the file whose similar files are shown): a chosen control, card colour and a
    stronger border, the same height as the toolbar's buttons; no colour of its own. */
@@ -368,13 +379,19 @@ svg.i .frame { stroke-width: 2.6; }
   background: none; border: 0; border-radius: 6px; text-align: left; color: var(--text); font-size: 13px;
 }
 .menu-row:hover { background: var(--well); color: var(--ink); }
-.menu-row.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
+.menu-row.on { color: var(--ink); font-weight: 600; }
 .menu-row svg.i { width: 16px; height: 16px; color: var(--faint); }
+.menu-row svg.i.menu-mark { color: var(--ink); }
 .menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-count { font: 600 11px var(--mono); color: var(--faint); }
 .menu-empty { padding: 8px 10px; color: var(--faint); font-size: 12px; }
-/* The folder menu: a field that finds a folder by name; rows with a › that shows the folders inside. */
-.menu-find { width: 100%; height: var(--ctl-sm); margin-bottom: 4px; font-size: 13px; }
+/* The folder menu: a field that finds a folder by name, as a row of the menu with a line under it;
+   rows with a › that shows the folders inside. */
+.menu-find { display: flex; align-items: center; gap: 9px; margin: -4px -4px 4px; padding: 0 13px; border-bottom: 1px solid var(--border); cursor: text; }
+.menu-find svg.i { flex: none; width: 16px; height: 16px; color: var(--faint); }
+.menu-find input { flex: 1; min-width: 0; height: 38px; padding: 0; border: 0; outline: 0; background: none; font-size: 13px; color: var(--ink); }
+.menu-find input::placeholder { color: var(--faint); }
+.menu-find:focus-within svg.i { color: var(--muted); }
 .menu-line { display: flex; align-items: center; gap: 2px; }
 .menu-line .menu-row { flex: 1; min-width: 0; }
 .menu-open {
@@ -427,7 +444,7 @@ svg.i .frame { stroke-width: 2.6; }
 .result.selected, .tile.selected { border-color: var(--faint); }
 .thumb {
   width: 88px; height: 88px; flex: none; border-radius: 5px; object-fit: contain; /* the whole picture, never squashed */
-  background: var(--well); border: 1px solid var(--border); cursor: zoom-in;
+  background: var(--well); cursor: zoom-in;
 }
 /* A file without a picture: its kind's icon and its extension, muted; as wide as a thumbnail, so
    the text beside it starts where it does next to a picture. */
@@ -498,7 +515,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .match-ring .a { stroke: hsl(var(--hue) var(--match-s) var(--match-l)); stroke-linecap: round; }
 .aa {
   font: 800 10px/16px var(--sans); padding: 0 4px; border-radius: 4px;
-  background: var(--well); color: var(--muted); border: 1px solid var(--border);
+  background: var(--well); color: var(--muted);
 }
 
 .tile {
@@ -544,13 +561,12 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .empty p { margin: 0; font-weight: 600; }
 .empty p.waiting { max-width: 380px; text-align: center; font-size: 15px; font-weight: 500; line-height: 1.6; color: var(--muted); text-wrap: balance; }
 .empty.compact { padding: 40px 20px; }
-/* Nothing searched yet: the search box's example, as a result would look, muted; a new one fades in
-   with every new example. */
-.empty.examples { padding: 0; align-items: stretch; }
-.sample { opacity: .5; cursor: pointer; animation: sample-in .5s ease; }
-.sample:hover { opacity: .75; }
-.sample * { pointer-events: none; }
-@keyframes sample-in { from { opacity: 0; } }
+/* Nothing searched yet: "Search anything", in the middle of what's left of the window under the
+   search box (the page takes the window's height for it). */
+.main:has(> #page-search:not([hidden]) > #empty.anything:not([hidden])) { height: 100vh; display: flex; flex-direction: column; }
+.main:has(> #page-search:not([hidden]) > #empty.anything:not([hidden])) > #page-search { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+.empty.anything { flex: 1; justify-content: center; padding: 0 20px 8vh; }
+.empty.anything p { font: 600 22px/1.3 var(--display); color: var(--faint); text-align: center; }
 .link {
   cursor: pointer; font-weight: 700; color: var(--ink);
   text-decoration: underline; text-decoration-color: var(--orange); text-decoration-thickness: 2px; text-underline-offset: 3px;
@@ -566,28 +582,58 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .search.mini { flex: 1 1 180px; max-width: 360px; height: var(--ctl); padding: 0 12px; gap: 9px; border-radius: 8px; }
 .search.mini input { padding: 0; font-size: 14px; }
 .search.mini > span svg.i { width: 17px; height: 17px; }
-#map-kinds button:not(.active) { opacity: .45; }
-#map-kinds button.active[data-kind="docs"] { color: var(--kind-docs); }
-#map-kinds button.active[data-kind="text"] { color: var(--kind-text); }
-#map-kinds button.active[data-kind="code"] { color: var(--kind-code); }
-#map-kinds button.active[data-kind="images"] { color: var(--kind-images); }
-/* The map's own controls, on the map */
+/* The map's kinds: the search's choice, in the dots' colours (they're the map's legend). */
+#map-kinds button[data-kind="docs"] { color: var(--kind-docs); }
+#map-kinds button[data-kind="text"] { color: var(--kind-text); }
+#map-kinds button[data-kind="code"] { color: var(--kind-code); }
+#map-kinds button[data-kind="images"] { color: var(--kind-images); }
+/* The map's own controls, on the map: its views at the bottom left, turning and resetting at the
+   bottom right, How it works at the top right (next to the column it opens in). */
 .map-tools { position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; gap: var(--gap); }
+.map-tools.end { left: auto; right: 12px; }
+.map-tools .seg { border: 0; } /* (as tall as the buttons beside it) */
+.map-corner { position: absolute; top: 12px; right: 12px; }
 .map-count { font: 600 12px var(--mono); color: var(--muted); cursor: help; }
+/* The map, and beside it one thing at a time: How it works while it's open, else the picked file's
+   card. Nothing lies on the map. The column is there while something's in it, as tall as the map,
+   and as wide as its edge is dragged to (--side-w); what's in it fills it. */
+.map-main { flex: 1; min-height: 0; display: flex; }
+.map-resize { flex: none; position: relative; width: var(--gap); cursor: col-resize; touch-action: none; }
+.map-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; translate: -50% 0; border-radius: 1px; }
+.map-resize:hover::after, .map-resize.drag::after { background: var(--border-strong); }
+.map-main:not(:has(> .map-side > :not([hidden]))) > .map-resize { display: none; }
+.map-side {
+  flex: none; width: var(--side-w, clamp(280px, 36%, 460px)); min-width: 260px; max-width: calc(100% - 320px);
+  min-height: 0; display: flex; flex-direction: column; overflow: auto;
+}
+.map-side:not(:has(> :not([hidden]))) { display: none; }
 .map-stage {
-  position: relative; flex: 1; min-height: 280px;
+  position: relative; flex: 1; min-width: 0; min-height: 280px;
   background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
 }
 #map-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+/* Rings going out from the tour's file (orange) and from where your words would sit (ink), one
+   after another: two rings each, half a beat apart. */
+.map-ripple { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+.map-ripple::before, .map-ripple::after {
+  content: ""; position: absolute; left: calc(-1 * var(--r, 40px)); top: calc(-1 * var(--r, 40px));
+  width: calc(2 * var(--r, 40px)); height: calc(2 * var(--r, 40px)); box-sizing: border-box;
+  border: 2px solid #f54e00; border-radius: 50%; opacity: 0;
+  animation: map-ripple 1.8s linear infinite;
+}
+.map-ripple::after { animation-delay: -.9s; }
+.map-ripple.ink::before, .map-ripple.ink::after { border-color: var(--ink); }
+@keyframes map-ripple { from { transform: scale(var(--from, .2)); opacity: .55; } to { transform: scale(1); opacity: 0; } }
 .map-center { position: absolute; left: 50%; top: 50%; translate: -50% -50%; }
 /* The first layout is being worked out: the waiting hourglass in the middle of the cube. */
 .map-busy { color: var(--muted); cursor: help; }
 .map-busy svg.i { width: 30px; height: 30px; }
 .map-card {
-  position: absolute; top: 14px; right: 14px; width: 248px; max-height: calc(100% - 28px); overflow: auto; padding: 12px;
-  background: var(--card); border: 1px solid var(--border-strong); border-radius: 10px;
+  flex: 1 1 0; display: flex; flex-direction: column;
+  padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 10px;
 }
-.mc-head { display: flex; align-items: flex-start; gap: 2px; }
+/* The name, preview or fingerprint, close; the folder under them. */
+.mc-head { display: flex; align-items: center; gap: 2px; }
 .mc-head .chip-x { flex: none; color: var(--muted); }
 .mc-head .chip-x:hover { color: var(--ink); background: var(--hover); }
 .mc-name {
@@ -599,28 +645,30 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
   font: 11px var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mc-dir:hover { color: var(--muted); text-decoration: underline; }
-.mc-tabs { margin: 10px 0 8px; }
+.mc-tabs { margin-right: 4px; }
 .mc-tabs button { width: 30px; height: 24px; }
 .mc-tabs button svg.i { width: 15px; height: 15px; }
-/* One fixed-size spot for the preview or the fingerprint: switching files never resizes the card. */
-.mc-view { height: 150px; margin-bottom: 10px; }
-.mc-preview {
-  height: 100%; display: grid; place-items: center; overflow: hidden;
-  border-radius: 6px; background: var(--well); border: 1px solid var(--border);
-}
-.mc-preview img { width: 100%; height: 100%; object-fit: contain; cursor: pointer; display: block; }
-.mc-text {
-  margin: 0; padding: 8px 10px; align-self: start; justify-self: stretch; font-size: 12px; line-height: 1.45;
-  color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden;
-}
-.mc-text.mono { font: 11px/1.45 var(--mono); }
+/* The file to look through, in what the card has left: a picture whole; a PDF's pages; a document's
+   or text's whole text, scrolling and selectable. Switching files never resizes the card. */
+.mc-view { flex: 1 1 0; min-height: 120px; margin: 12px 0; container-type: size; }
+.mc-preview { height: 100%; border-radius: 6px; }
+.mc-preview.picture { display: grid; place-items: center; overflow: hidden; }
+.mc-preview.picture img { width: 100%; height: 100%; object-fit: contain; cursor: pointer; display: block; border-radius: 6px; }
+.mc-preview.doc { overflow: auto; overscroll-behavior: contain; padding-right: 6px; }
+.mc-doc { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mc-doc.mono { font: 12px/1.55 var(--mono); }
+.mc-page-label { margin: 18px 0 6px; font-size: 11px; font-weight: 700; color: var(--faint); }
+.mc-page-label:first-child { margin-top: 0; }
+.mc-page { display: block; width: 100%; height: auto; aspect-ratio: auto 0.707; margin-bottom: 10px; border-radius: 4px; background: var(--well); cursor: pointer; }
+.mc-cut { padding: 6px 0 10px; color: var(--faint); }
+.mc-none { display: grid; place-items: center; height: 100%; }
 .mc-none svg.i { width: 34px; height: 34px; color: var(--faint); }
+/* (square, as big as the spot allows) */
 .mc-print {
-  display: block; width: 150px; height: 150px; margin: 0 auto; border-radius: 6px; background: var(--well);
-  border: 1px solid var(--border); image-rendering: pixelated; cursor: crosshair;
+  display: block; width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); margin: 0 auto; border-radius: 6px;
+  background: var(--well); image-rendering: pixelated; cursor: crosshair;
 }
-.mc-label { font-size: 11px; font-weight: 700; color: var(--faint); margin: 0 0 2px 6px; }
+.mc-label { padding: 10px 0 2px 6px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 700; color: var(--faint); }
 .mc-label:has(+ .mc-related:empty) { display: none; }
 /* Placeholders while a file's details load */
 .skeleton, .mc-preview.loading, .mc-print.loading {
@@ -647,103 +695,145 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mc-foot { display: flex; align-items: center; gap: 6px; }
 .map-card .actions { margin: 0; justify-content: flex-start; }
 
-/* The map's views, at the bar's end like the search page's; the panel that explains them, on the
-   left (the same frame as the card on the right). */
-.map-views { margin-left: auto; }
+/* How it works: the tour, a card like the file's that fills the column. Its head; then the step:
+   which part, its title and one sentence, and what it shows in the middle of the room left; at
+   its foot ‹ dots ›, plain. */
 .map-explain {
-  position: absolute; top: 14px; left: 14px; width: 268px; max-height: calc(100% - 76px); overflow: auto; padding: 12px;
-  background: var(--card); border: 1px solid var(--border-strong); border-radius: 10px;
+  flex: 1 1 0; min-height: 0; display: flex; flex-direction: column;
+  padding: 12px 14px; background: var(--card); border: 1px solid var(--border); border-radius: 10px;
 }
 .mx-head { display: flex; align-items: center; gap: 8px; }
 .mx-head > svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
 .mx-head b { flex: 1; min-width: 0; color: var(--ink); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-head .chip-x { flex: none; color: var(--muted); }
-.mx-line { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text); }
-.mx-show {
-  display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 0; border: 0; background: none; cursor: pointer;
-  font: inherit; font-weight: 600; color: var(--muted); white-space: nowrap; vertical-align: baseline;
-}
-.mx-show:hover { color: var(--ink); text-decoration: underline; }
-.mx-show svg.i { width: 14px; height: 14px; align-self: center; }
-.mx-step { margin-top: 10px; font-size: 11px; font-weight: 700; color: var(--faint); }
-.mx-text { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--text); }
-.mx-visual { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 10px; }
-.mx-words { max-width: 100%; font-weight: 600; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
-.mx-print { display: block; border-radius: 4px; border: 1px solid var(--border); background: var(--well); image-rendering: pixelated; flex: none; }
+.mx-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; padding-top: 20px; }
+.mx-part { font-size: 11px; font-weight: 700; color: var(--faint); }
+.mx-title { margin-top: 4px; font: 700 19px/1.25 var(--display); color: var(--ink); letter-spacing: -.01em; }
+.mx-text { margin: 6px 0 0; min-height: 3.1em; font-size: 13px; line-height: 1.55; color: var(--muted); } /* (two lines kept: what a step shows stays in place) */
+/* (a size container: what a step shows takes the room there is) */
+.mx-stage { flex: 1; min-height: 0; margin: 20px 0 8px; container-type: size; overflow: auto; }
+.mx-visual { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.mx-visual.wide { align-items: stretch; } /* (lists: the width of the panel) */
+.mx-words { max-width: 100%; font-size: 20px; font-weight: 700; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
+.mx-print { display: block; border-radius: 4px; background: var(--well); image-rendering: pixelated; flex: none; }
 .mx-caption { font-size: 11px; color: var(--faint); text-align: center; }
-.mx-prints { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
-.mx-arrow svg.i { width: 16px; height: 16px; color: var(--faint); display: block; }
-.mx-passages { align-self: stretch; display: flex; flex-direction: column; gap: 6px; }
-.mx-passage { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.4; color: var(--text); }
-.mx-passage > span {
-  min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+/* The tour: what a step shows comes in piece by piece (--i: the order); "late" after the rest. */
+.mx-in { animation: mx-in .42s cubic-bezier(.2, .8, .3, 1) both; animation-delay: calc(var(--i, 0) * 90ms); }
+.mx-in.late { animation-delay: 950ms; }
+@keyframes mx-in { from { opacity: 0; transform: translateY(8px); } }
+/* A file being read: a line goes down its page (on a light tint, as tall as the room). */
+.mx-read { position: relative; flex: 1 0 auto; align-self: stretch; display: flex; flex-direction: column; overflow: hidden; border-radius: 6px; }
+.mx-letter { flex: 1 0 auto; padding: 18px 20px; border-radius: 6px; background: var(--well); font-size: 13px; line-height: 1.7; color: var(--text); }
+.mx-letter p { margin: 0 0 12px; }
+.mx-letter p:last-child { margin: 0; }
+.mx-read::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--orange);
+  animation: mx-scan 1.3s ease-in-out .5s both;
 }
-.mx-passage em { font-style: normal; font-weight: 600; color: var(--muted); margin-right: 4px; }
+@keyframes mx-scan { from { top: 0; opacity: 1; } 85% { opacity: 1; } to { top: calc(100% - 2px); opacity: 0; } }
+/* The passages' numbers fly into their average below them. */
+.mx-prints { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.mx-prints.merge > canvas { animation: mx-merge .55s cubic-bezier(.5, 0, .75, .3) both; animation-delay: calc(300ms + var(--i, 0) * 45ms); }
+@keyframes mx-merge { to { transform: translate(var(--dx, 0), var(--dy, 80px)) scale(.4); opacity: 0; } }
+/* The closest in meaning: bars filling up, in the match ring's colours. */
+.mx-bars { align-self: stretch; display: flex; flex-direction: column; gap: clamp(8px, 2.2cqh, 14px); }
+.mx-bar-row { display: grid; grid-template-columns: auto minmax(0, 1fr) 32% auto; align-items: center; gap: 10px; font-size: 13px; color: var(--text); }
+.mx-bar-row b { min-width: 34px; text-align: right; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.mx-bar { height: 8px; border-radius: 4px; background: var(--well); overflow: hidden; }
+.mx-bar i {
+  display: block; height: 100%; width: var(--w); border-radius: 3px; background: hsl(var(--hue) var(--match-s) var(--match-l));
+  animation: mx-bar .8s cubic-bezier(.2, .8, .3, 1) both; animation-delay: calc(350ms + var(--i, 0) * 140ms);
+}
+@keyframes mx-bar { from { width: 0; } }
+/* How many files hold your words, counted up. */
+.mx-count { font: 800 64px/1 var(--display); color: var(--ink); font-variant-numeric: tabular-nums; }
+/* The page comes apart into its passages (the last one is the rest of the page), numbered. */
+.mx-pieces { flex: 1 0 auto; align-self: stretch; display: flex; flex-direction: column; gap: 10px; }
+.mx-piece { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border-radius: 6px; background: var(--well); font-size: 13px; line-height: 22px; color: var(--text); }
+.mx-piece:last-child { flex: 1 0 auto; }
+.mx-piece p { margin: 0; min-width: 0; }
+.mx-piece + .mx-piece { animation: mx-apart .5s cubic-bezier(.2, .8, .3, 1) both; animation-delay: calc(150ms + var(--i, 0) * 150ms); }
+@keyframes mx-apart { from { margin-top: -10px; } }
+.mx-num { flex: none; width: 14px; font: 700 12px/22px var(--mono); color: var(--faint); text-align: right; animation: mx-fade .3s ease both; animation-delay: calc(250ms + var(--i, 0) * 150ms); }
+@keyframes mx-fade { from { opacity: 0; } }
+/* Each passage beside its numbers: the rows share the room, the numbers as tall as a row. */
+.mx-visual.rows { height: 100%; }
+.mx-rows { flex: 1; min-height: 0; align-self: stretch; display: grid; grid-template-rows: repeat(var(--n, 3), minmax(0, 1fr)); gap: 12px; }
+.mx-row { display: flex; align-items: center; gap: 14px; min-height: 0; font-size: 13px; line-height: 1.6; color: var(--text); }
+.mx-ptext {
+  flex: 1; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: var(--lines, 3); -webkit-box-orient: vertical; overflow: hidden;
+}
+/* The files that hold your words: each name, and the words in it marked (as a result shows them). */
+.mx-hits { align-self: stretch; display: flex; flex-direction: column; gap: 14px; margin-top: 10px; }
+.mx-hit-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+.mx-snip {
+  margin: 4px 0 0 16px; color: var(--text); font-size: 13px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
 .mx-file { align-self: stretch; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .mx-file svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
-.mx-file b { min-width: 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-file b { min-width: 0; font-size: 14px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-dir { align-self: stretch; font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mx-thumb { display: block; max-width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; }
-.mx-thumb.small { max-height: 48px; }
-.mx-sample { align-self: stretch; padding: 8px 10px; border-radius: 6px; background: var(--well); border: 1px solid var(--border); }
-.mx-sample p {
-  margin: 0; font-size: 12px; line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
-  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden;
-}
 .mx-results { align-self: stretch; min-height: 0; margin-bottom: 0; }
+.mx-results .mc-rel { height: 32px; font-size: 13px; }
 .mx-results .more-divider { margin: 4px 0; min-height: 22px; cursor: default; }
-.mx-open { align-self: flex-end; }
 .mx-result { cursor: default; }
-.mx-near { margin: 10px 0 0; }
-.mx-skel { width: 100%; height: 120px; }
-.mx-error { margin: 10px 0 0; font-size: 12px; color: var(--red); }
-.mx-nav { display: flex; align-items: center; gap: var(--gap); margin-top: 12px; }
+/* (at the panel's foot: the buttons stay put from step to step) */
+.mx-nav { display: flex; align-items: center; gap: var(--gap); padding-top: 12px; }
 .mx-dots { flex: 1; display: flex; justify-content: center; gap: 6px; }
 .mx-dots button { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 50%; background: var(--border-strong); cursor: pointer; }
 .mx-dots button:hover { background: var(--faint); }
-.mx-dots button.on { background: var(--orange); }
+.mx-dots button.on { background: var(--ink); }
 
 /* ---- folders ---- */
 /* The index at a glance: one number, one bar of the kinds of files, File types beside it. */
-.index-head { display: flex; align-items: flex-start; gap: var(--gap-group); margin-bottom: var(--gap-group); }
-.glance { flex: 1; min-width: 0; }
-.glance-head { display: flex; align-items: baseline; gap: var(--gap); }
-.glance-head b { font: 800 28px/1.1 var(--display); color: var(--ink); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.glance-head span { font-size: 13px; color: var(--muted); }
-.glance-bar { display: flex; gap: 2px; height: 8px; margin-top: 10px; border-radius: 999px; overflow: hidden; background: var(--well); }
-.glance-bar i { flex-basis: 0; min-width: 4px; cursor: help; }
-.glance-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+/* A ring of parts (the kinds of files), its number in the middle. */
+.donut { position: relative; display: inline-grid; place-items: center; width: var(--size); height: var(--size); flex: none; }
+.donut-svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+.donut-svg circle { fill: none; stroke-width: 11; }
+.donut-svg .track { stroke: var(--well); }
+.donut-svg .part { cursor: help; transition: stroke-width .12s; }
+.donut-svg .part:hover { stroke-width: 15; }
+.donut-mid { position: relative; text-align: center; }
+.donut-mid b { font: 800 26px/1 var(--display); color: var(--ink); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+/* The index at a glance: the ring of all folders, beside it each kind's number and a few facts. */
+.index-head { display: flex; align-items: center; gap: 28px; margin: 4px 0 28px; }
+.index-head:empty { display: none; }
+.glance-text { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.glance-title { font-size: 14px; font-weight: 600; color: var(--muted); }
+.glance-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.glance-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 15px; color: var(--muted); }
 .glance-legend span { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
 .glance-legend i { width: 8px; height: 8px; border-radius: 50%; }
-.glance-legend svg.i { width: 15px; height: 15px; color: var(--faint); }
+.glance-legend svg.i { width: 16px; height: 16px; color: var(--faint); }
 .glance-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
-/* Where the next folder would go: an empty slot with a + in it. */
+/* Where the next folder would go: an empty card with a + in it. */
 .add-slot {
-  cursor: pointer; display: grid; place-items: center; min-height: 56px; padding: 0;
-  border: 1px dashed var(--border-strong); border-radius: 8px; background: none; color: var(--muted);
+  cursor: pointer; display: grid; place-items: center; min-height: 118px; padding: 0;
+  border: 1px dashed var(--border-strong); border-radius: 10px; background: none; color: var(--muted);
 }
 .add-slot:hover { color: var(--ink); background: var(--hover); border-color: var(--faint); }
 .add-slot svg.i { width: 22px; height: 22px; }
 .folder.missing .folder-name { color: var(--muted); }
 .error { color: var(--red); font-size: 13px; font-weight: 600; margin: -6px 0 12px; }
-.folders { display: flex; flex-direction: column; gap: 8px; }
-/* A folder: its name, then its numbers and buttons. When it's narrow, numbers and buttons move under
-   the name as one row: numbers on the left, buttons on the right. */
+/* The folders as cards, as many side by side as fit; the + card after them. */
+.folders { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+/* A folder: the ring of its kinds with its name and place; its numbers and buttons under them. */
 .folder {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap) 14px;
-  background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 14px; min-width: 0;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
 }
-.folder-side { flex: 1 0 auto; display: flex; align-items: center; gap: 14px; }
+.folder-side { display: flex; align-items: center; gap: 12px; margin-top: auto; min-width: 0; }
+.folder-side .stats { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
 .folder-main {
-  flex: 999 1 200px; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0;
+  display: flex; align-items: center; gap: 14px; min-width: 0; padding: 0;
   border: 0; background: none; color: inherit; text-align: left; cursor: pointer;
 }
+.folder-ring { display: grid; flex: none; }
+.folder-ring .donut-svg circle { stroke-width: 16; }
 .folder-main:hover .folder-name { text-decoration: underline; text-underline-offset: 3px; }
-.folder-main:hover .folder-icon { color: var(--ink); }
 .folder-text { display: flex; flex-direction: column; min-width: 0; }
-.folder-icon { display: grid; place-items: center; color: var(--muted); }
-.folder-icon svg.i { width: 20px; height: 20px; }
-.folder-name { font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.folder-name { font-weight: 700; font-size: 15px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-path { color: var(--faint); font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats { display: flex; align-items: center; gap: 14px; }
 .stat {
@@ -783,17 +873,14 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .fm-bar .skip, .fm-legend .skip i { background: var(--border-strong); }
 .fm-bar .bad, .fm-legend .bad i { background: var(--red); }
 /* A few numbers in one strip */
-.fm-stats {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 1px;
-  background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-}
-.fm-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 14px; background: var(--well); }
+.fm-stats { display: flex; flex-wrap: wrap; gap: 10px 36px; }
+.fm-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .fm-stat span { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fm-stat span svg.i { flex: none; width: 14px; height: 14px; color: var(--faint); }
 .fm-stat b { font: 700 17px/1.25 var(--display); color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fm-section-head { display: flex; align-items: center; justify-content: space-between; min-height: 28px; margin-bottom: 8px; }
 .fm-label { font-size: 12px; font-weight: 700; color: var(--muted); }
-.fm-list { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.fm-list { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .fm-file { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; }
 .fm-file + .fm-file { border-top: 1px solid var(--border); }
 .fm-file.new { background: var(--red-bg); }
@@ -820,6 +907,11 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 
 /* ---- settings ---- */
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 20px; margin-bottom: 16px; }
+/* A settings row that opens a dialog (File types): what's set, then a ›. */
+.set-link { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.set-link .set-controls { color: var(--muted); }
+.set-link:hover .set-controls { color: var(--ink); }
+.types-summary { font-size: 13px; font-weight: 600; }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; padding: 8px 0; }
 .set-row + .set-row { border-top: 1px solid var(--border); }
 label.set-row { cursor: pointer; }
@@ -848,7 +940,7 @@ label.set-row { cursor: pointer; }
 .meter { cursor: help; }
 .meter-row { display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .02em; }
 .meter-row b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
-.meter-bar { height: 8px; border-radius: 999px; background: var(--well); border: 1px solid var(--border); overflow: hidden; margin-top: 6px; }
+.meter-bar { height: 8px; border-radius: 999px; background: var(--well); overflow: hidden; margin-top: 6px; }
 .meter-bar i { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--green); transition: width .6s ease, background .3s; }
 .meter-bar i.mid { background: var(--yellow); }
 .meter-bar i.high { background: var(--red); }
@@ -891,9 +983,9 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .lb-text.mono { font-family: var(--mono); font-size: 13px; }
 .lb-btn {
   cursor: pointer; flex: none; display: grid; place-items: center; width: var(--ctl); height: var(--ctl); padding: 0; border-radius: 50%;
-  background: var(--card); color: var(--ink); border: 1px solid var(--border-strong);
+  background: none; color: var(--ink); border: 0;
 }
-.lb-btn:hover { background: color-mix(in srgb, var(--card) 92%, var(--ink)); }
+.lb-btn:hover { background: var(--hover); }
 .lb-close { position: absolute; top: 18px; right: 18px; }
 
 /* One column as wide as the window: a long name inside never widens a dialog past it. */
@@ -922,7 +1014,7 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .fm-body, .tm-body, .um-notes { margin-right: -14px; padding-right: 2px; scrollbar-gutter: stable; }
 .modal-text { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
 .notes {
-  margin: 12px 0 0; padding: 12px 14px; background: var(--well); border: 1px solid var(--border); border-radius: 6px;
+  margin: 12px 0 0; padding: 0;
   font: 13px/1.6 var(--sans); color: var(--text); white-space: pre-wrap; overflow: auto; max-height: 320px;
 }
 .notes:empty { display: none; }
@@ -947,7 +1039,7 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 }
 .type-chip.static { cursor: default; background: var(--card); border-color: var(--border); }
 .type-chip small { color: var(--faint); font-size: 11px; }
-.tm-rules { border: 1px solid var(--border); border-radius: 8px; }
+.tm-rules { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .tm-rule { display: flex; align-items: center; gap: 10px; padding: 7px 12px; cursor: pointer; }
 .tm-rule + .tm-rule { border-top: 1px solid var(--border); }
 .tm-rule > svg.i { flex: none; width: 18px; height: 18px; color: var(--faint); }
@@ -971,8 +1063,8 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 
 /* ---- diagnostics: what the app uses, the last ten minutes ---- */
 .page-diagnostics { display: flex; flex-direction: column; gap: var(--gap-group); }
-.dg-strip { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; margin-bottom: var(--gap-group); }
-.dg-strip .chip { height: var(--ctl-sm); padding: 0 10px; border-color: var(--border); color: var(--muted); }
+/* Facts as an icon and a value, no frames (the tooltip says more). */
+.dg-strip { display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap; min-height: var(--ctl-sm); margin-bottom: var(--gap-group); }
 .dg-headline { display: flex; align-items: baseline; gap: var(--gap); margin-right: var(--gap); }
 .dg-headline b { font-size: 28px; font-weight: 700; color: var(--ink); }
 .dg-headline span { color: var(--muted); font-size: 13px; }
@@ -985,13 +1077,17 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 /* A chart's top value, beside its title: small, muted. */
 .dg-top { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
 .dg-kinds { padding-top: 6px; border-top: 1px solid var(--border); }
-.dg-strip .stat.chip svg.i { color: var(--faint); }
 .dg-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
 .dg-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .dg-legend i { width: 8px; height: 8px; border-radius: 2px; }
 .dg-legend b { color: var(--ink); font-weight: 600; margin-left: 2px; }
 .dg-time { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-.dg-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+/* What indexing did over the charts' time: one band, coloured by what it was doing. */
+.dg-activity { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.dg-activity[hidden] { display: none; }
+.dg-band { position: relative; height: 14px; border-radius: 4px; background: var(--well); overflow: hidden; }
+.dg-band i { position: absolute; top: 0; bottom: 0; cursor: help; }
+.dg-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--well); }
 .dg-bar i { display: block; height: 100%; }
 
 /* A folder's details: watch and rescan in the head; the folders inside, each with a switch. */

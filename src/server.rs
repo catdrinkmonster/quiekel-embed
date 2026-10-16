@@ -28,10 +28,11 @@ use crate::updater::{REPO_URL, Updater};
 const THEMES: [&str; 3] = ["auto", "light", "dark"];
 // Two files this close as a whole (their passages' means) are nearly the same file: a copy, another
 // format, a version. Copies under other names and folders measured 0.98-0.99 (the name is part of
-// what the model reads), different bills 0.80. Not calibrated yet: the duplicates work will set it on
-// the lab's sets.
+// what the model reads), different bills 0.80. Not calibrated yet: the duplicates work will set it.
 const NEAR_IDENTICAL: f32 = 0.96;
 const VIEWS: [&str; 3] = ["cards", "list", "grid"]; // results with passages, one line each, thumbnails
+// A file's text the app shows to read, at most (more than most documents hold).
+const TEXT_CHARS: usize = 400_000;
 // Opening these would run them (or, for .reg, change Windows): they open in an editor instead.
 const RUNNABLE_EXTS: [&str; 29] = [
     ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".js", ".mjs", ".cjs", ".jse", ".vbs", ".vbe", ".wsf", ".wsh", ".py",
@@ -267,21 +268,13 @@ fn etag_of(bytes: &[u8]) -> String {
 
 type Query = HashMap<String, String>;
 
-/// A request that doesn't fit (a body, number or field the API can't read): 422 with the reason.
 /// The model couldn't do it (busy, out of memory): try again in a moment.
-/// A file's passages the map's Indexing view shows, at most.
-const MAP_PASSAGES: usize = 8;
-
-/// A vector to send: 3 decimals are plenty to draw it.
-fn rounded(v: &[f32]) -> Vec<f64> {
-    v.iter().map(|x| (*x as f64 * 1000.0).round() / 1000.0).collect()
-}
-
 fn model_failed(e: crate::embedder::EmbedError) -> ApiError {
     log::info!("Comparing a file failed: {e}");
     fail(503, "model_busy", json!({}))
 }
 
+/// A request that doesn't fit (a body, number or field the API can't read): 422 with the reason.
 fn unreadable(what: impl std::fmt::Display) -> ApiError {
     detail(StatusCode::UNPROCESSABLE_ENTITY, &what.to_string())
 }
@@ -355,6 +348,7 @@ struct SettingsIn {
     hidden_files: Option<bool>,
     program_folders: Option<bool>,
     diagnostics: Option<bool>,
+    map_side: Option<i64>,
 }
 
 impl Server {
@@ -463,6 +457,9 @@ impl Server {
         }
         if let Some(v) = body.problems_seen {
             let _ = s.update("problems_seen", json!(v.max(0)));
+        }
+        if let Some(v) = body.map_side {
+            let _ = s.update("map_side", json!(v.clamp(0, 4000)));
         }
         for (key, view) in [("view_files", &body.view_files), ("view_images", &body.view_images)] {
             if let Some(view) = view {
@@ -727,6 +724,32 @@ impl Server {
             Some(f) if archive::exists(&f.path) => Ok(f),
             _ => Err(fail(404, "file_not_found", json!({}))),
         }
+    }
+
+    /// A file's text to read in the app: for a PDF, how many pages it has (they're shown as
+    /// pictures); else its whole text as indexing reads it, up to TEXT_CHARS, a PDF's or book's in
+    /// pages.
+    fn text_of(&self, file_id: i64) -> Result<Response, ApiError> {
+        let f = self.indexed_file(file_id)?;
+        let no_text = || fail(415, "no_text", json!({}));
+        let copy; // (a file inside an archive or email: a copy, kept until it's read)
+        let path = if archive::split(&f.path).is_none() {
+            std::path::PathBuf::from(&f.path)
+        } else {
+            copy = archive::extracted(&f.path, max_bytes(&f.kind, crate::config::file_name(&f.path))).map_err(|_| no_text())?;
+            copy.file.clone()
+        };
+        if let Some(n) = crate::paged::page_count(&path) {
+            return Ok(json_reply(&json!({"pdf_pages": n})));
+        }
+        if f.kind == "image" {
+            return Err(no_text());
+        }
+        let text = crate::extract::full_text(&path, &f.kind).map_err(|_| no_text())?;
+        let cut = text.chars().count() > TEXT_CHARS;
+        let text: String = if cut { text.chars().take(TEXT_CHARS).collect() } else { text };
+        let pages: Vec<&str> = text.split(crate::paged::PAGE_MARK).filter(|p| !p.trim().is_empty()).collect();
+        Ok(json_reply(&json!({"pages": pages, "cut": cut})))
     }
 
     /// JPEG preview of an image, or of a document's first page, kept on disk.
@@ -1075,36 +1098,6 @@ impl Server {
                 let v = self.mean_vector(path_int("file_id", id)?)?;
                 Ok(json_reply(&b.maps.related(&v)))
             }
-            // How a file came to its dot: its passages, each one's numbers, and their mean.
-            ["api", "map", "passages", id] if get => {
-                let id = path_int("file_id", id)?;
-                let Some(f) = b.store.file(id) else { return Err(fail(404, "file_not_found", json!({}))) };
-                let mean = self.mean_vector(id)?;
-                let (dir, name) = split_path(&f.path);
-                let passages: Vec<Value> = b
-                    .store
-                    .file_passages(id, MAP_PASSAGES)
-                    .into_iter()
-                    .map(|(n, text, page, v)| json!({"n": n, "text": text.chars().take(320).collect::<String>(), "page": page, "vector": rounded(&v)}))
-                    .collect();
-                Ok(json_reply(&json!({
-                    "file": {"id": id, "name": name, "dir": dir, "kind": f.kind, "size": f.size, "mtime": f.mtime,
-                             "preview": has_preview(&f.path, &f.kind)},
-                    "count": f.chunks, "passages": passages, "mean": rounded(&mean),
-                })))
-            }
-            // How a search sees the map: the words' numbers, how like them every dot is, and where
-            // they'd sit.
-            ["api", "map", "query"] if get => {
-                let text = q.get("q").map(|s| s.trim()).filter(|s| !s.is_empty()).ok_or_else(|| unreadable("q: missing"))?;
-                let e = &b.embedder;
-                if !e.ready() {
-                    b.indexer.wake_model();
-                    return Err(fail(503, "model_waking", json!({})));
-                }
-                let v = e.query(text).map_err(model_failed)?;
-                Ok(json_reply(&json!({"vector": rounded(&v), "sims": b.maps.related(&v), "spot": b.maps.spot(&v)})))
-            }
             ["api", "map", "dimension", index] if get => {
                 let index = path_int("index", index)?;
                 if !(0..EMBED_DIM as i64).contains(&index) {
@@ -1116,6 +1109,7 @@ impl Server {
             ["api", "similar-to"] if post => self.similar_to(q, body),
             ["api", "thumb", id] if get => self.rendered(path_int("file_id", id)?, 360, 82, page_of(q)?),
             ["api", "preview", id] if get => self.rendered(path_int("file_id", id)?, 1600, 88, page_of(q)?),
+            ["api", "text", id] if get => self.text_of(path_int("file_id", id)?),
             ["api", "open", id] if post => self.open_file(path_int("file_id", id)?),
             ["api", "reveal", id] if post => {
                 let f = self.indexed_file(path_int("file_id", id)?)?;
@@ -1145,9 +1139,8 @@ fn known_path(parts: &[&str]) -> bool {
             | ["api", "folders", _]
             | ["api", "folders", _, "rescan" | "pause" | "resume" | "watch" | "errors" | "details" | "reveal" | "leave-out" | "locate"]
             | ["api", "folders", _, "errors", "seen"]
-            | ["api", "map", "vector" | "related" | "dimension" | "passages", _]
-            | ["api", "map", "query"]
-            | ["api", "similar" | "thumb" | "preview" | "open" | "reveal", _]
+            | ["api", "map", "vector" | "related" | "dimension", _]
+            | ["api", "similar" | "thumb" | "preview" | "text" | "open" | "reveal", _]
     )
 }
 
@@ -1519,6 +1512,29 @@ mod tests {
     }
 
     #[test]
+    fn a_files_text_comes_whole_to_read() {
+        let c = client();
+        let store = &c.b().store;
+        let dir = std::env::temp_dir().join(format!("quiekel-rs-text-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "Garden\n\nThe raised beds get compost in March.\n".repeat(200);
+        std::fs::write(dir.join("notes.txt"), &text).unwrap();
+        std::fs::write(dir.join("page.html"), "<html><body><p>Hello <b>there</b></p></body></html>").unwrap();
+        let folder = store.add_folder(&dir.to_string_lossy()).unwrap();
+        let path = |name: &str| dir.join(name).to_string_lossy().to_string();
+        store.save_files(&[entry(folder, &path("notes.txt"), "text", "indexed", 1, None), entry(folder, &path("page.html"), "text", "indexed", 1, None)], &[]).unwrap();
+        let id = |name: &str| store.signature(&path(name)).unwrap().0;
+        let d = c.get(&format!("/api/text/{}", id("notes.txt"))).json();
+        assert_eq!((d["pages"].as_array().unwrap().len(), d["pages"][0].as_str(), &d["cut"]), (1, Some(text.as_str()), &json!(false)));
+        let d = c.get(&format!("/api/text/{}", id("page.html"))).json();
+        let page = d["pages"][0].as_str().unwrap();
+        assert!(!page.contains('<') && page.contains("Hello") && page.contains("there")); // (a web page's text, without its tags)
+        assert_eq!(c.get("/api/text/999").status, StatusCode::NOT_FOUND);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_language_setting() {
         let c = client();
         let r = c.post("/api/settings", json!({"language": "de"}));
@@ -1788,7 +1804,7 @@ mod tests {
     }
 
     #[test]
-    fn the_indexing_walk_gets_a_files_passages_and_their_mean() {
+    fn diagnostics_counts_the_index() {
         let c = client();
         let store = &c.b().store;
         let folder = store.add_folder(r"C:\data").unwrap();
@@ -1797,17 +1813,7 @@ mod tests {
         let rows: Vec<VectorRow> =
             ["first passage", "second passage"].iter().enumerate().map(|(i, t)| row(folder, path, i as i64, "text", t, unit(i))).collect();
         store.save_files(&[entry(folder, path, "text", "indexed", 2, None)], &rows).unwrap();
-        let id = store.signature(path).unwrap().0;
-        let d = c.get(&format!("/api/map/passages/{id}")).json();
-        assert_eq!((d["file"]["name"].as_str(), d["count"].as_i64()), (Some("notes.txt"), Some(2)));
-        let texts: Vec<&str> = d["passages"].as_array().unwrap().iter().map(|p| p["text"].as_str().unwrap()).collect();
-        assert_eq!(texts, ["first passage", "second passage"]);
-        assert_eq!((d["passages"][1]["n"].as_i64(), d["passages"][1]["vector"][1].as_f64()), (Some(1), Some(1.0)));
-        let mean: Vec<f64> = d["mean"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
-        assert!((mean[0] - 0.707).abs() < 0.01 && (mean[1] - 0.707).abs() < 0.01); // (their mean, at unit length)
-        assert_eq!(c.get("/api/map/passages/999").status, StatusCode::NOT_FOUND);
-        // Diagnostics counts the index, and a search's words need the model.
-        assert_eq!(c.get("/api/diagnostics").json()["index"]["files"], 1);
-        assert_eq!(c.get("/api/map/query?q=rent").json()["detail"]["key"], "err.model_waking");
+        let index = c.get("/api/diagnostics").json()["index"].clone();
+        assert_eq!((index["files"].as_i64(), index["passages"].as_i64()), (Some(1), Some(2)));
     }
 }

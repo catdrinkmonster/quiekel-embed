@@ -70,8 +70,6 @@ const ICONS = {
   contrast: '<circle cx="12" cy="12" r="8.5"/><path class="solid" d="M12 3.5a8.5 8.5 0 0 1 0 17z"/>',
   cube: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>',
   near: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12h.01"/>',
-  searchSteps: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M9.3 8.2v4.6l3.6-2.3z"/>',
-  docSteps: '<path d="M14 3H7.5A1.5 1.5 0 0 0 6 4.5v15A1.5 1.5 0 0 0 7.5 21h9a1.5 1.5 0 0 0 1.5-1.5V7z"/><path d="M14 3v4h4M10.5 11.5v5l4-2.5z"/>',
   focus: '<circle cx="12" cy="12" r="3"/><path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15"/>',
   mouse: '<rect x="6.5" y="3.5" width="11" height="17" rx="5.5"/><path d="M12 7.5v3"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.6v.2"/>',
@@ -271,6 +269,7 @@ function setLanguage(lang) {
     setTip(b, t(`view.${b.dataset.view}`));
   }
   setTip($("nav-map"), t("nav.map"));
+  if (map.help) renderExplain();
   renderSort();
   renderKeys();
   renderScopes();
@@ -399,7 +398,7 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 const atPage = (page) => (page > 1 ? `&page=${page}` : "");
 const thumbUrl = (r, page) => `/api/thumb/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}${atPage(page)}`;
 const previewUrl = (r, page) => `/api/preview/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}${atPage(page)}`;
-const pictureUrl = (r) => r.picture || thumbUrl(r); // (the empty page's examples bring their own)
+const pictureUrl = (r) => r.picture || thumbUrl(r); // (a pasted picture brings its own)
 
 // Wrap query words in <mark>, building DOM nodes (never innerHTML with file content).
 function highlighted(text, terms) {
@@ -452,7 +451,6 @@ let exampleAt = 0;
 function rotatePlaceholder() {
   const examples = t("search.examples").split("|");
   $("q").placeholder = `${examples[exampleAt++ % examples.length]}…`;
-  if (!$("q").value.trim() && !state.similar && state.hasFolders) renderEmpty(); // (its example result too)
 }
 setInterval(() => { if (!$("q").value && !state.similar) rotatePlaceholder(); }, 4500);
 
@@ -479,6 +477,15 @@ function route() {
 }
 
 window.addEventListener("hashchange", route);
+
+// A click on Quiekel: a little hop (and to Search, where the link goes).
+$("brand").addEventListener("click", () => {
+  const brand = $("brand");
+  brand.classList.remove("hop");
+  void brand.offsetWidth; // (from the start again when clicked mid-hop)
+  brand.classList.add("hop");
+});
+$("brand").addEventListener("animationend", () => $("brand").classList.remove("hop"));
 
 const goTo = (page) => { location.hash = `#/${page}`; };
 
@@ -714,12 +721,12 @@ function renderFolders(folders, progress, phase) {
   }
 }
 
-// A folder in the list. A click on it shows what's in it: its numbers, what's left out, what
-// couldn't be read.
+// A folder, as a card: the ring of its kinds, its name and place; its numbers and buttons under them.
+// A click on it shows what's in it: its numbers, what's left out, what couldn't be read.
 function folderRow() {
   const row = h("div", { class: "folder" });
   const main = h("button", { type: "button", class: "folder-main", onclick: () => openFolderInfo(row.folder) },
-    h("span", { class: "folder-icon" }, icon("folder")),
+    h("span", { class: "folder-ring" }),
     h("span", { class: "folder-text" }, h("span", { class: "folder-name" }), h("span", { class: "folder-path" })));
   setTip(main, t("folder.details"));
   row.append(main, h("div", { class: "folder-side" }, h("div", { class: "stats" }), h("div", { class: "folder-actions" })));
@@ -736,10 +743,17 @@ function fillFolderRow(row, f, active, phase, progress) {
   const path = row.querySelector(".folder-path");
   if (name.textContent !== baseName(f.path)) name.textContent = baseName(f.path);
   if (path.textContent !== f.path) path.textContent = f.path;
+  const parts = kindParts((key) => f[key] || 0);
+  const ring = row.querySelector(".folder-ring");
+  const ringKey = JSON.stringify([parts.map((p) => p.n), i18n.lang]);
+  if (ring.dataset.key !== ringKey) {
+    ring.dataset.key = ringKey;
+    ring.replaceChildren(donut(parts, 44));
+  }
   row.querySelector(".stats").replaceChildren(...[
     f.missing ? stat("alert", t("folder.missing"), t("folder.missing_d"), "bad", () => locateFolder(row.folder)) : null,
-    stat("doc", fmt(f.indexed), t("folders.col.files")),
-    stat("image", fmt(f.images), t("folders.col.images")),
+    stat("doc", fmt(f.indexed), t("folder.ready_long")),
+    stat("archive", bytes(f.bytes || 0), t("folder.size")),
     f.errors ? stat("alert", fmt(f.errors), tp("folders.unreadable", f.errors), "bad", () => openFolderInfo(row.folder)) : null,
     f.paused ? stat("pause", "", t("activity.paused"), "phase paused")
       : here ? phaseStat(phase, progress) : stat("clock", ago(f.last_scan_at), t("folders.col.scanned")),
@@ -1061,40 +1075,72 @@ async function locateFolder(f) {
   }
 }
 
-// The index at a glance: how many files can be searched, and one bar of what kind they are.
-const GLANCE = [["documents", "doc", "--kind-docs"], ["text", "text", "--kind-text"], ["pictures", "image", "--kind-images"],
-  ["mail", "mail", "--kind-code"]];
-let glanceAt = 0;
-let glanceCounts = { at: 0, counts: {} }; // (counted at most every 10 s, and only while it's shown)
-async function renderGlance(folders) {
-  const ready = folders.reduce((n, f) => n + f.indexed, 0);
+// What kind the files are, as File types counts them, in the colours of the kinds: a folder's (or
+// all folders') numbers as the parts of a ring, what's still waiting in grey.
+const KIND_PARTS = [["docs", "doc", "--kind-docs", "documents"], ["texts", "text", "--kind-text", "text"],
+  ["mails", "mail", "--kind-code", "mail"], ["images", "image", "--kind-images", "pictures"]];
+
+function kindParts(count) {
+  const parts = KIND_PARTS.map(([key, ic, color, cat]) => ({ ic, n: count(key), color: `var(${color})`, name: t(`types.cat.${cat}`) }));
+  parts.push({ ic: "hourglass", n: count("pending"), color: "var(--border-strong)", name: t("folder.waiting") });
+  return parts;
+}
+
+// A ring of parts ({ n, color, name }), clockwise from the top with a little gap between them, and
+// what's in its middle, if anything. Each part says what it is when pointed at.
+function donut(parts, size, mid = null) {
+  const shown = parts.filter((p) => p.n > 0);
+  const total = shown.reduce((s, p) => s + p.n, 0);
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.classList.add("donut-svg");
+  const circle = (cls) => {
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", 50); c.setAttribute("cy", 50); c.setAttribute("r", 42); c.setAttribute("pathLength", 100);
+    c.setAttribute("class", cls);
+    return c;
+  };
+  svg.append(circle("track"));
+  const gap = shown.length > 1 ? 1.5 : 0;
+  let at = 0;
+  for (const p of shown) {
+    const share = (p.n / total) * 100;
+    const len = Math.max(0.8, share - gap);
+    const c = circle("part");
+    c.setAttribute("stroke-dasharray", `${len.toFixed(2)} ${(100 - len).toFixed(2)}`);
+    c.setAttribute("stroke-dashoffset", (-at).toFixed(2));
+    c.style.stroke = p.color;
+    setTip(c, `${p.name}\n${fmt(p.n)} · ${pct(Math.round(share))}`);
+    svg.append(c);
+    at += share;
+  }
+  return h("span", { class: "donut", style: `--size: ${size}px` }, svg, mid);
+}
+
+// The index at a glance: the ring of all folders with the files ready in its middle; beside it,
+// each kind's number and a few facts.
+function renderGlance(folders) {
   const box = $("glance");
   if (!folders.length) return box.replaceChildren();
-  if (state.page !== "folders" && box.childElementCount) return;
-  const asked = ++glanceAt;
-  if (Date.now() - glanceCounts.at > 10000) {
-    try {
-      const m = await api("/api/filetypes");
-      const counts = {};
-      for (const c of m.categories) counts[c.key] = (c.formats || []).reduce((n, f) => n + f.n, 0);
-      glanceCounts = { at: Date.now(), counts };
-    } catch { /* the last ones */ }
-  }
-  if (asked !== glanceAt) return;
-  const counts = glanceCounts.counts;
-  const parts = GLANCE.map(([key, ic, color]) => ({ key, ic, color, n: counts[key] || 0 })).filter((p) => p.n > 0);
-  const total = parts.reduce((n, p) => n + p.n, 0) || 1;
-  const bar = h("div", { class: "glance-bar" }, ...parts.map((p) => {
-    const seg = h("i", { style: `flex-grow: ${p.n}; background: var(${p.color})` });
-    setTip(seg, `${t(`types.cat.${p.key}`)}\n${fmt(p.n)}`);
-    return seg;
-  }));
-  const legend = h("div", { class: "glance-legend" }, ...parts.map((p) => {
-    const item = h("span", {}, h("i", { style: `background: var(${p.color})` }), icon(p.ic), h("b", {}, fmt(p.n)));
-    setTip(item, `${t(`types.cat.${p.key}`)} · ${pct(Math.round((p.n / total) * 100))}`);
+  const sum = (key) => folders.reduce((n, f) => n + (f[key] || 0), 0);
+  const parts = kindParts(sum);
+  const key = JSON.stringify([parts.map((p) => p.n), sum("bytes"), Math.max(...folders.map((f) => f.last_scan_at || 0)), i18n.lang,
+    Math.floor(Date.now() / 60000)]);
+  if (box.dataset.key === key) return; // (unchanged: the ring stays as it is)
+  box.dataset.key = key;
+  const legend = h("div", { class: "glance-legend" }, ...parts.filter((p) => p.n > 0).map((p) => {
+    const item = h("span", {}, h("i", { style: `background: ${p.color}` }), icon(p.ic), h("b", {}, fmt(p.n)));
+    setTip(item, p.name);
     return item;
   }));
-  box.replaceChildren(h("div", { class: "glance-head" }, h("b", {}, fmt(ready)), h("span", {}, t("folder.ready_long"))), bar, legend);
+  const last = Math.max(...folders.map((f) => f.last_scan_at || 0));
+  box.replaceChildren(
+    donut(parts, 132, h("span", { class: "donut-mid" }, h("b", {}, fmt(sum("indexed"))))),
+    h("div", { class: "glance-text" },
+      h("div", { class: "glance-title" }, t("folder.ready_long")), legend,
+      h("div", { class: "glance-facts" }, stat("archive", bytes(sum("bytes")), t("folder.size")),
+        last ? stat("clock", ago(last), t("folders.col.scanned")) : null)));
 }
 
 async function pickFolder() {
@@ -1117,6 +1163,7 @@ function renderSettings({ settings, resources, model }) {
   const key = JSON.stringify([settings, i18n.lang]);
   if (key !== state.settingsKey) {
     state.settingsKey = key;
+    sideWidth(settings.map_side);
     $("autostart-row").hidden = settings.autostart == null;
     $("autostart").checked = !!settings.autostart;
     $("autostart").setAttribute("aria-label", t("settings.autostart"));
@@ -1124,6 +1171,8 @@ function renderSettings({ settings, resources, model }) {
     setTip($("auto-update"), t("settings.auto_update"));
     $("diagnostics-on").checked = !!settings.diagnostics;
     setTip($("diagnostics-row"), t("settings.diagnostics_tip"));
+    const off = (settings.kinds_off || []).length + (settings.formats_off || []).length; // (kinds and formats)
+    $("types-summary").textContent = off ? tp("types.summary_off", off) : t("types.all_on");
     if (state.diagnostics !== !!settings.diagnostics) {
       state.diagnostics = !!settings.diagnostics;
       $("nav-diagnostics").hidden = !state.diagnostics;
@@ -1423,7 +1472,7 @@ function niceTop(v) {
   return [1, 2, 2.5, 5, 10].map((m) => m * p).find((x) => x >= v * 1.1);
 }
 
-const megabytes = (v) => (v >= 1000 ? `${fmt(v / 1000, v >= 10000 ? 0 : 1)} GB` : `${fmt(Math.round(v))} MB`);
+const megabytes = (v) => (v >= 1000 ? `${fmt(v / 1000, v >= 10000 ? 0 : 1)} GB` : `${fmt(Math.round(v) || 0)} MB`); // (never "-0")
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
 
 // One chart: the lines from t0 to t1 (seconds), its top value beside the title, each line's last
@@ -1459,6 +1508,86 @@ function diagChart(title, lines, { show, top = null, t0, t1, more = null }) {
     svg, legend, more);
 }
 
+// What indexing did, second by second: one band over the charts' time in the colour of what it was
+// doing; the legend says how long each. (Nothing to do: the band's own colour.)
+const ACTIVITY = [["indexing", "var(--orange)"], ["scanning", "var(--blue)"], ["waiting", "var(--yellow)"],
+  ["paused", "var(--faint)"], ["idle", "var(--well)"]];
+
+// (a burst shorter than a second still counts: files were read since the sample before)
+function activityOf(x, before) {
+  if (x.paused) return "paused";
+  if (x.state === "loading-model" || ((x.state === "indexing" || x.state === "scanning") && x.waiting)) return "waiting";
+  if (x.state === "indexing" || x.state === "scanning") return x.state;
+  return before?.pipeline && x.pipeline && x.pipeline.files > before.pipeline.files ? "indexing" : "idle";
+}
+
+const duration = (sec) => (sec >= 60 ? t("diag.minutes", { n: fmt(Math.round(sec / 60)) }) : t("diag.seconds", { n: fmt(Math.round(sec)) }));
+
+function renderActivityBand(s, t0, t1) {
+  const box = $("dg-activity");
+  const runs = [];
+  for (const [i, x] of s.entries()) {
+    if (x.t < t0) continue;
+    const a = activityOf(x, s[i - 1]);
+    if (runs.length && runs[runs.length - 1].a === a) continue;
+    runs.push({ a, from: x.t });
+  }
+  runs.forEach((r, i) => { r.to = i + 1 < runs.length ? runs[i + 1].from : t1; });
+  box.hidden = runs.length === 0;
+  if (!runs.length) return;
+  const span = Math.max(1, t1 - t0);
+  const color = Object.fromEntries(ACTIVITY);
+  const band = h("div", { class: "dg-band" }, ...runs.filter((r) => r.a !== "idle").map((r) => {
+    const seg = h("i", { style: `left: ${((r.from - t0) / span) * 100}%; width: ${Math.max(0.4, ((r.to - r.from) / span) * 100)}%; background: ${color[r.a]}` });
+    setTip(seg, `${t(`diag.state.${r.a}`)}\n${duration(r.to - r.from)}`);
+    return seg;
+  }));
+  const total = new Map();
+  for (const r of runs) total.set(r.a, (total.get(r.a) || 0) + (r.to - r.from));
+  const legend = h("div", { class: "dg-legend" }, ...ACTIVITY.filter(([a]) => total.get(a) >= 1).map(([a, c]) => h("span", {},
+    h("i", { style: `background: ${c}` }), t(`diag.state.${a}`), h("b", {}, duration(total.get(a))))));
+  box.replaceChildren(h("div", { class: "dg-title" }, h("span", {}, t("diag.activity"))), band, legend);
+}
+
+// Searches as bars at the time they ran: the part the model took to read the words at the bottom,
+// finding the files on top.
+function searchChart(searches, t0, t1) {
+  const W = 300, H = 80;
+  const shown = searches.filter((x) => x.t >= t0);
+  const max = niceTop(Math.max(1, ...shown.map((x) => x.ms)));
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.classList.add("dg-svg");
+  const rect = (x, y, h, color) => {
+    const r = document.createElementNS(ns, "rect");
+    r.setAttribute("x", x.toFixed(1)); r.setAttribute("y", y.toFixed(1)); r.setAttribute("width", 3); r.setAttribute("height", Math.max(0.5, h).toFixed(1));
+    r.style.fill = color;
+    svg.append(r);
+  };
+  for (const g of [1, H / 2]) {
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", 0); line.setAttribute("x2", W); line.setAttribute("y1", g); line.setAttribute("y2", g);
+    line.classList.add("dg-grid");
+    svg.append(line);
+  }
+  const scale = (v) => (Math.min(v, max) / max) * (H - 3);
+  for (const x of shown) {
+    const px = ((x.t - t0) / Math.max(1, t1 - t0)) * (W - 3);
+    const model = scale(x.model_ms), all = scale(x.ms);
+    rect(px, H - all, all - model, "var(--orange)");
+    rect(px, H - model, model, "var(--blue)");
+  }
+  const mid = (key) => (shown.length ? t("diag.ms", { n: fmt(Math.round(median(shown.map((x) => x[key])))) }) : "–");
+  const legend = h("div", { class: "dg-legend" },
+    h("span", {}, h("i", { style: "background: var(--blue)" }), t("diag.search_words"), h("b", {}, mid("model_ms"))),
+    h("span", {}, h("i", { style: "background: var(--orange)" }), t("diag.search_rest"),
+      h("b", {}, shown.length ? t("diag.ms", { n: fmt(Math.round(median(shown.map((x) => x.ms - x.model_ms)))) }) : "–")));
+  return h("div", { class: "card dg-chart" },
+    h("div", { class: "dg-title" }, h("span", {}, t("diag.searches")), h("span", { class: "dg-top" }, t("diag.ms", { n: fmt(max) }))), svg, legend);
+}
+
 // Where the model runs, and why there.
 function setupChip(d) {
   const s = d.setup;
@@ -1468,18 +1597,23 @@ function setupChip(d) {
     : s.name === "light" ? t("diag.setup_light", { gb: fmt(d.pc.ram_gb, 0), cores: d.pc.cores })
       : t(`device.why_${d.cpu_because || (d.pc.card ? "shared" : "none")}`);
   const on = t("settings.model_on", { device: s.gpu ? `${s.card} (DirectML)` : tp("device.cpu", s.threads) });
-  return stat("chip", s.gpu ? shortGpu(s.card) : t("diag.cpu"), `${on}\n${why}`, "chip");
+  return stat("chip", s.gpu ? shortGpu(s.card) : t("diag.cpu"), `${on}\n${why}`);
 }
 
 function renderDiagnostics(d) {
   const s = d.samples || [];
   const at = (f) => s.map((x) => { try { const v = f(x); return v == null ? null : [x.t, v]; } catch { return null; } }).filter(Boolean);
-  // Files per second, from the indexer's count (smoothed over 5 seconds).
-  const files = [];
-  for (let i = 5; i < s.length; i++) {
-    const a = s[i - 5].pipeline, b = s[i].pipeline;
-    if (a && b && s[i].t > s[i - 5].t) files.push([s[i].t, Math.max(0, (b.files - a.files) / (s[i].t - s[i - 5].t))]);
-  }
+  // Per second, from the indexer's counts (smoothed over 5 seconds): files read, passages and
+  // pictures through the model.
+  const rate = (key) => {
+    const out = [];
+    for (let i = 5; i < s.length; i++) {
+      const a = s[i - 5].pipeline, b = s[i].pipeline;
+      if (a && b && s[i].t > s[i - 5].t) out.push([s[i].t, Math.max(0, (b[key] - a[key]) / (s[i].t - s[i - 5].t))]);
+    }
+    return out;
+  };
+  const files = rate("files");
   // The charts start when Diagnostics was switched on and fill up to ten minutes.
   const t1 = s.length ? s[s.length - 1].t : Date.now() / 1000;
   const t0 = Math.min(t1 - 30, Math.max(s.length ? s[0].t : t1, t1 - 600));
@@ -1494,13 +1628,13 @@ function renderDiagnostics(d) {
     setupChip(d),
     stat("doc", fmt(ix.files || 0), [t("diag.index", { files: fmt(ix.files || 0), passages: fmt(ix.passages || 0) }),
       t("diag.on_disk", { size: megabytes(ix.disk_mb || 0) }),
-      ix.memory_mb > 0 ? t("diag.in_memory", { size: megabytes(ix.memory_mb) }) : t("diag.searched_on_disk")].join("\n"), "chip"),
+      ix.memory_mb > 0 ? t("diag.in_memory", { size: megabytes(ix.memory_mb) }) : t("diag.searched_on_disk")].join("\n")),
     searches.length ? stat("search", t("diag.ms", { n: fmt(Math.round(median(searches))) }), t("diag.search_tip", {
-      n: fmt(searches.length), model: fmt(Math.round(median(d.searches.map((x) => x.model_ms)))) }), "chip") : null,
-    waiting ? stat("hourglass", pace > 0 ? `${fmt(waiting)} · ${eta(waiting / pace)}` : fmt(waiting), t("diag.waiting_tip"), "chip") : null,
+      n: fmt(searches.length), model: fmt(Math.round(median(d.searches.map((x) => x.model_ms)))) })) : null,
+    waiting ? stat("hourglass", pace > 0 ? `${fmt(waiting)} · ${eta(waiting / pace)}` : fmt(waiting), t("diag.waiting_tip")) : null,
     // How far back the charts go (the same for all of them).
     stat("clock", t1 - t0 >= 60 ? t("diag.minutes", { n: fmt(Math.round((t1 - t0) / 60)) }) : t("diag.seconds", { n: fmt(Math.round(t1 - t0)) }),
-      t("diag.span_tip"), "chip"),
+      t("diag.span_tip")),
   ];
   const now = files.length ? files[files.length - 1][1] : 0;
   $("dg-strip").replaceChildren(...[
@@ -1515,10 +1649,19 @@ function renderDiagnostics(d) {
   const byKind = kinds.length ? h("div", { class: "dg-legend dg-kinds" }, ...kinds.map((k) => h("span", {},
     h("i", { style: `background: var(${k.color})` }), t(`search.kind.${k.name}`), h("b", {}, fmt(k.n))))) : null;
   const pctShow = (v) => pct(Math.round(v));
+  const perSecond = (v) => `${fmt(Math.round(v * 10) / 10)}/s`;
   const vramShared = d.setup?.shared;
+  renderActivityBand(s, t0, t1);
   $("dg-charts").replaceChildren(
     diagChart(t("diag.files"), [{ name: t("diag.files_short"), color: DIAG_COLORS.files, points: files }],
-      { show: (v) => `${fmt(Math.round(v * 10) / 10)}/s`, t0, t1, more: byKind }),
+      { show: perSecond, t0, t1, more: byKind }),
+    diagChart(t("diag.model"), [
+      { name: t("diag.passages"), color: "var(--blue)", points: rate("texts") },
+      { name: t("diag.pictures"), color: "var(--pink)", points: rate("pictures") }], { show: perSecond, t0, t1 }),
+    diagChart(t("diag.queue"), [{ name: t("folders.col.files"), color: "var(--yellow)", points: at((x) => x.pending) }],
+      { show: (v) => fmt(Math.round(v)), t0, t1 }),
+    diagChart(t("diag.disk"), [{ name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.disk.read_mbs) }],
+      { show: (v) => (v >= 1 ? `${fmt(Math.round(v * 10) / 10)} MB/s` : `${fmt(Math.round(v * 1000))} KB/s`), t0, t1 }),
     diagChart(t("diag.cpu"), [
       { name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.app.cpu) },
       { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.cpu) },
@@ -1531,6 +1674,7 @@ function renderDiagnostics(d) {
       { name: t("diag.others"), color: DIAG_COLORS.others, points: at((x) => x.pc.gpu_others) }], { show: pctShow, top: 100, t0, t1 }),
     diagChart(vramShared ? t("diag.shared_memory") : t("diag.vram"), [{ name: t("diag.model"), color: DIAG_COLORS.model,
       points: at((x) => (vramShared ? x.model.shared_mb : x.model.vram_mb)) }], { show: megabytes, t0, t1 }),
+    searchChart(d.searches || [], t0, t1),
   );
   // Where indexing time went in these minutes: one bar.
   const box = $("dg-time");
@@ -1646,16 +1790,20 @@ function waitingText() {
   return h("p", { class: "waiting" }, before, link, after);
 }
 
-// Nothing searched yet: with no folders, the sentence that adds one; else what the search box's
-// example would find. (Quiekel stays the logo at the top of the rail, nowhere else.)
+// Nothing searched yet: with no folders, the sentence that adds one; else "Search anything", in the
+// middle of the page. (Quiekel stays the logo at the top of the rail, nowhere else.)
 function renderEmpty() {
   const empty = $("empty");
-  empty.classList.remove("examples");
+  empty.classList.remove("anything");
   if (state.hasFolders === false) {
     empty.hidden = false;
     return empty.replaceChildren(waitingText());
   }
-  if (state.hasFolders && !$("q").value.trim() && !state.similar) return renderSample();
+  if (state.hasFolders && !$("q").value.trim() && !state.similar) {
+    empty.classList.add("anything");
+    empty.hidden = false;
+    return empty.replaceChildren(h("p", {}, t("search.anything")));
+  }
   empty.hidden = true;
   empty.replaceChildren();
 }
@@ -1664,69 +1812,8 @@ function renderMessage(msg) {
   state.results = [];
   $("results").replaceChildren();
   $("empty").hidden = false;
-  $("empty").classList.remove("examples");
+  $("empty").classList.remove("anything");
   $("empty").replaceChildren(h("p", {}, msg));
-}
-
-// ---------- examples on the empty page ----------
-//
-// The search box shows an example search; under it, what that search finds, as the current view
-// shows it: made-up files with drawn pictures, muted so they read as examples. A click runs the
-// example on your own files. They change with the search box's example.
-
-const svgData = (svg) => `data:image/svg+xml,${encodeURIComponent(svg)}`;
-const SAMPLE_PICTURES = {
-  board: svgData('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120"><rect width="160" height="120" fill="#d9d4ca"/>'
-    + '<rect x="14" y="13" width="132" height="84" rx="3" fill="#fbfbf8" stroke="#8f8f8a" stroke-width="3"/>'
-    + '<rect x="30" y="99" width="100" height="5" rx="2" fill="#8f8f8a"/><rect x="38" y="95" width="15" height="5" rx="2" fill="#1d4aff"/>'
-    + '<path d="M28 33h34M28 43h22" stroke="#1d4aff" stroke-width="3" stroke-linecap="round"/>'
-    + '<g fill="none" stroke="#d93025" stroke-width="2.5"><rect x="76" y="26" width="22" height="16" rx="3"/><rect x="110" y="26" width="22" height="16" rx="3"/><path d="M98 34h12"/></g>'
-    + '<path d="M28 63c12-8 22 8 34 0s22 8 34 0 22 8 34 0" fill="none" stroke="#2f9e44" stroke-width="2.5" stroke-linecap="round"/>'
-    + '<path d="M28 80h46M84 80h40" stroke="#6b6d65" stroke-width="2.5" stroke-linecap="round"/></svg>'),
-  beach: svgData('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120"><rect width="160" height="120" fill="#bfe3f7"/>'
-    + '<circle cx="122" cy="30" r="13" fill="#ffd166"/><path d="M0 64h160v28H0z" fill="#3d8fd1"/>'
-    + '<path d="M0 72c20-4 40 4 60 0s40-4 60 0 30 3 40 0" fill="none" stroke="#bfe3f7" stroke-width="2"/>'
-    + '<path d="M0 88c40-10 100-7 160 2v30H0z" fill="#f2d7a0"/>'
-    + '<path d="M24 62a20 12 0 0 1 40 0z" fill="#f2547f"/><path d="M44 62v34" stroke="#6b4b2a" stroke-width="2"/></svg>'),
-};
-const DAY = 86400;
-// In the order of the examples in search.examples. similarity is the meaning score (see matchShare).
-const SAMPLES = [
-  { key: "board", name: () => "IMG_2041.jpg", kind: "image", picture: "board", similarity: 0.782, size: 2.4e6, age: 3 * DAY },
-  { key: "letter", name: () => t("sample.letter.name"), kind: "doc", similarity: 0.776, size: 184e3, age: 16 * DAY, text: true },
-  { key: "photo", name: () => "IMG_0042.jpg", kind: "image", picture: "beach", exact: true, similarity: 0.7, size: 3.1e6, age: 6 * 365 * DAY },
-  { key: "script", name: () => t("sample.script.name"), kind: "code", similarity: 0.765, size: 2.1e3, age: 5 * DAY, text: true },
-];
-
-function renderSample() {
-  const empty = $("empty");
-  const examples = t("search.examples").split("|");
-  const at = (exampleAt - 1 + examples.length) % examples.length;
-  const s = SAMPLES[at];
-  if (!s) {
-    empty.hidden = true;
-    return empty.replaceChildren();
-  }
-  const r = {
-    file_id: 0, name: s.name(), dir: t(`sample.${s.key}.dir`), path: "", kind: s.kind, mtime: Date.now() / 1000 - s.age,
-    size: s.size, similarity: s.similarity, exact: !!s.exact, keyword: !!s.exact,
-    snippet: s.text ? t(`sample.${s.key}.text`) : "", preview: !!s.picture, picture: SAMPLE_PICTURES[s.picture],
-  };
-  const view = currentView();
-  const terms = state.terms;
-  state.terms = queryTerms(examples[at]); // (the example's words light up in its passage)
-  // A copy of a real result's markup, without its handlers and tooltips: nothing in it acts on a file.
-  const card = { cards: row, list: line, grid: tile }[view](r, 0).cloneNode(true);
-  state.terms = terms;
-  card.querySelectorAll(".actions").forEach((a) => a.remove());
-  card.querySelectorAll("[data-tip]").forEach((el) => delete el.dataset.tip);
-  card.inert = true; // (its folder button can't be tabbed to; the example as a whole is the one thing to click)
-  const sample = h("div", { class: `sample results ${view}`, onclick: () => { $("q").value = examples[at]; runSearch(); } },
-    view === "list" ? h("div", { class: "list-card" }, card) : card);
-  setTip(sample, t("search.try", { q: examples[at] }));
-  empty.classList.add("examples");
-  empty.hidden = false;
-  empty.replaceChildren(sample);
 }
 
 // The likely results first (the server puts them on top); the rest behind a divider that says how
@@ -1870,6 +1957,14 @@ function setSort(key) {
   if (state.fetched) renderResults(state.fetched.items, state.fetched.likely);
 }
 
+// A menu's chosen row says so at its end: a check (or which way it sorts). No frame: a menu is the
+// only frame around its rows.
+function menuMark(name) {
+  const mark = icon(name);
+  mark.classList.add("menu-mark");
+  return mark;
+}
+
 function openSortMenu() {
   const menu = $("sort-menu");
   const row = (key, name) => {
@@ -1877,7 +1972,7 @@ function openSortMenu() {
     const s = SORTS[key];
     const el = h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick: () => { setSort(key); openSortMenu(); } },
       icon(name), h("span", { class: "menu-name" }, t(`sort.${key}`)),
-      on && s ? icon(state.sort.desc ? "chevronDown" : "chevronUp") : null);
+      on ? menuMark(s ? (state.sort.desc ? "chevronDown" : "chevronUp") : "check") : null);
     if (on && s) setTip(el, t(s.dirs[state.sort.desc ? 1 : 0]));
     return el;
   };
@@ -2150,14 +2245,7 @@ $("q").addEventListener("input", () => {
   searchTimer = setTimeout(runSearch, 300);
 });
 
-for (const b of $("kinds").querySelectorAll("button")) {
-  b.addEventListener("click", () => {
-    $("kinds").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
-    state.kind = b.dataset.kind;
-    updateViews();
-    runSearch();
-  });
-}
+for (const b of $("kinds").querySelectorAll("button")) b.addEventListener("click", () => setKind(b.dataset.kind));
 
 function clearSimilar(rerun = true) {
   if (!state.similar) return;
@@ -2237,15 +2325,14 @@ const map = {
   hover: null, rowHover: null, selected: null, history: [], future: [], related: null, closest: [], vector: null,
   info: null, tab: "preview",
   highlight: null, dim: null, dimValues: null, dimCache: new Map(),
-  show: { docs: true, text: true, code: true, images: true },
   drag: null, animStart: 0, last: 0, raf: 0, timer: 0, spinTimer: 0, screen: [],
-  // the views (see "map views"): which one, the explanation panel, Neighbours' layout, a walk's step
-  // and what it shows, a "show me" under way, the files only roughly placed so far
-  view: "map", help: false, near: null, nearZoom: 1, steps: null, query: null, walkFile: null, flash: null, rough: new Set(),
+  // the views (see "map views"): which one, Neighbours' layout, How it works (the tour: its step)
+  view: "map", near: null, nearZoom: 1, help: false, steps: null,
 };
 let mapSearchTimer = null;
 
-const visible = (p) => !!p && map.show[p.g] && (!state.scope || p.lp.startsWith(state.scope.prefix));
+// (the kind and the folder chosen, as Search has them)
+const visible = (p) => !!p && (state.kind === "all" || p.g === state.kind) && (!state.scope || p.lp.startsWith(state.scope.prefix));
 
 function openMap() {
   loadMap();
@@ -2296,7 +2383,6 @@ function setPoints(points, total) {
     return q;
   });
   map.total = total;
-  map.rough = new Set(points.filter((p) => p.r).map((p) => p.id));
   map.animStart = performance.now();
   map.dimCache.clear();
   map.history = map.history.filter((id) => map.byId.has(id));
@@ -2354,10 +2440,6 @@ function drawMap(now) {
   }
   const appear = Math.min(1, (now - map.animStart) / 900);
   const ease = 1 - (1 - appear) ** 3;
-  // "Show me": what a line of the explanation is about pulses for a moment.
-  const flash = map.flash && now < map.flash.until ? map.flash.what : null;
-  if (map.flash && !flash) map.flash = null;
-  const pulse = flash ? 0.5 + 0.5 * Math.sin(now / 150) : 0;
 
   const { tx, ty, tz, zoom } = map.cam;
   const cy = Math.cos(map.yaw), sy = Math.sin(map.yaw), cp = Math.cos(map.pitch), sp = Math.sin(map.pitch);
@@ -2386,13 +2468,13 @@ function drawMap(now) {
     for (const share of [0.75, 0.5, 0.25, 0]) {
       const r = (1 - share) * NR;
       ctx.setLineDash([3 * dpr, 5 * dpr]);
-      ctx.lineWidth = (flash === "rings" ? 1.5 + pulse : 1) * dpr;
-      ctx.strokeStyle = ink(flash === "rings" ? 0.25 + 0.35 * pulse : 0.14);
+      ctx.lineWidth = dpr;
+      ctx.strokeStyle = ink(0.14);
       ctx.beginPath();
       ctx.arc(NX, NY, r, 0, TAU);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = ink(flash === "rings" ? 0.5 + 0.4 * pulse : 0.35);
+      ctx.fillStyle = ink(0.35);
       ctx.fillText(pct(Math.round(share * 100)), NX + 5 * dpr, NY - r - 3 * dpr);
     }
   } else {
@@ -2453,35 +2535,29 @@ function drawMap(now) {
   list.sort((a, b) => a.pz - b.pz);
   const at = { get: (id) => { const q = map.byId.get(id)?.q; return q && q.frame === frame ? q : undefined; } };
 
-  // What the walks show on the map, step by step.
-  const step = map.steps?.at ?? 0;
-  const walk = map.view === "search" && map.query?.weights ? map.query : null;
-  const walkFile = map.view === "index" && map.walkFile?.passages && step < WALK.index.length - 1 ? map.walkFile.id : null;
-  const spot = walk && step >= 1 && walk.spot ? project(...walk.spot) : null;
+  // How it works shows its example over the map: the map's own files wait faintly behind it.
+  const tour = map.help && map.steps ? map.steps : null;
 
   const sel = map.selected && at.get(map.selected.id);
   const dims = map.dimValues;
-  const lines = (from, to, i, strong) => {
-    ctx.strokeStyle = strong ? `rgba(245, 78, 0, ${(0.55 + 0.4 * pulse).toFixed(3)})` : ink(0.5 - i * 0.06);
-    ctx.lineWidth = (strong ? 2 + pulse : 1.3) * dpr;
+  const lines = (from, to, i, k = 1) => {
+    if (k <= 0) return;
+    ctx.strokeStyle = ink(0.5 - i * 0.06);
+    ctx.lineWidth = 1.3 * dpr;
     ctx.beginPath();
     ctx.moveTo(from[0], from[1]);
-    ctx.lineTo(to.px, to.py);
+    ctx.lineTo(from[0] + (to.px - from[0]) * k, from[1] + (to.py - from[1]) * k);
     ctx.stroke();
   };
   ctx.setLineDash([4 * dpr, 4 * dpr]);
-  if (sel && map.closest.length && !dims && !walk && !walkFile) { // dashed lines to the closest files
-    map.closest.forEach((cl, i) => { const q = at.get(cl.id); if (q) lines([sel.px, sel.py], q, i, flash === "lines"); });
-  }
-  if (spot && step >= 3) { // the search's best results
-    (walk.results || []).slice(0, 8).forEach((r, i) => { const q = at.get(r.file_id); if (q) lines(spot, q, i, false); });
+  if (sel && map.closest.length && !dims && !tour) { // dashed lines to the closest files
+    map.closest.forEach((cl, i) => { const q = at.get(cl.id); if (q) lines([sel.px, sel.py], q, i); });
   }
   ctx.setLineDash([]);
 
   const base = Math.max(2.2, Math.min(5.5, 7.5 - 1.6 * Math.log10(Math.max(10, map.points.length))));
-  const hl = walk && step >= 2 ? walk.words : walkFile ? map.walkFile.only : flash === "rough" ? map.rough : map.highlight;
-  const rel = walk ? (step >= 1 ? walk.weights : null) : walkFile ? null : map.related;
-  const dimmed = walk && step === 0; // (the words first: the map waits behind them)
+  const hl = map.highlight;
+  const rel = map.related;
   for (const q of list) {
     const p = q.p;
     const depth = near ? 1 : Math.min(1, Math.max(0, (q.s - 0.75) / 0.6));
@@ -2491,9 +2567,9 @@ function drawMap(now) {
     if (dims) {
       color = diverging((dims.values.get(p.id) ?? 0) / dims.scale);
       alpha = 0.95;
-    } else if (dimmed) {
-      alpha = 0.12;
-    } else if (rel && (walk || p !== map.selected)) {
+    } else if (tour) {
+      alpha = 0.07; // (behind the example)
+    } else if (rel && p !== map.selected) {
       const w = rel.get(p.id)?.w ?? 0; // 1 = the most related file, 0 = the least
       alpha = (0.05 + 0.95 * w ** 6) * (0.7 + 0.3 * depth);
       size = 0.75 + 0.6 * w ** 4;
@@ -2512,8 +2588,8 @@ function drawMap(now) {
     ctx.arc(q.px, q.py, q.r, 0, TAU);
     ctx.fillStyle = color;
     ctx.fill();
-    if (hl && hl.has(p.id) && !dims) {
-      ctx.lineWidth = (flash === "rough" ? 1.5 + pulse : 1.5) * dpr;
+    if (hl && hl.has(p.id) && !dims && !tour) {
+      ctx.lineWidth = 1.5 * dpr;
       ctx.strokeStyle = ink(0.8);
       ctx.stroke();
     }
@@ -2521,8 +2597,7 @@ function drawMap(now) {
   ctx.globalAlpha = 1;
   // The file pointed at and the selected one go on top, at full strength, with their rings: a dot
   // in front of them (a copy, a close neighbour) would cover them, and the ring would look off.
-  const marked = walk ? [[map.hover || map.rowHover, ink(0.8)]] : [[map.hover || map.rowHover, ink(0.8)], [map.selected, "#f54e00"]];
-  if (walkFile) marked.push([map.byId.get(walkFile), "#f54e00"]);
+  const marked = [[map.hover || map.rowHover, ink(0.8)], [tour ? null : map.selected, "#f54e00"]];
   for (const [p, color] of marked) {
     const q = p && at.get(p.id);
     if (!q) continue;
@@ -2532,30 +2607,20 @@ function drawMap(now) {
     ctx.arc(q.px, q.py, q.r, 0, TAU);
     ctx.fill();
     ctx.globalAlpha = 1;
-    const ring = p === map.selected && flash === "center" ? 4 + 6 * pulse : 4;
     ctx.lineWidth = 2.5 * dpr;
     ctx.strokeStyle = color;
     ctx.beginPath();
-    ctx.arc(q.px, q.py, q.r + ring * dpr, 0, TAU);
+    ctx.arc(q.px, q.py, q.r + 4 * dpr, 0, TAU);
     ctx.stroke();
   }
-  // Your words, where the map would put them: a ring of their own.
-  if (spot) {
-    const r = 6 * dpr;
-    ctx.fillStyle = `rgb(${theme.card.join(", ")})`;
-    ctx.strokeStyle = ink(0.9);
-    ctx.lineWidth = 2.5 * dpr;
-    ctx.beginPath();
-    ctx.arc(spot[0], spot[1], r, 0, TAU);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = ink(0.9);
-    ctx.beginPath();
-    ctx.arc(spot[0], spot[1], 2 * dpr, 0, TAU);
-    ctx.fill();
+  if (tour) {
+    drawTour(ctx, project, now - tour.start, tour.at, base * dpr * Math.sqrt(zoom), dpr, ink, W, H);
+  } else {
+    ripple($("map-ripple"), null);
+    ripple($("map-ripple-spot"), null);
   }
   map.screen = list;
-  if (map.drag || map.fly || appear < 1 || fading || moving || flash) {
+  if (map.drag || map.fly || appear < 1 || fading || moving || (tour && now - tour.start < 2600)) {
     startMapLoop();
   } else if (turning) {
     // The slow turn looks the same at 30 frames a second as at a 144 Hz screen's rate,
@@ -2563,6 +2628,16 @@ function drawMap(now) {
     clearTimeout(map.spinTimer);
     map.spinTimer = setTimeout(startMapLoop, 33);
   }
+}
+
+// Rings going out from a point on the map (CSS pixels): x, y and the radius they start from.
+function ripple(el, at) {
+  el.hidden = !at;
+  if (!at) return;
+  const [x, y, r] = at;
+  el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+  el.style.setProperty("--r", `${(r + 34).toFixed(1)}px`);
+  el.style.setProperty("--from", (r / (r + 34)).toFixed(3));
 }
 
 function mapHit(e) {
@@ -2621,9 +2696,14 @@ function setRelated(p, rel) {
   pairs.sort((a, b) => b[1] - a[1]);
   const n = pairs.length;
   map.related = new Map(pairs.map(([id, s], i) => [id, { w: n > 1 ? 1 - i / (n - 1) : 1, s }]));
-  map.closest = pairs.filter(([id]) => visible(map.byId.get(id))).slice(0, 6).map(([id, s]) => ({ id, s }));
-  renderRelatedList();
+  setClosest();
   layoutNear(); // (in Neighbours: this file goes in the middle)
+}
+
+// The files the lines go to: the most similar of the kind and folder shown (map.related is in order).
+function setClosest() {
+  map.closest = [...map.related].filter(([id]) => visible(map.byId.get(id))).slice(0, 6).map(([id, r]) => ({ id, s: r.s }));
+  renderRelatedList();
 }
 
 function clearSelection() {
@@ -2660,7 +2740,7 @@ function updateSteps() {
 }
 
 function showCard(p) {
-  $("map-card").hidden = map.view === "search" || map.view === "index"; // (a walk is its own card)
+  $("map-card").hidden = map.help; // (one thing at a time beside the map: How it works has it)
   const name = $("mc-name");
   name.textContent = p.name;
   setTip(name, p.name);
@@ -2682,29 +2762,61 @@ function showCard(p) {
     h("i", { class: "skeleton sk-dot" }), h("span", { class: "skeleton sk-line", style: `width: ${w}%` }))));
 }
 
-// The card's preview: the picture for photos and PDFs, else the start of the text.
+// The card's preview, the whole file to look through: a picture whole, a PDF's pages (each loaded as
+// it scrolls near), any other document's, email's, text or code file's whole text (scrolling,
+// selectable). A file that can't be read so shows the start of its text, or its kind.
+const docCache = new Map(); // (a file's text or page count, by file and version)
+
 function showPreview(p, info) {
   const box = $("mc-preview");
   const key = info ? `${p.id}:${info.mtime}:${info.size}` : "";
   if (key && box.dataset.key === key) return; // already showing it
   box.dataset.key = key;
+  box.scrollTop = 0;
   if (!info) {
     box.className = "mc-preview";
     return box.replaceChildren();
   }
-  const text = () => {
-    box.className = "mc-preview";
+  const r = { file_id: p.id, mtime: info.mtime, size: info.size };
+  const open = () => openFile({ file_id: p.id });
+  const fallback = () => {
+    box.className = "mc-preview doc";
     box.replaceChildren(info.passage
-      ? h("p", { class: `mc-text${info.kind === "code" ? " mono" : ""}` }, info.passage)
+      ? h("p", { class: `mc-doc${info.kind === "code" ? " mono" : ""}` }, info.passage)
       : h("span", { class: "mc-none" }, icon(info.kind in ICONS ? info.kind : "doc")));
   };
-  if (!info.preview) return text();
-  const img = h("img", { src: thumbUrl({ file_id: p.id, mtime: info.mtime, size: info.size }), alt: "",
-    onclick: () => openFile({ file_id: p.id }) });
-  // (a picture still loading for a file you've since left must not touch the card)
-  img.addEventListener("load", () => { if (img.isConnected) box.classList.remove("loading"); }, { once: true });
-  img.addEventListener("error", () => { if (img.isConnected) text(); }, { once: true });
-  box.replaceChildren(img);
+  if (info.kind === "image") {
+    const img = h("img", { src: previewUrl(r), alt: "", onclick: open });
+    // (a picture still loading for a file you've since left must not touch the card)
+    img.addEventListener("load", () => { if (img.isConnected) box.classList.remove("loading"); }, { once: true });
+    img.addEventListener("error", () => { if (img.isConnected) fallback(); }, { once: true });
+    box.className = "mc-preview picture loading";
+    return box.replaceChildren(img);
+  }
+  box.className = "mc-preview loading";
+  box.replaceChildren();
+  const show = (d) => {
+    if (box.dataset.key !== key) return; // (another file since)
+    box.className = "mc-preview doc";
+    if (d.pdf_pages) {
+      return box.replaceChildren(...Array.from({ length: Math.min(d.pdf_pages, 300) }, (_, i) => {
+        const img = h("img", { class: "mc-page", alt: "", loading: "lazy", src: previewUrl(r, i + 1), onclick: open });
+        setTip(img, t("result.page", { n: fmt(i + 1) }));
+        return img;
+      }));
+    }
+    const pages = d.pages || [];
+    if (!pages.length) return fallback();
+    box.replaceChildren(...[...pages.flatMap((text, i) => [
+      pages.length > 1 ? h("div", { class: "mc-page-label" }, t("result.page", { n: fmt(i + 1) })) : null,
+      h("p", { class: `mc-doc${info.kind === "code" ? " mono" : ""}` }, text.trim()),
+    ]), d.cut ? h("div", { class: "mc-cut" }, "…") : null].filter(Boolean));
+  };
+  if (docCache.has(key)) return show(docCache.get(key));
+  api(`/api/text/${p.id}`).then((d) => {
+    docCache.set(key, d);
+    show(d);
+  }).catch(() => { if (box.dataset.key === key) fallback(); });
 }
 
 // Preview or fingerprint: one place in the card, two ways to look at the file.
@@ -2742,7 +2854,7 @@ for (const b of $("mc-tabs").querySelectorAll("button")) b.addEventListener("cli
 setCardTab("preview");
 
 // The file's 256 numbers as a 16 × 16 grid: pink above zero, blue below.
-function drawFingerprint(v, active = null, canvas = $("mc-print")) {
+function drawFingerprint(v, active = null, canvas = $("mc-print"), reveal = 1) {
   const ctx = canvas.getContext("2d");
   const n = 16;
   const cell = canvas.width / n;
@@ -2754,7 +2866,10 @@ function drawFingerprint(v, active = null, canvas = $("mc-print")) {
   const sorted = v.map(Math.abs).sort((a, b) => a - b);
   const top = sorted[Math.floor(sorted.length * 0.9)] || 1;
   v.forEach((x, i) => {
-    const a = Math.min(1, Math.abs(x) / top) ** 0.7;
+    // (while it's revealed: from the top left to the bottom right, each square fading in)
+    const shown = reveal >= 1 ? 1 : Math.max(0, Math.min(1, (reveal * 1.3 - ((i % n) + Math.floor(i / n)) / (2 * n - 2)) / 0.3));
+    if (shown <= 0) return;
+    const a = (Math.min(1, Math.abs(x) / top) ** 0.7) * shown;
     const to = x >= 0 ? theme.pos : theme.neg;
     ctx.fillStyle = `rgb(${theme.card.map((from, k) => Math.round(from + (to[k] - from) * a)).join(", ")})`;
     ctx.fillRect((i % n) * cell + 0.5, Math.floor(i / n) * cell + 0.5, cell - 1, cell - 1);
@@ -2807,13 +2922,12 @@ function resetMapView() {
 }
 
 async function mapSearch() {
-  if (map.view === "search") return loadSearchWalk();
   const q = $("map-q").value.trim();
   if (!q) {
     map.highlight = null;
   } else {
     try {
-      const qs = new URLSearchParams({ q, limit: 40 });
+      const qs = new URLSearchParams({ q, kind: state.kind, limit: 40 });
       if (state.scope) qs.set("under", state.scope.path);
       const data = await api(`/api/search?${qs}`);
       // Meaning search always returns *something*: light up only the strong matches.
@@ -2861,10 +2975,12 @@ async function mapSearch() {
     map.drag = null;
     if (!click) return;
     const p = mapHit(e);
-    if (p && map.view === "search") return; // (the search walk is about your words)
+    if (p && map.help) { // (a file of yours: How it works makes way for it)
+      toggleHelp(false);
+      return selectPoint(p);
+    }
     if (p) selectPoint(p);
     else if (map.selected && map.view === "map") clearSelection();
-    if (p && map.view === "index") loadIndexWalk(); // (the walk goes on with this file)
   });
   canvas.addEventListener("pointerleave", () => { map.hover = null; if (tipFor === "point") hideTip(); });
   canvas.addEventListener("wheel", (e) => {
@@ -2912,45 +3028,69 @@ $("map-reset").addEventListener("click", resetMapView);
 new ResizeObserver(() => startMapLoop()).observe($("map-canvas"));
 $("map-search").addEventListener("submit", (e) => { e.preventDefault(); clearTimeout(mapSearchTimer); mapSearch(); });
 $("map-q").addEventListener("input", () => { clearTimeout(mapSearchTimer); mapSearchTimer = setTimeout(mapSearch, 300); });
-for (const b of $("map-kinds").querySelectorAll("button")) {
-  b.addEventListener("click", () => {
-    map.show[b.dataset.kind] = !map.show[b.dataset.kind];
-    b.classList.toggle("active", map.show[b.dataset.kind]);
-    if (map.selected && !visible(map.selected)) clearSelection();
-    startMapLoop();
-  });
-}
+for (const b of $("map-kinds").querySelectorAll("button")) b.addEventListener("click", () => setKind(b.dataset.kind));
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.page === "map") startMapLoop(); });
 window.addEventListener("focus", () => { if (state.page === "map") startMapLoop(); });
 
 // ---------- map views ----------
 //
-// Four views of the same files: the map itself; Neighbours, one file in the middle and the others at
-// their true distance from it; and two walks through how it works, a search and the indexing of one
-// file, step by step. The map and Neighbours explain themselves in a panel that stays closed until
-// you ask; a walk is its panel.
+// Two views of the same files: the map itself, and Neighbours: one file in the middle and the others
+// at their true distance from it. How it works (the ? on the map) is a tour beside the map: how a
+// file comes to its dot, then how a search finds files, step by step, shown on the map as it goes.
 
-const VIEW_ICON = { map: "cube", near: "near", search: "searchSteps", index: "docSteps" };
 const NEAR_TOP = 0.95, NEAR_BOTTOM = 0.55; // the card's scale: 100 % and 0 % alike
 const NEAR_EDGE = 1.2; // files less alike than 0 % wait just outside the outer ring
 
-// The steps of the walks: what each says.
-const WALK = {
-  search: ["map.s1", "map.s2", "map.s3", "map.s4", "map.s5"],
-  index: ["map.i1", "map.i2", "map.i3", "map.i4", "map.i5"],
-};
+// The tour's steps: a file is read, cut into passages, turned into numbers and given its place;
+// then your words are turned into numbers, compared with every file, their words looked for, and
+// the results put in order. (Each has a title, map.tN, and a sentence, map.tN_d.)
+const TOUR = ["map.t1", "map.t2", "map.t3", "map.t4", "map.t5", "map.t6", "map.t7", "map.t8"];
+const TOUR_SEARCH = 4; // (the search's first step)
+
+// The example, the same for everyone (its texts in the page's language): a letter about the rent,
+// read and placed among nine other files; then a search for words in it. Each file: how close its
+// meaning is to the words, its kind, whether it holds the words, and where it sits (around the
+// middle of the map, the closest to the words nearest).
+const TOUR_FILES = [
+  { s: 0.80, kind: "doc", words: true, x: 0.08, y: 0.06, z: 0.04 }, // (the letter)
+  { s: 0.76, kind: "doc", words: true, x: -0.18, y: 0.22, z: 0.10 },
+  { s: 0.71, kind: "doc", words: true, x: 0.24, y: -0.16, z: -0.10 },
+  { s: 0.66, kind: "text", words: false, x: -0.30, y: -0.12, z: 0.22 },
+  { s: 0.63, kind: "image", words: false, x: 0.34, y: 0.28, z: -0.18 },
+  { s: 0.61, kind: "doc", words: false, x: -0.08, y: 0.40, z: -0.28 },
+  { s: 0.59, kind: "doc", words: false, x: 0.50, y: -0.30, z: 0.26 },
+  { s: 0.58, kind: "text", words: false, x: -0.52, y: 0.30, z: -0.24 },
+  { s: 0.57, kind: "image", words: false, x: 0.28, y: 0.54, z: 0.40 },
+  { s: 0.56, kind: "text", words: false, x: -0.40, y: -0.50, z: -0.38 },
+];
+const TOUR_PASSAGE_SPOTS = [[0.32, 0.24, 0.12], [-0.24, 0.30, -0.10], [0.10, -0.32, 0.24]]; // (where each passage's numbers would sit)
+const TOUR_NEAR = [1, 2, 5, 3, 4, 6]; // the letter's closest files
+const TOUR_LIKELY = 3; // the files with the words: the likely results
+const TOUR_VIEW = { tx: 0, ty: 0, tz: 0, zoom: 2.4 };
+
+// The example's numbers: made up, the same every time.
+function tourVector(seed) {
+  let s = seed;
+  return Array.from({ length: 256 }, () => {
+    s = (s * 16807) % 2147483647;
+    const u = s / 2147483647;
+    return (u - 0.5) * (u > 0.85 || u < 0.15 ? 3 : 1);
+  });
+}
+const TOUR_PRINTS = [tourVector(11), tourVector(23), tourVector(37)];
+const TOUR_MEAN = TOUR_PRINTS[0].map((_, i) => (TOUR_PRINTS[0][i] + TOUR_PRINTS[1][i] + TOUR_PRINTS[2][i]) / 3);
+const TOUR_WORDS = tourVector(53);
+const tourNames = () => t("tour.files").split("|");
 
 function setMapView(view) {
   if (map.view === view) return;
+  if (map.help) toggleHelp(false); // (the tour shows the map)
   const was = map.view;
   map.view = view;
-  map.flash = null;
   for (const b of $("map-views").querySelectorAll("button")) {
     b.classList.toggle("active", b.dataset.view === view);
     b.setAttribute("aria-checked", b.dataset.view === view);
   }
-  const walk = view === "search" || view === "index";
-  map.steps = walk ? { at: 0 } : null;
   if (view === "near") {
     if (map.spinBefore === null) map.spinBefore = map.spin;
     map.spin = false;
@@ -2964,12 +3104,7 @@ function setMapView(view) {
   } else if (was === "near") {
     map.near = null;
   }
-  if (view === "search") loadSearchWalk();
-  if (view === "index") loadIndexWalk();
-  if (!walk && (was === "search" || was === "index")) flyTo(map.selected ? { zoom: FOCUS_ZOOM } : OVERVIEW);
-  $("map-card").hidden = walk || !map.selected;
-  $("map-q").placeholder = `${view === "search" ? walkWords() : t("nav.search")}…`;
-  renderExplain();
+  renderSide();
   startMapLoop();
 }
 
@@ -2984,15 +3119,9 @@ function centralPoint() {
   return best;
 }
 
-// Neighbours: its middle and the radius of the 0 % ring, in pixels. It's as big as the room left of
-// the card allows; its middle is in the middle of what the panel and the card leave free, so the
-// file there and its closest ones stay in sight (the outer rings may reach under them).
+// Neighbours: its middle and the radius of the 0 % ring, in pixels: as big as the map allows.
 function nearFrame(W, H, dpr) {
-  const side = (el) => (el.hidden ? 0 : el.getBoundingClientRect().width + 14);
-  const left = side($("map-explain")) * dpr, right = side($("map-card")) * dpr;
-  const room = W - right;
-  const r = Math.max(60 * dpr, Math.min(room / 2 - 24 * dpr, H / 2 - 30 * dpr) / NEAR_EDGE);
-  return { x: (left + room) / 2, y: H / 2, r };
+  return { x: W / 2, y: H / 2, r: Math.max(60 * dpr, Math.min(W / 2 - 24 * dpr, H / 2 - 30 * dpr) / NEAR_EDGE) };
 }
 
 // Where each file goes around the one in the middle: as far out as it's unlike it (the middle is
@@ -3023,213 +3152,410 @@ function layoutNear() {
   startMapLoop();
 }
 
-// "Show me": what a line of the explanation is about pulses for a moment.
-function showMe(what) {
-  if (what === "lines" && !map.selected) {
-    const c = centralPoint();
-    if (c) selectPoint(c);
+// How it works: the tour, in the column beside the map instead of the file's card (which comes back
+// when it closes). It shows on the map, so it leaves Neighbours.
+function toggleHelp(open = !map.help) {
+  if (open === map.help) return;
+  if (open && map.view !== "map") setMapView("map");
+  map.help = open;
+  map.steps = open ? { at: 0, start: performance.now() } : null;
+  if (open) { // (the map holds still for the example)
+    if (map.spinBefore === null) map.spinBefore = map.spin;
+    map.spin = false;
+    updateSpin();
+    flyTo(TOUR_VIEW);
+  } else {
+    const p = map.selected;
+    if (!p && map.spinBefore !== null) {
+      map.spin = map.spinBefore;
+      map.spinBefore = null;
+      updateSpin();
+    }
+    flyTo(p ? { tx: p.x, ty: p.y, tz: p.z, zoom: FOCUS_ZOOM } : OVERVIEW);
   }
-  if (what === "near") return setMapView("near");
-  map.flash = { what, until: performance.now() + 2600 };
+  renderSide();
   startMapLoop();
 }
 
-const toggleHelp = (open = !map.help) => { map.help = open; renderExplain(); startMapLoop(); };
+// Beside the map, one thing at a time: How it works while it's open, else the file picked.
+function renderSide() {
+  $("map-card").hidden = !map.selected || map.help;
+  renderExplain();
+}
 
-// The panel: for the map and Neighbours, a few lines on what you see, each with a "show me"; for a
-// walk, its steps.
+// How it works, a step at a time: which part (a file, a search), its title and one sentence, what it
+// shows in the room left, and ‹ dots › to go through.
 function renderExplain() {
   const box = $("map-explain");
-  const walk = map.view === "search" || map.view === "index";
-  const help = $("map-help");
-  help.hidden = walk;
-  help.classList.toggle("on", map.help && !walk);
-  box.hidden = !(walk || map.help);
-  if (map.view === "near") layoutNear(); // (the free part of the map changed)
+  $("map-help").classList.toggle("on", map.help);
+  box.hidden = !map.help;
   if (box.hidden) return;
-  const head = h("div", { class: "mx-head" }, icon(VIEW_ICON[map.view]), h("b", {}, t(`map.view.${map.view}`)),
-    iconButton("close", t("common.close"), () => (walk ? setMapView("map") : toggleHelp(false)), "chip-x"));
-  const show = (what, label = t("map.show_me")) => h("button", { type: "button", class: "mx-show", onclick: () => showMe(what) },
-    icon(what === "near" ? "near" : "eye"), label);
-  if (!walk) {
-    const items = map.view === "near"
-      ? [["map.n1", "center"], ["map.n2", "rings"], ["map.n3"], ["map.n4"]]
-      : [["map.m1"], ["map.m2", "lines"], ["map.m3", "near", t("map.true_distances")], ["map.m4", map.rough?.size ? "rough" : null]];
-    box.replaceChildren(head, ...items.map(([key, what, label]) => h("p", { class: "mx-line" }, t(key), what ? show(what, label) : null)));
-    return;
-  }
-  const keys = WALK[map.view];
   const at = map.steps.at;
-  const dots = h("span", { class: "mx-dots" }, ...keys.map((_, i) => {
+  const head = h("div", { class: "mx-head" }, icon("help"), h("b", {}, t("map.help")),
+    iconButton("close", t("common.close"), () => toggleHelp(false), "chip-x"));
+  const dots = h("span", { class: "mx-dots" }, ...TOUR.map((_, i) => {
     const dot = h("button", { type: "button", class: i === at ? "on" : "", onclick: () => goStep(i) });
-    setTip(dot, t("map.step", { n: i + 1, total: keys.length }));
+    setTip(dot, t("map.step", { n: i + 1, total: TOUR.length }));
     return dot;
   }));
   const back = iconButton("chevronLeft", t("common.previous"), () => goStep(at - 1));
   back.disabled = at === 0;
-  const next = iconButton("chevronRight", t("common.next"), () => goStep(at + 1), "primary");
-  next.disabled = at === keys.length - 1;
-  box.replaceChildren(...[head, h("div", { class: "mx-step" }, t("map.step", { n: at + 1, total: keys.length })),
-    h("p", { class: "mx-text" }, t(keys[at])), walkVisual(), h("div", { class: "mx-nav" }, back, dots, next)].filter(Boolean));
+  const next = iconButton("chevronRight", t("common.next"), () => goStep(at + 1));
+  next.disabled = at === TOUR.length - 1;
+  box.replaceChildren(head,
+    h("div", { class: "mx-body" },
+      h("div", { class: "mx-part" }, t(at < TOUR_SEARCH ? "map.part.file" : "map.part.search")),
+      h("div", { class: "mx-title" }, t(TOUR[at])),
+      h("p", { class: "mx-text" }, t(`${TOUR[at]}_d`)),
+      h("div", { class: "mx-stage" }, walkVisual())),
+    h("div", { class: "mx-nav" }, back, dots, next));
+  requestAnimationFrame(fitStep);
+}
+
+// Once a step is laid out: each passage beside its numbers shows as many lines as its row has room
+// for, a list loses the rows from its end that don't fit, and the passages' numbers know where the
+// average is that they fly into.
+function fitStep() {
+  const stage = document.querySelector("#map-explain .mx-stage");
+  if (!stage) return;
+  const rows = stage.querySelector(".mx-rows");
+  if (rows?.firstElementChild) rows.style.setProperty("--lines", Math.max(1, Math.floor(rows.firstElementChild.clientHeight / 20.8)));
+  const visual = stage.firstElementChild;
+  const trim = [...stage.querySelectorAll(".mx-trim")];
+  while (trim.length && visual.offsetHeight > stage.clientHeight) trim.pop().remove();
+  const mean = stage.querySelector(".mx-mean");
+  if (mean) {
+    const m = mean.getBoundingClientRect();
+    for (const c of stage.querySelectorAll(".mx-prints.merge > canvas")) {
+      const r = c.getBoundingClientRect();
+      c.style.setProperty("--dx", `${(m.left + m.width / 2 - r.left - r.width / 2).toFixed(1)}px`);
+      c.style.setProperty("--dy", `${(m.top + m.height / 2 - r.top - r.height / 2).toFixed(1)}px`);
+    }
+  }
 }
 
 function goStep(i) {
-  const keys = WALK[map.view];
-  if (!keys || i < 0 || i >= keys.length) return;
-  map.steps.at = i;
-  applyStep();
+  if (!map.help || i < 0 || i >= TOUR.length) return;
+  map.steps = { at: i, start: performance.now() };
   renderExplain();
   startMapLoop();
 }
 
-// The map's part in a step: where the camera goes.
-function applyStep() {
-  const at = map.steps?.at ?? 0;
-  if (map.view === "search") {
-    const spot = map.query?.spot;
-    if (at >= 1 && spot) flyTo({ tx: spot[0], ty: spot[1], tz: spot[2], zoom: 1.6 });
-    else flyTo(OVERVIEW);
-  } else if (map.view === "index") {
-    const p = map.walkFile && map.byId.get(map.walkFile.id);
-    if (!p) return;
-    if (at === WALK.index.length - 1) selectPoint(p);
-    else flyTo({ tx: p.x, ty: p.y, tz: p.z, zoom: 1.4 });
+// How it works on the map: the example's files as dots of their own around the middle, doing what
+// the step says. The letter is read (its dot sends out rings, its name beside it); its passages
+// appear where their numbers would sit and fly into it; its lines go to its closest files. Then
+// where the words would sit (rings too, the words beside it), a ring sweeping out as the files
+// light up, the closest first; rings on the files with the words; lines to the results, each
+// answering with a ring.
+function drawTour(ctx, project, age, step, r0, dpr, ink, W, H) {
+  const clamp = (k) => Math.max(0, Math.min(1, k));
+  const grow = (delay, i, gap) => clamp((age - delay - i * gap) / 420);
+  const pos = TOUR_FILES.map((f) => project(f.x, f.y, f.z));
+  const color = (i) => KIND_COLOR[KIND_GROUP[TOUR_FILES[i].kind]];
+  const close = (i) => (TOUR_FILES[i].s - 0.55) / 0.27; // 1: the closest to the words (the match ring's scale)
+  const names = tourNames();
+  const search = step >= TOUR_SEARCH, ws = step - TOUR_SEARCH;
+  const letter = pos[0];
+  const dot = (x, y, r, fill, alpha) => {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  };
+  const ring = (x, y, r, stroke, width = 2) => {
+    ctx.lineWidth = width * dpr;
+    ctx.strokeStyle = stroke;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.stroke();
+  };
+  const dashed = (from, to, k, i) => {
+    if (k <= 0) return;
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.strokeStyle = ink(0.55 - i * 0.05);
+    ctx.lineWidth = 1.3 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(from[0], from[1]);
+    ctx.lineTo(from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  ctx.font = `600 ${12 * dpr}px ${getComputedStyle(document.body).fontFamily}`;
+  ctx.textBaseline = "middle";
+  const label = (i, r) => {
+    ctx.fillStyle = ink(0.85);
+    ctx.fillText(names[i], pos[i][0] + r + 10 * dpr, pos[i][1]);
+  };
+  // How strong each file is: in the letter's steps the letter, and its closest as their lines reach
+  // them; in the search's, by closeness to the words, lit as the sweep reaches them.
+  const strength = (i) => {
+    if (!search) {
+      if (i === 0) return [1, 1.4];
+      const near = step === 3 ? TOUR_NEAR.indexOf(i) : -1;
+      const k = near >= 0 ? grow(500, near, 170) : 0;
+      return [0.25 + 0.6 * k, 1 + 0.2 * k];
+    }
+    if (ws === 0) return [0.2, 1];
+    const w = close(i);
+    const k = ws === 1 ? clamp((age - 300 - (1 - w) * 1500) / 300) : 1;
+    return [0.15 + (0.1 + 0.85 * w ** 1.5) * k, 0.8 + 0.8 * w * k];
+  };
+  if (!search && step === 3) TOUR_NEAR.forEach((j, i) => dashed(letter, pos[j], grow(500, i, 170), i));
+  const spot = search ? project(0, 0, 0) : null;
+  if (spot && ws === 3) TOUR_FILES.slice(0, 5).forEach((_, i) => dashed(spot, pos[i], grow(250, i, 110), i));
+  const radius = [];
+  TOUR_FILES.forEach((_, i) => {
+    const [alpha, size] = strength(i);
+    radius[i] = r0 * size;
+    dot(pos[i][0], pos[i][1], radius[i], color(i), alpha);
+  });
+  if (!search) {
+    // The letter's passages, where their numbers would sit: they appear, then fly into it.
+    if (step === 2 || step === 3) {
+      TOUR_PASSAGE_SPOTS.forEach(([x, y, z], i) => {
+        const [sx, sy] = project(x, y, z);
+        let k = 1, px = sx, py = sy;
+        if (step === 2) {
+          k = popIn((age - 250 - i * 170) / 380); // (as its numbers appear in the panel)
+        } else {
+          const f = clamp((age - 300 - i * 45) / 550); // (as they fly into the average there)
+          const e = f * f * (3 - 2 * f);
+          px = sx + (letter[0] - sx) * e;
+          py = sy + (letter[1] - sy) * e;
+          k = 1 - f;
+        }
+        if (k <= 0) return;
+        ctx.globalAlpha = Math.min(1, k) * 0.35;
+        ctx.strokeStyle = ink(0.6);
+        ctx.lineWidth = dpr;
+        ctx.beginPath();
+        ctx.moveTo(letter[0], letter[1]);
+        ctx.lineTo(px, py);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        dot(px, py, r0 * 0.9 * k, color(0), Math.min(1, k) * 0.9);
+      });
+    }
+    ring(letter[0], letter[1], radius[0] + 4 * dpr, "#f54e00", 2.5);
+    label(0, radius[0] + 4 * dpr);
+  } else if (spot) {
+    // Where the words would sit: a ring of their own (popping in the first time), the words beside
+    // it until the files' names take over.
+    const k = ws === 0 ? popIn((age - 300) / 420) : 1;
+    if (k > 0) {
+      dot(spot[0], spot[1], 6 * dpr * k, `rgb(${theme.card.join(", ")})`, 1);
+      ring(spot[0], spot[1], 6 * dpr * k, ink(0.9), 2.5);
+      dot(spot[0], spot[1], 2 * dpr * k, ink(0.9), 1);
+    }
+    if (ws <= 1 && k >= 1) {
+      ctx.textAlign = "right"; // (left of it: the letter sits just to its right)
+      ctx.fillStyle = ink(0.85);
+      ctx.fillText(`“${t("tour.words")}”`, spot[0] - 16 * dpr, spot[1]);
+      ctx.textAlign = "left";
+    }
+    if (ws === 1) { // the search going out from the words
+      const k = clamp((age - 300) / 1500);
+      if (k > 0 && k < 1) ring(spot[0], spot[1], 10 * dpr + k * Math.hypot(W, H) * 0.5, ink(0.28 * (1 - k)));
+    }
+    if (ws >= 2) { // the files with the words, ringed (one after another the first time)
+      TOUR_FILES.forEach((f, i) => {
+        if (!f.words) return;
+        const k = ws === 2 ? popIn((age - 250 - i * 160) / 360) : 1;
+        if (k <= 0) return;
+        ring(pos[i][0], pos[i][1], (radius[i] + 3 * dpr) * k, ink(0.8 * Math.min(1, k)), 1.5);
+        label(i, radius[i] + 3 * dpr);
+      });
+    }
+    if (ws === 3) { // the results answer as their lines reach them
+      TOUR_FILES.slice(0, 5).forEach((_, i) => {
+        const k = clamp((age - 670 - i * 110) / 450);
+        if (k > 0 && k < 1) ring(pos[i][0], pos[i][1], radius[i] + 3 * dpr + k * 14 * dpr, ink(0.6 * (1 - k)));
+      });
+    }
   }
+  // (and the rings going out: CSS, smooth while the map stands still)
+  ripple($("map-ripple"), !search ? [letter[0] / dpr, letter[1] / dpr, (radius[0] + 4 * dpr) / dpr] : null);
+  ripple($("map-ripple-spot"), spot ? [spot[0] / dpr, spot[1] / dpr, 7] : null);
 }
 
-// What a step shows in the panel: the numbers, the passages, the results.
+// What a step shows in the panel, coming in piece by piece.
 function walkVisual() {
   const at = map.steps.at;
-  if (map.view === "search") {
-    const q = map.query;
-    if (!q || q.loading) return h("div", { class: "mx-visual" }, h("span", { class: "skeleton mx-skel" }));
-    if (q.error) return h("p", { class: "mx-error" }, q.error);
-    if (at === 0) {
-      return h("div", { class: "mx-visual" }, h("div", { class: "mx-words" }, `“${q.text}”`), printCanvas(q.vector, 128),
-        h("div", { class: "mx-caption" }, t("map.numbers")));
-    }
-    if (at === 2 && !q.words.size) return h("div", { class: "mx-caption" }, t("map.no_words"));
-    if (at >= 3) {
-      // The first likely ones, the line, and the first of the rest: as the search shows them.
-      const all = q.results || [];
-      const likely = Math.min(q.likely ?? all.length, all.length);
-      const row = (r) => {
-        const p = map.byId.get(r.file_id);
-        const el = h("div", { class: "mc-rel mx-result" },
-          h("i", { class: "mc-dot", style: `background: ${KIND_COLOR[KIND_GROUP[r.kind] || "text"]}` }),
-          h("span", { class: "mc-rel-name" }, r.name), matchBadge(r));
-        el.addEventListener("pointerenter", () => { map.rowHover = p || null; startMapLoop(); });
-        el.addEventListener("pointerleave", () => { map.rowHover = null; startMapLoop(); });
-        return el;
-      };
-      const line = (text) => h("div", { class: "more-divider static" }, h("span", { class: "more-label" }, text));
-      const rest = all.slice(likely, likely + 2);
-      const rows = !likely && all.length
-        ? [line(t("search.no_clear_match")), ...all.slice(0, 4).map(row)] // (nothing clears the bar: the search says so)
-        : [...all.slice(0, Math.min(likely, rest.length ? 4 : 6)).map(row),
-          ...(rest.length ? [line(tp("search.less_likely", all.length - likely)), ...rest.map(row)] : [])];
-      const open = at === 4 ? iconButton("search", t("map.open_search"), () => {
-        $("q").value = q.text;
-        goTo("search");
-        runSearch();
-      }, "primary mx-open") : null;
-      return h("div", { class: "mx-visual" }, h("div", { class: "mc-related mx-results" }, ...rows), open);
-    }
-    return null;
-  }
-  const f = map.walkFile;
-  if (f?.empty) return h("div", { class: "mx-caption" }, t(state.hasFolders ? "search.still_indexing" : "activity.no_folders_sub"));
-  if (!f || f.loading) return h("div", { class: "mx-visual" }, h("span", { class: "skeleton mx-skel" }));
-  if (f.error) return h("p", { class: "mx-error" }, f.error);
+  return at < TOUR_SEARCH ? fileVisual(at) : searchVisual(at - TOUR_SEARCH);
+}
+
+// (its place in the order things come in)
+const nth = (el, i) => { el.style.setProperty("--i", i); return el; };
+
+// The letter's steps, as large as the panel allows: its page is read (a line goes down it), comes
+// apart into its passages, each passage gets its numbers beside it (the rows share the room), and
+// their numbers fly into the average. Captions under what they name.
+function fileVisual(at) {
+  const visual = (cls, ...kids) => h("div", { class: `mx-visual${cls ? ` ${cls}` : ""}` }, ...kids);
+  const passages = t("tour.letter").split("|");
+  const caption = h("div", { class: "mx-caption mx-in late" }, tp("map.passages", passages.length));
   if (at === 0) {
-    const pic = f.file.preview
-      ? h("img", { class: "mx-thumb", alt: "", src: thumbUrl({ file_id: f.id, mtime: f.file.mtime, size: f.file.size }) })
-      : h("div", { class: "mx-sample" }, h("p", {}, f.passages[0]?.text || ""));
-    return h("div", { class: "mx-visual" }, h("div", { class: "mx-file" }, icon(f.file.kind in ICONS ? f.file.kind : "doc"),
-      h("b", {}, f.file.name)), h("div", { class: "mx-dir" }, f.file.dir), pic, h("div", { class: "mx-caption" }, t("map.pick_another")));
+    return visual("",
+      nth(h("div", { class: "mx-read mx-in" }, h("div", { class: "mx-letter" }, ...passages.map((text) => h("p", {}, text)))), 0),
+      nth(h("div", { class: "mx-file mx-in" }, icon("doc"), h("b", {}, tourNames()[0])), 1),
+      nth(h("div", { class: "mx-dir mx-in" }, t("tour.folder")), 2));
   }
-  if (at === 1 || at === 2) {
-    const rows = f.passages.map((ps) => h("div", { class: "mx-passage" },
-      at === 2 ? printCanvas(ps.vector, 40) : null,
-      h("span", {}, ps.page ? h("em", {}, t("result.page", { n: ps.page })) : null,
-        ps.text || (f.file.preview ? h("img", { class: "mx-thumb small", alt: "", src: thumbUrl({ file_id: f.id, mtime: f.file.mtime, size: f.file.size }) }) : "…"))));
-    const more = f.count > f.passages.length ? h("div", { class: "mx-caption" }, tp("map.more_passages", f.count - f.passages.length)) : null;
-    return h("div", { class: "mx-visual" }, h("div", { class: "mx-caption" }, tp("map.passages", f.count)), h("div", { class: "mx-passages" }, ...rows), more);
+  if (at === 1) {
+    return visual("", h("div", { class: "mx-pieces" }, ...passages.map((text, i) =>
+      nth(h("div", { class: "mx-piece" }, h("span", { class: "mx-num" }, fmt(i + 1)), h("p", {}, text)), i))), caption);
   }
-  if (at === 3) {
-    return h("div", { class: "mx-visual" }, h("div", { class: "mx-prints" }, ...f.passages.slice(0, 6).map((ps) => printCanvas(ps.vector, 28))),
-      h("div", { class: "mx-arrow" }, icon("chevronDown")), printCanvas(f.mean, 112), h("div", { class: "mx-caption" }, t("map.average")));
+  if (at === 2) {
+    // (each row's share of the room, less the caption and the gaps; the numbers as tall as a row)
+    const n = passages.length, size = `min(calc((100cqh - ${30 + (n - 1) * 12}px) / ${n}), 36cqw)`;
+    return visual("rows", h("div", { class: "mx-rows", style: `--n: ${n}` }, ...passages.map((text, i) =>
+      nth(h("div", { class: "mx-row mx-in" }, h("span", { class: "mx-ptext" }, text), printCanvas(TOUR_PRINTS[i], size, 250 + i * 170)), i))), caption);
   }
-  return h("button", { type: "button", class: "mx-show mx-near", onclick: () => setMapView("near") }, icon("near"), t("map.true_distances"));
+  const prints = TOUR_PRINTS.map((v, i) => nth(printCanvas(v, 40), i));
+  const mean = printCanvas(TOUR_MEAN, "min(80cqw, calc(100cqh - 110px))", 650);
+  mean.classList.add("mx-mean");
+  return visual("", h("div", { class: "mx-prints merge" }, ...prints), mean, h("div", { class: "mx-caption mx-in late" }, t("map.average")));
 }
 
-// A vector as its 16 × 16 grid, `size` pixels wide.
-function printCanvas(v, size) {
-  const c = h("canvas", { class: "mx-print", width: 160, height: 160, style: `width: ${size}px; height: ${size}px` });
-  drawFingerprint(v, null, c);
+// The search's steps, as large as the panel allows: the words become numbers, every file by how
+// close its meaning is (bars filling up as the map lights up), the files that hold the words
+// (counted up, the words marked), the results (one after another). Lists end where the room does.
+function searchVisual(s) {
+  const visual = (cls, ...kids) => h("div", { class: `mx-visual${cls ? ` ${cls}` : ""}` }, ...kids);
+  const names = tourNames();
+  const dot = (i) => h("i", { class: "mc-dot", style: `background: ${KIND_COLOR[KIND_GROUP[TOUR_FILES[i].kind]]}` });
+  const named = (i, order, ...more) => nth(h("div", { class: "mc-rel mx-result mx-in" }, dot(i), h("span", { class: "mc-rel-name" }, names[i]), ...more), order);
+  if (s === 0) {
+    return visual("", h("div", { class: "mx-words mx-in" }, `“${t("tour.words")}”`),
+      printCanvas(TOUR_WORDS, "min(80cqw, calc(100cqh - 120px))", 450), h("div", { class: "mx-caption mx-in late" }, t("map.numbers")));
+  }
+  if (s === 1) {
+    return visual("wide",
+      h("div", { class: "mx-bars" }, ...TOUR_FILES.map((f, i) => {
+        const share = Math.max(0, Math.min(1, (f.s - 0.55) / 0.27)); // (the match ring's scale)
+        return nth(h("div", { class: `mx-bar-row mx-in${i >= TOUR_LIKELY ? " mx-trim" : ""}`, style: `--hue: ${Math.round(share * 120)}` },
+          dot(i), h("span", { class: "mc-rel-name" }, names[i]),
+          h("span", { class: "mx-bar" }, h("i", { style: `--w: ${(share * 100).toFixed(1)}%` })), h("b", {}, pct(Math.round(share * 100)))), i);
+      })),
+      h("div", { class: "mx-caption" }, t("map.closest_meaning")));
+  }
+  if (s === 2) {
+    const n = h("b", { class: "mx-count" }, "0");
+    countUp(n, TOUR_LIKELY);
+    const words = queryTerms(t("tour.words"));
+    const found = [t("tour.letter").split("|")[0], ...t("tour.snippets").split("|")]; // (where each holds the words)
+    return visual("", n, h("div", { class: "mx-caption" }, tp("map.with_words", TOUR_LIKELY)),
+      h("div", { class: "mx-hits" }, ...found.slice(0, TOUR_LIKELY).map((text, i) => nth(h("div", { class: "mx-hit mx-in" },
+        h("div", { class: "mx-hit-name" }, dot(i), h("span", { class: "mc-rel-name" }, names[i])),
+        h("p", { class: "mx-snip" }, ...highlighted(text, words))), i + 1))));
+  }
+  // The likely ones (all the words: a full ring), the line, and the rest (by meaning) as far as the
+  // room goes.
+  const rows = [
+    ...TOUR_FILES.slice(0, TOUR_LIKELY).map((f, i) => named(i, i, matchBadge({ exact: true, similarity: f.s }))),
+    nth(h("div", { class: "more-divider static mx-in" }, h("span", { class: "more-label" }, tp("search.less_likely", TOUR_FILES.length - TOUR_LIKELY))), TOUR_LIKELY),
+    ...TOUR_FILES.slice(TOUR_LIKELY).map((f, i) => {
+      const row = named(TOUR_LIKELY + i, TOUR_LIKELY + 1 + i, matchBadge({ similarity: f.s }));
+      if (i) row.classList.add("mx-trim");
+      return row;
+    }),
+  ];
+  return visual("wide", h("div", { class: "mc-related mx-results" }, ...rows));
+}
+
+// A number counting up to n, from a moment from now.
+function countUp(el, n, ms = 700) {
+  const t0 = performance.now() + 250;
+  const tick = (now) => {
+    const k = Math.max(0, Math.min(1, (now - t0) / ms));
+    el.textContent = fmt(Math.round(n * (1 - (1 - k) ** 3)));
+    if (k < 1 && el.isConnected) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// 0 to 1 with a little overshoot, for things that pop in.
+function popIn(k) {
+  if (k <= 0) return 0;
+  if (k >= 1) return 1;
+  return 1 + 2.8 * (k - 1) ** 3 + 1.8 * (k - 1) ** 2;
+}
+
+// A vector as its 16 × 16 grid, `size` wide (pixels, or a CSS length); with `develop`, its squares
+// appear in a sweep from the top left, starting that many ms from now.
+function printCanvas(v, size, develop = null) {
+  const s = typeof size === "number" ? `${size}px` : size;
+  const c = h("canvas", { class: "mx-print", width: 160, height: 160, style: `width: ${s}; height: ${s}` });
+  if (develop == null) {
+    drawFingerprint(v, null, c);
+    return c;
+  }
+  const t0 = performance.now() + develop;
+  drawFingerprint(v, null, c, 0);
+  const tick = (now) => {
+    const k = Math.max(0, Math.min(1, (now - t0) / 650));
+    drawFingerprint(v, null, c, k);
+    if (k < 1 && (c.isConnected || now < t0)) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
   return c;
-}
-
-// The search walk's words: what's in the map's search field, or the search field's example.
-const walkWords = () => $("map-q").value.trim() || t("search.examples").split("|")[0];
-
-async function loadSearchWalk(tries = 0) {
-  const text = walkWords();
-  const key = `${text}|${state.scope?.path || ""}`; // (the search goes where the map is narrowed to)
-  if (map.query?.key === key && !map.query.error) return;
-  map.query = { key, text, loading: true };
-  renderExplain();
-  try {
-    const qs = new URLSearchParams({ q: text, limit: 40 });
-    if (state.scope) qs.set("under", state.scope.path);
-    const [m, r] = await Promise.all([api(`/api/map/query?${new URLSearchParams({ q: text })}`), api(`/api/search?${qs}`)]);
-    if (map.query?.key !== key) return;
-    // How alike each dot is, as the map shows a picked file's: by rank (1 = the most alike).
-    const order = m.sims.ids.map((id, i) => [id, m.sims.sims[i]]).sort((a, b) => b[1] - a[1]);
-    const n = order.length;
-    map.query = {
-      key, text, vector: m.vector, spot: m.spot, results: r.results, likely: r.likely,
-      weights: new Map(order.map(([id, s], i) => [id, { w: n > 1 ? 1 - i / (n - 1) : 1, s }])),
-      words: new Set(r.results.filter((x) => x.keyword || x.exact).map((x) => x.file_id)),
-    };
-  } catch (e) {
-    if (map.query?.key !== key) return;
-    map.query = { key, text, error: e.message };
-    // (the model may still be waking up: a few more tries while the walk is open)
-    if (tries < 5) setTimeout(() => { if (map.view === "search" && map.query?.key === key) loadSearchWalk(tries + 1); }, 3000);
-  }
-  if (map.view !== "search") return;
-  applyStep();
-  renderExplain();
-  startMapLoop();
-}
-
-async function loadIndexWalk() {
-  const p = map.selected || centralPoint();
-  if (!p) { // (no file on the map yet)
-    map.walkFile = { empty: true };
-    return renderExplain();
-  }
-  if (map.walkFile?.id === p.id && !map.walkFile.error) return;
-  map.walkFile = { id: p.id, loading: true, only: new Set([p.id]) };
-  renderExplain();
-  try {
-    const d = await api(`/api/map/passages/${p.id}`);
-    if (map.walkFile?.id !== p.id) return;
-    map.walkFile = { ...d, id: p.id, only: new Set([p.id]) };
-  } catch (e) {
-    if (map.walkFile?.id === p.id) map.walkFile = { id: p.id, error: e.message, only: new Set([p.id]) };
-  }
-  if (map.view !== "index") return;
-  applyStep();
-  renderExplain();
-  startMapLoop();
 }
 
 for (const b of $("map-views").querySelectorAll("button")) b.addEventListener("click", () => setMapView(b.dataset.view));
 $("map-help").addEventListener("click", () => toggleHelp());
 
-// ---------- folder scope ----------
+// The column beside the map is as wide as you drag its edge to (kept in the settings; a double-click
+// gives it its own width back).
+function sideWidth(w) {
+  const main = $("map-resize").parentElement;
+  if (w > 0) main.style.setProperty("--side-w", `${w}px`);
+  else main.style.removeProperty("--side-w");
+}
+
+{
+  const handle = $("map-resize");
+  let drag = null;
+  handle.addEventListener("pointerdown", (e) => {
+    drag = { w: 0 };
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("drag");
+    e.preventDefault();
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const r = handle.parentElement.getBoundingClientRect();
+    drag.w = Math.round(Math.max(260, Math.min(r.width - 320, r.right - e.clientX - handle.offsetWidth / 2)));
+    sideWidth(drag.w);
+  });
+  const end = () => {
+    if (!drag) return;
+    handle.classList.remove("drag");
+    if (drag.w) saveSettings({ map_side: drag.w });
+    drag = null;
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  handle.addEventListener("dblclick", () => {
+    sideWidth(0);
+    saveSettings({ map_side: 0 });
+  });
+}
+
+// ---------- kind and folder ----------
+
+// Search and the map show one kind of files, or all: one choice for both, as the folder is.
+function setKind(kind) {
+  if (state.kind === kind) return;
+  state.kind = kind;
+  for (const b of document.querySelectorAll("#kinds button, #map-kinds button")) b.classList.toggle("active", b.dataset.kind === kind);
+  updateViews();
+  runSearch();
+  if (map.selected && !visible(map.selected)) clearSelection();
+  else if (map.related) setClosest();
+  if ($("map-q").value.trim()) mapSearch();
+  startMapLoop();
+}
 
 // Search and the map can be narrowed to one folder: any folder inside the indexed ones.
 function setScope(path) {
@@ -3238,7 +3564,8 @@ function setScope(path) {
   if (state.similar) runSimilar(state.similar);
   else if ($("q").value.trim()) runSearch();
   if (map.selected && !visible(map.selected)) clearSelection();
-  if ($("map-q").value.trim() || map.view === "search") mapSearch(); // (the search walk too)
+  else if (map.related) setClosest();
+  if ($("map-q").value.trim()) mapSearch();
   startMapLoop();
 }
 
@@ -3267,14 +3594,13 @@ let scopeFindTimer = null;
 
 async function openScopeMenu(box, path = state.scope?.path || "") {
   const menu = $("scope-menu");
-  const find = h("input", { type: "search", class: "input menu-find", spellcheck: "false", placeholder: `${t("scope.find")}…`,
-    "aria-label": t("scope.find") });
+  const find = h("input", { type: "search", spellcheck: "false", placeholder: `${t("scope.find")}…`, "aria-label": t("scope.find") });
   const list = h("div", { class: "menu-list" });
   find.addEventListener("input", () => {
     clearTimeout(scopeFindTimer);
     scopeFindTimer = setTimeout(() => fillScopeList(box, list, path, find.value.trim()), 150);
   });
-  menu.replaceChildren(find, list);
+  menu.replaceChildren(h("label", { class: "menu-find" }, icon("search"), find), list);
   if (!(await fillScopeList(box, list, path, ""))) return;
   menu.hidden = false;
   const r = box.getBoundingClientRect();
@@ -3298,7 +3624,8 @@ async function fillScopeList(box, list, path, text) {
   const isScope = (p) => state.scope?.path.toLowerCase() === p.toLowerCase();
   const row = (name, label, count, onclick, { on = false, open = null } = {}) => {
     const main = h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick },
-      icon(name), h("span", { class: "menu-name" }, label), count != null ? h("span", { class: "menu-count" }, fmt(count)) : null);
+      icon(name), h("span", { class: "menu-name" }, label), on ? menuMark("check") : null,
+      count != null ? h("span", { class: "menu-count" }, fmt(count)) : null);
     if (!open) return main;
     const more = h("button", { type: "button", class: "menu-open", onclick: open }, icon("chevronRight"));
     setTip(more, t("scope.inside"));
@@ -3449,6 +3776,11 @@ document.addEventListener("keydown", (e) => {
     goTo("search");
     q.focus();
     q.select();
+    return;
+  }
+  if (state.page === "map" && map.help && e.key === "Escape") {
+    e.preventDefault();
+    toggleHelp(false);
     return;
   }
   if (state.page === "map" && map.selected) { // ← (or Backspace): back to the file before; →: forward
