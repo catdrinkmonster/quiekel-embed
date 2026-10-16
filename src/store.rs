@@ -26,6 +26,12 @@ use crate::search::{KeywordHit, VectorHit};
 /// Bump when what goes into the index changes (e.g. how titles are built): forces a re-index.
 pub const INDEX_FORMAT: i64 = 3;
 
+/// Bump when the readers get documents' text better in a way worth reading the affected ones
+/// again for, without indexing everything anew (see Store::reread_documents). 2: PDFium's mark
+/// inside words split at a line end (U+0002), other control codes, symbol fonts' glyphs (the
+/// private use area).
+pub const DOCUMENT_TEXT: &str = "2";
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -598,6 +604,46 @@ impl Store {
         }
         self.meta_set("index", &current);
         Ok(())
+    }
+
+    /// Documents whose saved passages hold what the readers now leave out (DOCUMENT_TEXT) are read
+    /// again on their folder's next scan: their saved dates stop matching, and so do those of the
+    /// archives and emails they're in. Once per DOCUMENT_TEXT; how many there were.
+    pub fn reread_documents(&self) -> Result<usize> {
+        if self.meta_get("document_text").as_deref() == Some(DOCUMENT_TEXT) {
+            return Ok(0);
+        }
+        // Control codes but tabs and line ends, and the private use area.
+        let odd: String = (1u8..32).filter(|c| ![9, 10, 13].contains(c)).map(char::from).collect();
+        let pattern = format!("*[{odd}\u{e000}-\u{f8ff}]*");
+        let mut db = self.db.lock();
+        let paths: Vec<String> = {
+            let mut st = db.prepare(&format!(
+                "SELECT path FROM files WHERE kind = 'doc' AND id IN
+                     (SELECT DISTINCT rowid >> {FTS_SHIFT} FROM chunks_fts WHERE text GLOB ?1)"
+            ))?;
+            st.query_map([&pattern], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        };
+        if !paths.is_empty() {
+            let containers: HashMap<String, String> = {
+                let mut st = db.prepare("SELECT path FROM containers")?;
+                st.query_map([], |r| r.get::<_, String>(0))?.filter_map(|r| r.ok()).map(|p| (normcase(&p), p)).collect()
+            };
+            let tx = db.transaction()?;
+            for path in &paths {
+                tx.execute("UPDATE files SET mtime = 0 WHERE path = ?", [path])?;
+                let lower = normcase(path);
+                for (i, _) in lower.match_indices('\\') {
+                    if let Some(container) = containers.get(&lower[..i]) {
+                        tx.execute("UPDATE containers SET mtime = 0 WHERE path = ?", [container])?;
+                    }
+                }
+            }
+            tx.commit()?;
+        }
+        drop(db);
+        self.meta_set("document_text", DOCUMENT_TEXT);
+        Ok(paths.len())
     }
 
     // ---- vectors in memory ------------------------------------------------------------------
@@ -1938,6 +1984,31 @@ mod tests {
         assert_eq!(s.common_terms(&terms(&["rent", "holiday"]), false), HashSet::from(["rent".to_string()]));
         assert_eq!(s.common_terms(&terms(&["holiday", "ren"]), true), HashSet::from(["ren".to_string()])); // (as the start of "rent")
         assert!(s.common_terms(&terms(&["holi"]), true).is_empty());
+        drop(s);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn documents_whose_text_now_comes_out_better_are_read_again_once() {
+        let (s, dir) = store();
+        let fid = s.add_folder(r"C:\docs").unwrap();
+        save(&s, fid, r"C:\docs\split.pdf", "doc", &["intro", "wird ge\u{2}worfen"], "split.pdf");
+        save(&s, fid, r"C:\docs\bullets.pdf", "doc", &["\u{f0b7}\u{f0b7} ."], "bullets.pdf");
+        save(&s, fid, r"C:\docs\fine.pdf", "doc", &["wird geworfen"], "fine.pdf");
+        save(&s, fid, r"C:\docs\notes.txt", "text", &["a\u{2}b"], "notes.txt"); // (its reader didn't change)
+        save(&s, fid, r"C:\docs\a.zip\inner\guide.pdf", "doc", &["\u{f}Punkt"], "guide.pdf");
+        let zip = ContainerRow { path: r"C:\docs\a.zip".into(), size: 1, mtime: 5.0, types: String::new(), report: Default::default() };
+        let other = ContainerRow { path: r"C:\docs\b.zip".into(), size: 1, mtime: 5.0, types: String::new(), report: Default::default() };
+        s.save_containers(fid, &[zip, other], false).unwrap();
+        assert_eq!(s.reread_documents().unwrap(), 3);
+        let mtime = |p: &str| s.signature(p).unwrap().2;
+        for p in [r"C:\docs\split.pdf", r"C:\docs\bullets.pdf", r"C:\docs\a.zip\inner\guide.pdf"] {
+            assert_eq!(mtime(p), 0.0, "{p}");
+        }
+        assert_eq!((mtime(r"C:\docs\fine.pdf"), mtime(r"C:\docs\notes.txt")), (1.0, 1.0));
+        let containers = s.containers(fid);
+        assert_eq!((containers[r"c:\docs\a.zip"].mtime, containers[r"c:\docs\b.zip"].mtime), (0.0, 5.0));
+        assert_eq!(s.reread_documents().unwrap(), 0); // (once)
         drop(s);
         let _ = std::fs::remove_dir_all(dir);
     }

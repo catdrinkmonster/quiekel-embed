@@ -14,14 +14,6 @@ let searchTimer = null;
 let toastTimer = null;
 let pollTimer = null;
 
-const EXT_COLORS = {
-  pdf: "#d93025", doc: "#1d4aff", docx: "#1d4aff", ppt: "#e8590c", pptx: "#e8590c",
-  xls: "#2f9e44", xlsx: "#2f9e44", csv: "#2f9e44", tsv: "#2f9e44", md: "#7048e8",
-  txt: "#6b6d65", html: "#e8590c", htm: "#e8590c", json: "#b17816", yaml: "#b17816",
-  yml: "#b17816", toml: "#b17816", py: "#1d4aff", js: "#b17816", ts: "#1d4aff",
-  rs: "#e8590c", go: "#0c8599", ipynb: "#e8590c",
-};
-
 // ---------- icons ----------
 
 // Line icons on a 24px grid. Static markup only, never anything from files or the network.
@@ -273,7 +265,6 @@ function setLanguage(lang) {
     setTip(b, t(`view.${b.dataset.view}`));
   }
   setTip($("nav-map"), t("nav.map"));
-  setTip($("map-empty"), t("map.empty"));
   renderKeys();
   renderScopes();
   $("map-q").placeholder = `${t("nav.search")}…`;
@@ -677,7 +668,7 @@ function renderFolders(folders, progress, phase) {
   const list = $("folders");
   list.replaceChildren();
   if (!folders.length) {
-    list.append(h("div", { class: "empty compact" }, h("img", { class: "logo", src: "/static/quiekel.svg", alt: "" }), waitingText()));
+    list.append(h("div", { class: "empty compact" }, waitingText()));
   }
   for (const f of folders) {
     const here = active === f.path;
@@ -1412,12 +1403,6 @@ function updateNotice() {
   setTip(notice, `${t("search.still_indexing")}\n${progress}${t("search.by_name_only")}`);
 }
 
-function quiekelImage(tip, small = false) {
-  const img = h("img", { src: "/static/quiekel.svg", alt: "", class: small ? "logo small" : "logo" });
-  if (tip) setTip(img, tip);
-  return img;
-}
-
 // No folders yet: one friendly sentence, its "add a folder" part a link to the folder picker.
 function waitingText() {
   const [before, after = ""] = t("search.waiting").split("{folder}");
@@ -1427,18 +1412,18 @@ function waitingText() {
   return h("p", { class: "waiting" }, before, link, after);
 }
 
+// Nothing searched yet. Quiekel stays the logo at the top of the rail, nowhere else.
 function renderEmpty() {
   const empty = $("empty");
-  empty.hidden = false;
-  if (state.hasFolders === false) return empty.replaceChildren(quiekelImage(), waitingText());
-  empty.replaceChildren(quiekelImage());
+  empty.hidden = state.hasFolders !== false;
+  empty.replaceChildren(...(state.hasFolders === false ? [waitingText()] : []));
 }
 
 function renderMessage(msg) {
   state.results = [];
   $("results").replaceChildren();
   $("empty").hidden = false;
-  $("empty").replaceChildren(quiekelImage(null, true), h("p", {}, msg));
+  $("empty").replaceChildren(h("p", {}, msg));
 }
 
 // The likely results first (the server puts them on top); the rest behind a divider that says how
@@ -1459,7 +1444,17 @@ function renderResults(items, likely) {
   if (!items.length) return renderMessage(t("search.nothing"));
   $("empty").hidden = true;
   const make = { cards: row, list: line, grid: tile }[view];
-  items.slice(0, state.likely).forEach((r, i) => box.append(make(r, i)));
+  // In the list, the lines share a card: the likely ones one, the rest (once shown) another, with
+  // the divider between the two, as between the other views' cards.
+  const put = (part, from, rest = false) => {
+    const els = part.map((r, k) => make(r, from + k));
+    if (view === "list") return box.append(h("div", { class: `list-card${rest ? " rest" : ""}` }, els));
+    for (const el of els) {
+      el.classList.toggle("rest", rest);
+      box.append(el);
+    }
+  };
+  put(items.slice(0, state.likely), 0);
   if (state.likely < items.length) {
     const more = items.length - state.likely;
     const label = h("span", { class: "more-label" });
@@ -1467,16 +1462,10 @@ function renderResults(items, likely) {
     const show = (open) => {
       state.expanded = open;
       divider.setAttribute("aria-expanded", open);
-      label.replaceChildren(open ? "" : t("search.more", { n: fmt(more) }), icon(open ? "chevronUp" : "chevronDown"));
+      label.replaceChildren(open ? "" : tp("search.less_likely", more), icon(open ? "chevronUp" : "chevronDown"));
       setTip(divider, open ? t("search.fewer") : "");
       for (const el of box.querySelectorAll(".rest")) el.remove();
-      if (open) {
-        items.slice(state.likely).forEach((r, k) => {
-          const el = make(r, state.likely + k);
-          el.classList.add("rest");
-          box.append(el);
-        });
-      }
+      if (open) put(items.slice(state.likely), state.likely, true);
       if (!open && state.selected >= state.likely) select(-1);
     };
     divider.addEventListener("click", () => show(!state.expanded));
@@ -1526,10 +1515,14 @@ function actionButtons(r) {
   );
 }
 
+// A file without a picture: its kind's icon and its extension, muted (no box, no colour).
+const KIND_ICON = { doc: "doc", text: "text", code: "code", image: "image" };
+const MAIL_EXTS = new Set(["eml", "msg", "mht", "mhtml"]);
+
 function extBadge(r) {
-  const ext = r.name.includes(".") ? r.name.split(".").pop().toLowerCase() : r.kind;
-  const color = EXT_COLORS[ext] || (r.kind === "code" ? "#7048e8" : "#6b6d65");
-  return h("div", { class: "ext", style: `--c: ${color}` }, ext.slice(0, 4));
+  const ext = r.name.includes(".") ? r.name.split(".").pop().toLowerCase() : "";
+  const name = MAIL_EXTS.has(ext) ? "mail" : KIND_ICON[r.kind] || "doc";
+  return h("div", { class: "ext" }, icon(name), ext ? h("span", {}, ext) : null);
 }
 
 // How well a result matches its meaning, from 0 to 1. Scores between a search and a file run from
@@ -1791,7 +1784,6 @@ function setPoints(points, total) {
     if (again) selectPoint(again, { remember: false, fly: false });
     else clearSelection();
   }
-  $("map-empty").hidden = points.length > 0;
   const count = $("map-count");
   count.hidden = total <= points.length;
   count.textContent = `${fmt(points.length)} / ${fmt(total)}`;
@@ -1936,6 +1928,7 @@ function drawMap(now) {
       size = lit ? 1.4 : 1;
     }
     q.r = base * (0.5 + 0.5 * q.s) * dpr * Math.sqrt(zoom) * size;
+    q.color = color;
     // One fill per dot: a canvas draws 6,000 single circles faster than a few paths holding
     // them all (measured: 12 ms against 19 ms a frame).
     ctx.globalAlpha = alpha * q.fade;
@@ -1950,9 +1943,17 @@ function drawMap(now) {
     }
   }
   ctx.globalAlpha = 1;
+  // The file pointed at and the selected one go on top, at full strength, with their rings: a dot
+  // in front of them (a copy, a close neighbour) would cover them, and the ring would look off.
   for (const [p, color] of [[map.hover || map.rowHover, ink(0.8)], [map.selected, "#f54e00"]]) {
     const q = p && at.get(p.id);
     if (!q) continue;
+    ctx.globalAlpha = q.fade;
+    ctx.fillStyle = q.color;
+    ctx.beginPath();
+    ctx.arc(q.px, q.py, q.r, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 1;
     ctx.lineWidth = 2.5 * dpr;
     ctx.strokeStyle = color;
     ctx.beginPath();
@@ -2438,10 +2439,6 @@ document.addEventListener("keydown", (e) => {
   if (!$("ctx-menu").hidden && e.key === "Escape") {
     e.preventDefault();
     closeContextMenu();
-    return;
-  }
-  if (!$("help").hidden) {
-    if (e.key === "Escape") { e.preventDefault(); closeHelp(); }
     return;
   }
   if (!$("folder-modal").hidden) {

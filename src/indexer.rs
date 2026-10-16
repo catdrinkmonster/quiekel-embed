@@ -699,6 +699,12 @@ impl Indexer {
 
     fn run(&self) {
         set_background_priority(true); // whatever else runs on the PC comes first
+        // (before the scans queued at start, which then read them again)
+        match self.store.reread_documents() {
+            Ok(0) => {}
+            Ok(n) => log::info!("{n} documents are read again: their text comes out better now"),
+            Err(e) => log::warn!("Couldn't look for documents to read again: {e:#}"),
+        }
         self.load_at_start();
         loop {
             self.set(json!({"state": "idle"}));
