@@ -2441,10 +2441,6 @@ document.addEventListener("keydown", (e) => {
     closeContextMenu();
     return;
   }
-  if (!$("help").hidden) {
-    if (e.key === "Escape") { e.preventDefault(); closeHelp(); }
-    return;
-  }
   if (!$("folder-modal").hidden) {
     if (e.key === "Escape") { e.preventDefault(); closeFolderInfo(); }
     return;
