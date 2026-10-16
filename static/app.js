@@ -399,7 +399,7 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 const atPage = (page) => (page > 1 ? `&page=${page}` : "");
 const thumbUrl = (r, page) => `/api/thumb/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}${atPage(page)}`;
 const previewUrl = (r, page) => `/api/preview/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}${atPage(page)}`;
-const pictureUrl = (r) => r.picture || thumbUrl(r); // (the empty page's examples bring their own)
+const pictureUrl = (r) => r.picture || thumbUrl(r); // (a pasted picture brings its own)
 
 // Wrap query words in <mark>, building DOM nodes (never innerHTML with file content).
 function highlighted(text, terms) {
@@ -452,7 +452,6 @@ let exampleAt = 0;
 function rotatePlaceholder() {
   const examples = t("search.examples").split("|");
   $("q").placeholder = `${examples[exampleAt++ % examples.length]}…`;
-  if (!$("q").value.trim() && !state.similar && state.hasFolders) renderEmpty(); // (its example result too)
 }
 setInterval(() => { if (!$("q").value && !state.similar) rotatePlaceholder(); }, 4500);
 
@@ -1646,16 +1645,20 @@ function waitingText() {
   return h("p", { class: "waiting" }, before, link, after);
 }
 
-// Nothing searched yet: with no folders, the sentence that adds one; else what the search box's
-// example would find. (Quiekel stays the logo at the top of the rail, nowhere else.)
+// Nothing searched yet: with no folders, the sentence that adds one; else "Search anything", in the
+// middle of the page. (Quiekel stays the logo at the top of the rail, nowhere else.)
 function renderEmpty() {
   const empty = $("empty");
-  empty.classList.remove("examples");
+  empty.classList.remove("anything");
   if (state.hasFolders === false) {
     empty.hidden = false;
     return empty.replaceChildren(waitingText());
   }
-  if (state.hasFolders && !$("q").value.trim() && !state.similar) return renderSample();
+  if (state.hasFolders && !$("q").value.trim() && !state.similar) {
+    empty.classList.add("anything");
+    empty.hidden = false;
+    return empty.replaceChildren(h("p", {}, t("search.anything")));
+  }
   empty.hidden = true;
   empty.replaceChildren();
 }
@@ -1664,69 +1667,8 @@ function renderMessage(msg) {
   state.results = [];
   $("results").replaceChildren();
   $("empty").hidden = false;
-  $("empty").classList.remove("examples");
+  $("empty").classList.remove("anything");
   $("empty").replaceChildren(h("p", {}, msg));
-}
-
-// ---------- examples on the empty page ----------
-//
-// The search box shows an example search; under it, what that search finds, as the current view
-// shows it: made-up files with drawn pictures, muted so they read as examples. A click runs the
-// example on your own files. They change with the search box's example.
-
-const svgData = (svg) => `data:image/svg+xml,${encodeURIComponent(svg)}`;
-const SAMPLE_PICTURES = {
-  board: svgData('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120"><rect width="160" height="120" fill="#d9d4ca"/>'
-    + '<rect x="14" y="13" width="132" height="84" rx="3" fill="#fbfbf8" stroke="#8f8f8a" stroke-width="3"/>'
-    + '<rect x="30" y="99" width="100" height="5" rx="2" fill="#8f8f8a"/><rect x="38" y="95" width="15" height="5" rx="2" fill="#1d4aff"/>'
-    + '<path d="M28 33h34M28 43h22" stroke="#1d4aff" stroke-width="3" stroke-linecap="round"/>'
-    + '<g fill="none" stroke="#d93025" stroke-width="2.5"><rect x="76" y="26" width="22" height="16" rx="3"/><rect x="110" y="26" width="22" height="16" rx="3"/><path d="M98 34h12"/></g>'
-    + '<path d="M28 63c12-8 22 8 34 0s22 8 34 0 22 8 34 0" fill="none" stroke="#2f9e44" stroke-width="2.5" stroke-linecap="round"/>'
-    + '<path d="M28 80h46M84 80h40" stroke="#6b6d65" stroke-width="2.5" stroke-linecap="round"/></svg>'),
-  beach: svgData('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120"><rect width="160" height="120" fill="#bfe3f7"/>'
-    + '<circle cx="122" cy="30" r="13" fill="#ffd166"/><path d="M0 64h160v28H0z" fill="#3d8fd1"/>'
-    + '<path d="M0 72c20-4 40 4 60 0s40-4 60 0 30 3 40 0" fill="none" stroke="#bfe3f7" stroke-width="2"/>'
-    + '<path d="M0 88c40-10 100-7 160 2v30H0z" fill="#f2d7a0"/>'
-    + '<path d="M24 62a20 12 0 0 1 40 0z" fill="#f2547f"/><path d="M44 62v34" stroke="#6b4b2a" stroke-width="2"/></svg>'),
-};
-const DAY = 86400;
-// In the order of the examples in search.examples. similarity is the meaning score (see matchShare).
-const SAMPLES = [
-  { key: "board", name: () => "IMG_2041.jpg", kind: "image", picture: "board", similarity: 0.782, size: 2.4e6, age: 3 * DAY },
-  { key: "letter", name: () => t("sample.letter.name"), kind: "doc", similarity: 0.776, size: 184e3, age: 16 * DAY, text: true },
-  { key: "photo", name: () => "IMG_0042.jpg", kind: "image", picture: "beach", exact: true, similarity: 0.7, size: 3.1e6, age: 6 * 365 * DAY },
-  { key: "script", name: () => t("sample.script.name"), kind: "code", similarity: 0.765, size: 2.1e3, age: 5 * DAY, text: true },
-];
-
-function renderSample() {
-  const empty = $("empty");
-  const examples = t("search.examples").split("|");
-  const at = (exampleAt - 1 + examples.length) % examples.length;
-  const s = SAMPLES[at];
-  if (!s) {
-    empty.hidden = true;
-    return empty.replaceChildren();
-  }
-  const r = {
-    file_id: 0, name: s.name(), dir: t(`sample.${s.key}.dir`), path: "", kind: s.kind, mtime: Date.now() / 1000 - s.age,
-    size: s.size, similarity: s.similarity, exact: !!s.exact, keyword: !!s.exact,
-    snippet: s.text ? t(`sample.${s.key}.text`) : "", preview: !!s.picture, picture: SAMPLE_PICTURES[s.picture],
-  };
-  const view = currentView();
-  const terms = state.terms;
-  state.terms = queryTerms(examples[at]); // (the example's words light up in its passage)
-  // A copy of a real result's markup, without its handlers and tooltips: nothing in it acts on a file.
-  const card = { cards: row, list: line, grid: tile }[view](r, 0).cloneNode(true);
-  state.terms = terms;
-  card.querySelectorAll(".actions").forEach((a) => a.remove());
-  card.querySelectorAll("[data-tip]").forEach((el) => delete el.dataset.tip);
-  card.inert = true; // (its folder button can't be tabbed to; the example as a whole is the one thing to click)
-  const sample = h("div", { class: `sample results ${view}`, onclick: () => { $("q").value = examples[at]; runSearch(); } },
-    view === "list" ? h("div", { class: "list-card" }, card) : card);
-  setTip(sample, t("search.try", { q: examples[at] }));
-  empty.classList.add("examples");
-  empty.hidden = false;
-  empty.replaceChildren(sample);
 }
 
 // The likely results first (the server puts them on top); the rest behind a divider that says how
@@ -1870,6 +1812,14 @@ function setSort(key) {
   if (state.fetched) renderResults(state.fetched.items, state.fetched.likely);
 }
 
+// A menu's chosen row says so at its end: a check (or which way it sorts). No frame: a menu is the
+// only frame around its rows.
+function menuMark(name) {
+  const mark = icon(name);
+  mark.classList.add("menu-mark");
+  return mark;
+}
+
 function openSortMenu() {
   const menu = $("sort-menu");
   const row = (key, name) => {
@@ -1877,7 +1827,7 @@ function openSortMenu() {
     const s = SORTS[key];
     const el = h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick: () => { setSort(key); openSortMenu(); } },
       icon(name), h("span", { class: "menu-name" }, t(`sort.${key}`)),
-      on && s ? icon(state.sort.desc ? "chevronDown" : "chevronUp") : null);
+      on ? menuMark(s ? (state.sort.desc ? "chevronDown" : "chevronUp") : "check") : null);
     if (on && s) setTip(el, t(s.dirs[state.sort.desc ? 1 : 0]));
     return el;
   };
@@ -2521,7 +2471,7 @@ function drawMap(now) {
   ctx.globalAlpha = 1;
   // The file pointed at and the selected one go on top, at full strength, with their rings: a dot
   // in front of them (a copy, a close neighbour) would cover them, and the ring would look off.
-  const marked = walk ? [[map.hover || map.rowHover, ink(0.8)]] : [[map.hover || map.rowHover, ink(0.8)], [map.selected, "#f54e00"]];
+  const marked = [[map.hover || map.rowHover, ink(0.8)], [map.selected, "#f54e00"]];
   if (walkFile) marked.push([map.byId.get(walkFile), "#f54e00"]);
   for (const [p, color] of marked) {
     const q = p && at.get(p.id);
@@ -2660,7 +2610,7 @@ function updateSteps() {
 }
 
 function showCard(p) {
-  $("map-card").hidden = map.view === "search" || map.view === "index"; // (a walk is its own card)
+  $("map-card").hidden = false;
   const name = $("mc-name");
   name.textContent = p.name;
   setTip(name, p.name);
@@ -2861,7 +2811,7 @@ async function mapSearch() {
     map.drag = null;
     if (!click) return;
     const p = mapHit(e);
-    if (p && map.view === "search") return; // (the search walk is about your words)
+    if (p && map.view === "search") return selectPoint(p, { fly: false }); // (the walk keeps its view)
     if (p) selectPoint(p);
     else if (map.selected && map.view === "map") clearSelection();
     if (p && map.view === "index") loadIndexWalk(); // (the walk goes on with this file)
@@ -2951,6 +2901,7 @@ function setMapView(view) {
   }
   const walk = view === "search" || view === "index";
   map.steps = walk ? { at: 0 } : null;
+  if (walk) $("map-side").scrollTop = 0; // (the walk's steps first, from the top)
   if (view === "near") {
     if (map.spinBefore === null) map.spinBefore = map.spin;
     map.spin = false;
@@ -2967,7 +2918,7 @@ function setMapView(view) {
   if (view === "search") loadSearchWalk();
   if (view === "index") loadIndexWalk();
   if (!walk && (was === "search" || was === "index")) flyTo(map.selected ? { zoom: FOCUS_ZOOM } : OVERVIEW);
-  $("map-card").hidden = walk || !map.selected;
+  $("map-card").hidden = !map.selected;
   $("map-q").placeholder = `${view === "search" ? walkWords() : t("nav.search")}…`;
   renderExplain();
   startMapLoop();
@@ -2984,15 +2935,9 @@ function centralPoint() {
   return best;
 }
 
-// Neighbours: its middle and the radius of the 0 % ring, in pixels. It's as big as the room left of
-// the card allows; its middle is in the middle of what the panel and the card leave free, so the
-// file there and its closest ones stay in sight (the outer rings may reach under them).
+// Neighbours: its middle and the radius of the 0 % ring, in pixels: as big as the map allows.
 function nearFrame(W, H, dpr) {
-  const side = (el) => (el.hidden ? 0 : el.getBoundingClientRect().width + 14);
-  const left = side($("map-explain")) * dpr, right = side($("map-card")) * dpr;
-  const room = W - right;
-  const r = Math.max(60 * dpr, Math.min(room / 2 - 24 * dpr, H / 2 - 30 * dpr) / NEAR_EDGE);
-  return { x: (left + room) / 2, y: H / 2, r };
+  return { x: W / 2, y: H / 2, r: Math.max(60 * dpr, Math.min(W / 2 - 24 * dpr, H / 2 - 30 * dpr) / NEAR_EDGE) };
 }
 
 // Where each file goes around the one in the middle: as far out as it's unlike it (the middle is
@@ -3034,7 +2979,13 @@ function showMe(what) {
   startMapLoop();
 }
 
-const toggleHelp = (open = !map.help) => { map.help = open; renderExplain(); startMapLoop(); };
+// (opened, it's scrolled into sight: under the file's card, the column may be taller than the map)
+const toggleHelp = (open = !map.help) => {
+  map.help = open;
+  renderExplain();
+  if (open) $("map-explain").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  startMapLoop();
+};
 
 // The panel: for the map and Neighbours, a few lines on what you see, each with a "show me"; for a
 // walk, its steps.
@@ -3045,7 +2996,7 @@ function renderExplain() {
   help.hidden = walk;
   help.classList.toggle("on", map.help && !walk);
   box.hidden = !(walk || map.help);
-  if (map.view === "near") layoutNear(); // (the free part of the map changed)
+  $("map-side").classList.toggle("walk", walk);
   if (box.hidden) return;
   const head = h("div", { class: "mx-head" }, icon(VIEW_ICON[map.view]), h("b", {}, t(`map.view.${map.view}`)),
     iconButton("close", t("common.close"), () => (walk ? setMapView("map") : toggleHelp(false)), "chip-x"));
@@ -3267,14 +3218,13 @@ let scopeFindTimer = null;
 
 async function openScopeMenu(box, path = state.scope?.path || "") {
   const menu = $("scope-menu");
-  const find = h("input", { type: "search", class: "input menu-find", spellcheck: "false", placeholder: `${t("scope.find")}…`,
-    "aria-label": t("scope.find") });
+  const find = h("input", { type: "search", spellcheck: "false", placeholder: `${t("scope.find")}…`, "aria-label": t("scope.find") });
   const list = h("div", { class: "menu-list" });
   find.addEventListener("input", () => {
     clearTimeout(scopeFindTimer);
     scopeFindTimer = setTimeout(() => fillScopeList(box, list, path, find.value.trim()), 150);
   });
-  menu.replaceChildren(find, list);
+  menu.replaceChildren(h("label", { class: "menu-find" }, icon("search"), find), list);
   if (!(await fillScopeList(box, list, path, ""))) return;
   menu.hidden = false;
   const r = box.getBoundingClientRect();
@@ -3298,7 +3248,8 @@ async function fillScopeList(box, list, path, text) {
   const isScope = (p) => state.scope?.path.toLowerCase() === p.toLowerCase();
   const row = (name, label, count, onclick, { on = false, open = null } = {}) => {
     const main = h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick },
-      icon(name), h("span", { class: "menu-name" }, label), count != null ? h("span", { class: "menu-count" }, fmt(count)) : null);
+      icon(name), h("span", { class: "menu-name" }, label), on ? menuMark("check") : null,
+      count != null ? h("span", { class: "menu-count" }, fmt(count)) : null);
     if (!open) return main;
     const more = h("button", { type: "button", class: "menu-open", onclick: open }, icon("chevronRight"));
     setTip(more, t("scope.inside"));

@@ -324,7 +324,8 @@ svg.i .frame { stroke-width: 2.6; }
 }
 .seg button:hover { color: var(--ink); background: var(--hover); }
 .seg button.active { background: var(--card); color: var(--ink); border-color: var(--border-strong); }
-.toolbar .seg, .map-bar .seg { gap: var(--gap-in); padding: 0; background: none; border-color: transparent; }
+.toolbar .seg, .map-bar .seg, .card .seg, .map-card .seg { gap: var(--gap-in); padding: 0; background: none; border-color: transparent; }
+.card .seg button { width: var(--ctl-sm); height: var(--ctl-sm); }
 .toolbar .seg button, .map-bar .seg button { width: var(--ctl); height: var(--ctl); }
 
 /* A filter that's on (the file whose similar files are shown): a chosen control, card colour and a
@@ -368,13 +369,19 @@ svg.i .frame { stroke-width: 2.6; }
   background: none; border: 0; border-radius: 6px; text-align: left; color: var(--text); font-size: 13px;
 }
 .menu-row:hover { background: var(--well); color: var(--ink); }
-.menu-row.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
+.menu-row.on { color: var(--ink); font-weight: 600; }
 .menu-row svg.i { width: 16px; height: 16px; color: var(--faint); }
+.menu-row svg.i.menu-mark { color: var(--ink); }
 .menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-count { font: 600 11px var(--mono); color: var(--faint); }
 .menu-empty { padding: 8px 10px; color: var(--faint); font-size: 12px; }
-/* The folder menu: a field that finds a folder by name; rows with a › that shows the folders inside. */
-.menu-find { width: 100%; height: var(--ctl-sm); margin-bottom: 4px; font-size: 13px; }
+/* The folder menu: a field that finds a folder by name, as a row of the menu with a line under it;
+   rows with a › that shows the folders inside. */
+.menu-find { display: flex; align-items: center; gap: 9px; margin: -4px -4px 4px; padding: 0 13px; border-bottom: 1px solid var(--border); cursor: text; }
+.menu-find svg.i { flex: none; width: 16px; height: 16px; color: var(--faint); }
+.menu-find input { flex: 1; min-width: 0; height: 38px; padding: 0; border: 0; outline: 0; background: none; font-size: 13px; color: var(--ink); }
+.menu-find input::placeholder { color: var(--faint); }
+.menu-find:focus-within svg.i { color: var(--muted); }
 .menu-line { display: flex; align-items: center; gap: 2px; }
 .menu-line .menu-row { flex: 1; min-width: 0; }
 .menu-open {
@@ -427,7 +434,7 @@ svg.i .frame { stroke-width: 2.6; }
 .result.selected, .tile.selected { border-color: var(--faint); }
 .thumb {
   width: 88px; height: 88px; flex: none; border-radius: 5px; object-fit: contain; /* the whole picture, never squashed */
-  background: var(--well); border: 1px solid var(--border); cursor: zoom-in;
+  background: var(--well); cursor: zoom-in;
 }
 /* A file without a picture: its kind's icon and its extension, muted; as wide as a thumbnail, so
    the text beside it starts where it does next to a picture. */
@@ -498,7 +505,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .match-ring .a { stroke: hsl(var(--hue) var(--match-s) var(--match-l)); stroke-linecap: round; }
 .aa {
   font: 800 10px/16px var(--sans); padding: 0 4px; border-radius: 4px;
-  background: var(--well); color: var(--muted); border: 1px solid var(--border);
+  background: var(--well); color: var(--muted);
 }
 
 .tile {
@@ -544,13 +551,12 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .empty p { margin: 0; font-weight: 600; }
 .empty p.waiting { max-width: 380px; text-align: center; font-size: 15px; font-weight: 500; line-height: 1.6; color: var(--muted); text-wrap: balance; }
 .empty.compact { padding: 40px 20px; }
-/* Nothing searched yet: the search box's example, as a result would look, muted; a new one fades in
-   with every new example. */
-.empty.examples { padding: 0; align-items: stretch; }
-.sample { opacity: .5; cursor: pointer; animation: sample-in .5s ease; }
-.sample:hover { opacity: .75; }
-.sample * { pointer-events: none; }
-@keyframes sample-in { from { opacity: 0; } }
+/* Nothing searched yet: "Search anything", in the middle of what's left of the window under the
+   search box (the page takes the window's height for it). */
+.main:has(> #page-search:not([hidden]) > #empty.anything:not([hidden])) { height: 100vh; display: flex; flex-direction: column; }
+.main:has(> #page-search:not([hidden]) > #empty.anything:not([hidden])) > #page-search { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+.empty.anything { flex: 1; justify-content: center; padding: 0 20px 8vh; }
+.empty.anything p { font: 600 22px/1.3 var(--display); color: var(--faint); text-align: center; }
 .link {
   cursor: pointer; font-weight: 700; color: var(--ink);
   text-decoration: underline; text-decoration-color: var(--orange); text-decoration-thickness: 2px; text-underline-offset: 3px;
@@ -574,8 +580,15 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 /* The map's own controls, on the map */
 .map-tools { position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; gap: var(--gap); }
 .map-count { font: 600 12px var(--mono); color: var(--muted); cursor: help; }
+/* The map, and beside it what's open about it: the picked file's card and the panel that explains
+   the view (or walks through it). Nothing lies on the map; the column is there while something's in
+   it. A walk is the view's content, so its panel goes first; else the card does. */
+.map-main { flex: 1; min-height: 0; display: flex; gap: var(--gap); }
+.map-side { flex: none; width: 284px; min-height: 0; display: flex; flex-direction: column; gap: var(--gap); overflow: auto; }
+.map-side:not(:has(> :not([hidden]))) { display: none; }
+.map-side.walk > .map-explain { order: -1; }
 .map-stage {
-  position: relative; flex: 1; min-height: 280px;
+  position: relative; flex: 1; min-width: 0; min-height: 280px;
   background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
 }
 #map-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
@@ -583,10 +596,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 /* The first layout is being worked out: the waiting hourglass in the middle of the cube. */
 .map-busy { color: var(--muted); cursor: help; }
 .map-busy svg.i { width: 30px; height: 30px; }
-.map-card {
-  position: absolute; top: 14px; right: 14px; width: 248px; max-height: calc(100% - 28px); overflow: auto; padding: 12px;
-  background: var(--card); border: 1px solid var(--border-strong); border-radius: 10px;
-}
+.map-card { flex: none; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
 .mc-head { display: flex; align-items: flex-start; gap: 2px; }
 .mc-head .chip-x { flex: none; color: var(--muted); }
 .mc-head .chip-x:hover { color: var(--ink); background: var(--hover); }
@@ -606,11 +616,11 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mc-view { height: 150px; margin-bottom: 10px; }
 .mc-preview {
   height: 100%; display: grid; place-items: center; overflow: hidden;
-  border-radius: 6px; background: var(--well); border: 1px solid var(--border);
+  border-radius: 6px;
 }
-.mc-preview img { width: 100%; height: 100%; object-fit: contain; cursor: pointer; display: block; }
+.mc-preview img { width: 100%; height: 100%; object-fit: contain; cursor: pointer; display: block; background: var(--well); border-radius: 6px; }
 .mc-text {
-  margin: 0; padding: 8px 10px; align-self: start; justify-self: stretch; font-size: 12px; line-height: 1.45;
+  margin: 0; padding: 0; align-self: start; justify-self: stretch; font-size: 12px; line-height: 1.45;
   color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden;
 }
@@ -618,7 +628,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mc-none svg.i { width: 34px; height: 34px; color: var(--faint); }
 .mc-print {
   display: block; width: 150px; height: 150px; margin: 0 auto; border-radius: 6px; background: var(--well);
-  border: 1px solid var(--border); image-rendering: pixelated; cursor: crosshair;
+  image-rendering: pixelated; cursor: crosshair;
 }
 .mc-label { font-size: 11px; font-weight: 700; color: var(--faint); margin: 0 0 2px 6px; }
 .mc-label:has(+ .mc-related:empty) { display: none; }
@@ -647,13 +657,10 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mc-foot { display: flex; align-items: center; gap: 6px; }
 .map-card .actions { margin: 0; justify-content: flex-start; }
 
-/* The map's views, at the bar's end like the search page's; the panel that explains them, on the
-   left (the same frame as the card on the right). */
+/* The map's views, at the bar's end like the search page's; the panel that explains them, in the
+   column beside the map (a card like the file's). */
 .map-views { margin-left: auto; }
-.map-explain {
-  position: absolute; top: 14px; left: 14px; width: 268px; max-height: calc(100% - 76px); overflow: auto; padding: 12px;
-  background: var(--card); border: 1px solid var(--border-strong); border-radius: 10px;
-}
+.map-explain { flex: none; padding: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; }
 .mx-head { display: flex; align-items: center; gap: 8px; }
 .mx-head > svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
 .mx-head b { flex: 1; min-width: 0; color: var(--ink); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -669,7 +676,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mx-text { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--text); }
 .mx-visual { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 10px; }
 .mx-words { max-width: 100%; font-weight: 600; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
-.mx-print { display: block; border-radius: 4px; border: 1px solid var(--border); background: var(--well); image-rendering: pixelated; flex: none; }
+.mx-print { display: block; border-radius: 4px; background: var(--well); image-rendering: pixelated; flex: none; }
 .mx-caption { font-size: 11px; color: var(--faint); text-align: center; }
 .mx-prints { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
 .mx-arrow svg.i { width: 16px; height: 16px; color: var(--faint); display: block; }
@@ -685,7 +692,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mx-dir { align-self: stretch; font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-thumb { display: block; max-width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; }
 .mx-thumb.small { max-height: 48px; }
-.mx-sample { align-self: stretch; padding: 8px 10px; border-radius: 6px; background: var(--well); border: 1px solid var(--border); }
+.mx-sample { align-self: stretch; }
 .mx-sample p {
   margin: 0; font-size: 12px; line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden;
@@ -783,17 +790,14 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .fm-bar .skip, .fm-legend .skip i { background: var(--border-strong); }
 .fm-bar .bad, .fm-legend .bad i { background: var(--red); }
 /* A few numbers in one strip */
-.fm-stats {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 1px;
-  background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-}
-.fm-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 14px; background: var(--well); }
+.fm-stats { display: flex; flex-wrap: wrap; gap: 10px 36px; }
+.fm-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .fm-stat span { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fm-stat span svg.i { flex: none; width: 14px; height: 14px; color: var(--faint); }
 .fm-stat b { font: 700 17px/1.25 var(--display); color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fm-section-head { display: flex; align-items: center; justify-content: space-between; min-height: 28px; margin-bottom: 8px; }
 .fm-label { font-size: 12px; font-weight: 700; color: var(--muted); }
-.fm-list { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.fm-list { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .fm-file { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 12px; }
 .fm-file + .fm-file { border-top: 1px solid var(--border); }
 .fm-file.new { background: var(--red-bg); }
@@ -848,7 +852,7 @@ label.set-row { cursor: pointer; }
 .meter { cursor: help; }
 .meter-row { display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .02em; }
 .meter-row b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
-.meter-bar { height: 8px; border-radius: 999px; background: var(--well); border: 1px solid var(--border); overflow: hidden; margin-top: 6px; }
+.meter-bar { height: 8px; border-radius: 999px; background: var(--well); overflow: hidden; margin-top: 6px; }
 .meter-bar i { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--green); transition: width .6s ease, background .3s; }
 .meter-bar i.mid { background: var(--yellow); }
 .meter-bar i.high { background: var(--red); }
@@ -922,7 +926,7 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .fm-body, .tm-body, .um-notes { margin-right: -14px; padding-right: 2px; scrollbar-gutter: stable; }
 .modal-text { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
 .notes {
-  margin: 12px 0 0; padding: 12px 14px; background: var(--well); border: 1px solid var(--border); border-radius: 6px;
+  margin: 12px 0 0; padding: 0;
   font: 13px/1.6 var(--sans); color: var(--text); white-space: pre-wrap; overflow: auto; max-height: 320px;
 }
 .notes:empty { display: none; }
@@ -947,7 +951,7 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 }
 .type-chip.static { cursor: default; background: var(--card); border-color: var(--border); }
 .type-chip small { color: var(--faint); font-size: 11px; }
-.tm-rules { border: 1px solid var(--border); border-radius: 8px; }
+.tm-rules { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .tm-rule { display: flex; align-items: center; gap: 10px; padding: 7px 12px; cursor: pointer; }
 .tm-rule + .tm-rule { border-top: 1px solid var(--border); }
 .tm-rule > svg.i { flex: none; width: 18px; height: 18px; color: var(--faint); }
@@ -991,7 +995,7 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .dg-legend i { width: 8px; height: 8px; border-radius: 2px; }
 .dg-legend b { color: var(--ink); font-weight: 600; margin-left: 2px; }
 .dg-time { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-.dg-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.dg-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--well); }
 .dg-bar i { display: block; height: 100%; }
 
 /* A folder's details: watch and rescan in the head; the folders inside, each with a switch. */

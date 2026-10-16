@@ -83,38 +83,42 @@
           <button type="button" role="radio" aria-checked="false" data-view="index" data-icon="docSteps" data-i18n-tip="map.view.index"></button>
         </div>
       </div>
-      <div class="map-stage" id="map-stage">
-        <canvas id="map-canvas"></canvas>
-        <span class="map-center map-busy" id="map-busy" data-icon="timer" data-i18n-tip="map.computing" hidden></span>
-        <div class="map-explain" id="map-explain" hidden></div>
-        <div class="map-tools">
-          <button class="icon-btn" id="map-help" data-icon="help" data-i18n-tip="map.help"></button>
-          <button class="icon-btn on" id="map-spin" data-icon="turntable"></button>
-          <button class="icon-btn" id="map-reset" data-icon="focus" data-i18n-tip="map.reset"></button>
-          <span class="map-count" id="map-count" hidden></span>
+      <div class="map-main">
+        <div class="map-stage" id="map-stage">
+          <canvas id="map-canvas"></canvas>
+          <span class="map-center map-busy" id="map-busy" data-icon="timer" data-i18n-tip="map.computing" hidden></span>
+          <div class="map-tools">
+            <button class="icon-btn" id="map-help" data-icon="help" data-i18n-tip="map.help"></button>
+            <button class="icon-btn on" id="map-spin" data-icon="turntable"></button>
+            <button class="icon-btn" id="map-reset" data-icon="focus" data-i18n-tip="map.reset"></button>
+            <span class="map-count" id="map-count" hidden></span>
+          </div>
         </div>
-        <div class="map-card" id="map-card" hidden>
-          <div class="mc-head">
-            <div class="mc-name" id="mc-name"></div>
-            <button type="button" class="chip-x" id="mc-close" data-icon="close" data-i18n-tip="common.close"></button>
+        <div class="map-side" id="map-side">
+          <div class="map-card" id="map-card" hidden>
+            <div class="mc-head">
+              <div class="mc-name" id="mc-name"></div>
+              <button type="button" class="chip-x" id="mc-close" data-icon="close" data-i18n-tip="common.close"></button>
+            </div>
+            <button type="button" class="mc-dir" id="mc-dir"></button>
+            <div class="seg mc-tabs" id="mc-tabs" role="tablist">
+              <button type="button" role="tab" data-tab="preview" data-icon="image" data-i18n-tip="map.preview"></button>
+              <button type="button" role="tab" data-tab="print" data-icon="dots" data-i18n-tip="map.fingerprint"></button>
+            </div>
+            <div class="mc-view">
+              <div class="mc-preview" id="mc-preview"></div>
+              <canvas class="mc-print" id="mc-print" width="160" height="160" hidden></canvas>
+            </div>
+            <div class="mc-label" data-i18n="map.closest" data-i18n-tip="map.closest_tip"></div>
+            <div class="mc-related" id="mc-related"></div>
+            <div class="mc-foot">
+              <div class="actions" id="mc-actions"></div>
+              <span class="toolbar-gap"></span>
+              <button type="button" class="icon-btn small" id="mc-back" data-icon="arrowLeft" data-i18n-tip="map.back"></button>
+              <button type="button" class="icon-btn small" id="mc-forward" data-icon="arrowRight" data-i18n-tip="map.forward"></button>
+            </div>
           </div>
-          <button type="button" class="mc-dir" id="mc-dir"></button>
-          <div class="seg mc-tabs" id="mc-tabs" role="tablist">
-            <button type="button" role="tab" data-tab="preview" data-icon="image" data-i18n-tip="map.preview"></button>
-            <button type="button" role="tab" data-tab="print" data-icon="dots" data-i18n-tip="map.fingerprint"></button>
-          </div>
-          <div class="mc-view">
-            <div class="mc-preview" id="mc-preview"></div>
-            <canvas class="mc-print" id="mc-print" width="160" height="160" hidden></canvas>
-          </div>
-          <div class="mc-label" data-i18n="map.closest" data-i18n-tip="map.closest_tip"></div>
-          <div class="mc-related" id="mc-related"></div>
-          <div class="mc-foot">
-            <div class="actions" id="mc-actions"></div>
-            <span class="toolbar-gap"></span>
-            <button type="button" class="icon-btn small" id="mc-back" data-icon="arrowLeft" data-i18n-tip="map.back"></button>
-            <button type="button" class="icon-btn small" id="mc-forward" data-icon="arrowRight" data-i18n-tip="map.forward"></button>
-          </div>
+          <div class="map-explain" id="map-explain" hidden></div>
         </div>
       </div>
     </section>
