@@ -709,11 +709,11 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mx-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; padding-top: 20px; }
 .mx-part { font-size: 11px; font-weight: 700; color: var(--faint); }
 .mx-title { margin-top: 4px; font: 700 19px/1.25 var(--display); color: var(--ink); letter-spacing: -.01em; }
-.mx-text { margin: 6px 0 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.mx-text { margin: 6px 0 0; min-height: 3.1em; font-size: 13px; line-height: 1.55; color: var(--muted); } /* (two lines kept: what a step shows stays in place) */
 /* (a size container: what a step shows takes the room there is) */
 .mx-stage { flex: 1; min-height: 0; margin: 20px 0 8px; container-type: size; overflow: auto; }
 .mx-visual { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
-.mx-visual.list { justify-content: flex-start; align-items: stretch; }
+.mx-visual.wide { align-items: stretch; } /* (lists: the width of the panel) */
 .mx-words { max-width: 100%; font-size: 20px; font-weight: 700; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
 .mx-print { display: block; border-radius: 4px; background: var(--well); image-rendering: pixelated; flex: none; }
 .mx-caption { font-size: 11px; color: var(--faint); text-align: center; }
@@ -721,15 +721,11 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mx-in { animation: mx-in .42s cubic-bezier(.2, .8, .3, 1) both; animation-delay: calc(var(--i, 0) * 90ms); }
 .mx-in.late { animation-delay: 950ms; }
 @keyframes mx-in { from { opacity: 0; transform: translateY(8px); } }
-/* A file being read: a line goes down it. */
-.mx-read { position: relative; align-self: stretch; display: grid; place-items: center; overflow: hidden; border-radius: 6px; }
-.mx-read.text { place-items: stretch; }
-/* (the file large: a page or picture whole, a text as many whole lines as fit) */
-.mx-page { display: block; max-width: 100%; max-height: calc(100cqh - 70px); object-fit: contain; border-radius: 6px; }
-.mx-sheet {
-  margin: 0; font-size: 13px; line-height: 1.6; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden;
-  max-height: calc(100cqh - 70px); max-height: round(down, calc(100cqh - 70px), 20.8px);
-}
+/* A file being read: a line goes down its page (on a light tint, as tall as the room). */
+.mx-read { position: relative; flex: 1 0 auto; align-self: stretch; display: flex; flex-direction: column; overflow: hidden; border-radius: 6px; }
+.mx-letter { flex: 1 0 auto; padding: 18px 20px; border-radius: 6px; background: var(--well); font-size: 13px; line-height: 1.7; color: var(--text); }
+.mx-letter p { margin: 0 0 12px; }
+.mx-letter p:last-child { margin: 0; }
 .mx-read::after {
   content: ""; position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--orange);
   animation: mx-scan 1.3s ease-in-out .5s both;
@@ -740,7 +736,7 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mx-prints.merge > canvas { animation: mx-merge .55s cubic-bezier(.5, 0, .75, .3) both; animation-delay: calc(300ms + var(--i, 0) * 45ms); }
 @keyframes mx-merge { to { transform: translate(var(--dx, 0), var(--dy, 80px)) scale(.4); opacity: 0; } }
 /* The closest in meaning: bars filling up, in the match ring's colours. */
-.mx-bars { align-self: stretch; display: flex; flex-direction: column; gap: 12px; }
+.mx-bars { align-self: stretch; display: flex; flex-direction: column; gap: clamp(8px, 2.2cqh, 14px); }
 .mx-bar-row { display: grid; grid-template-columns: auto minmax(0, 1fr) 32% auto; align-items: center; gap: 10px; font-size: 13px; color: var(--text); }
 .mx-bar-row b { min-width: 34px; text-align: right; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 .mx-bar { height: 8px; border-radius: 4px; background: var(--well); overflow: hidden; }
@@ -751,31 +747,37 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 @keyframes mx-bar { from { width: 0; } }
 /* How many files hold your words, counted up. */
 .mx-count { font: 800 64px/1 var(--display); color: var(--ink); font-variant-numeric: tabular-nums; }
-.mx-passages { align-self: stretch; display: flex; flex-direction: column; gap: 14px; }
-.mx-passage { display: flex; align-items: flex-start; gap: 12px; font-size: 13px; line-height: 1.6; color: var(--text); }
+/* The page comes apart into its passages (the last one is the rest of the page), numbered. */
+.mx-pieces { flex: 1 0 auto; align-self: stretch; display: flex; flex-direction: column; gap: 10px; }
+.mx-piece { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border-radius: 6px; background: var(--well); font-size: 13px; line-height: 22px; color: var(--text); }
+.mx-piece:last-child { flex: 1 0 auto; }
+.mx-piece p { margin: 0; min-width: 0; }
+.mx-piece + .mx-piece { animation: mx-apart .5s cubic-bezier(.2, .8, .3, 1) both; animation-delay: calc(150ms + var(--i, 0) * 150ms); }
+@keyframes mx-apart { from { margin-top: -10px; } }
+.mx-num { flex: none; width: 14px; font: 700 12px/22px var(--mono); color: var(--faint); text-align: right; animation: mx-fade .3s ease both; animation-delay: calc(250ms + var(--i, 0) * 150ms); }
+@keyframes mx-fade { from { opacity: 0; } }
+/* Each passage beside its numbers: the rows share the room, the numbers as tall as a row. */
+.mx-visual.rows { height: 100%; }
+.mx-rows { flex: 1; min-height: 0; align-self: stretch; display: grid; grid-template-rows: repeat(var(--n, 3), minmax(0, 1fr)); gap: 12px; }
+.mx-row { display: flex; align-items: center; gap: 14px; min-height: 0; font-size: 13px; line-height: 1.6; color: var(--text); }
 .mx-ptext {
-  min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: var(--lines, 3); -webkit-box-orient: vertical; overflow: hidden;
+  flex: 1; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: var(--lines, 3); -webkit-box-orient: vertical; overflow: hidden;
 }
-.mx-num { flex: none; width: 18px; font: 700 12px/1.75 var(--mono); color: var(--faint); text-align: right; }
-.mx-passage em { font-style: normal; font-weight: 600; color: var(--muted); margin-right: 4px; }
+/* The files that hold your words: each name, and the words in it marked (as a result shows them). */
+.mx-hits { align-self: stretch; display: flex; flex-direction: column; gap: 14px; margin-top: 10px; }
+.mx-hit-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+.mx-snip {
+  margin: 4px 0 0 16px; color: var(--text); font-size: 13px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
 .mx-file { align-self: stretch; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .mx-file svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
 .mx-file b { min-width: 0; font-size: 14px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-dir { align-self: stretch; font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mx-thumb { display: block; max-width: 100%; max-height: 64px; object-fit: contain; border-radius: 4px; }
 .mx-results { align-self: stretch; min-height: 0; margin-bottom: 0; }
 .mx-results .mc-rel { height: 32px; font-size: 13px; }
 .mx-results .more-divider { margin: 4px 0; min-height: 22px; cursor: default; }
-/* (a link to the search, plain) */
-.mx-link {
-  display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 0; border: 0; background: none; cursor: pointer;
-  font: inherit; font-size: 13px; font-weight: 600; color: var(--muted);
-}
-.mx-link:hover { color: var(--ink); text-decoration: underline; }
-.mx-link svg.i { width: 15px; height: 15px; }
 .mx-result { cursor: default; }
-.mx-skel { width: 100%; height: 120px; }
-.mx-error { margin: 10px 0 0; font-size: 12px; color: var(--red); }
 /* (at the panel's foot: the buttons stay put from step to step) */
 .mx-nav { display: flex; align-items: center; gap: var(--gap); padding-top: 12px; }
 .mx-dots { flex: 1; display: flex; justify-content: center; gap: 6px; }

@@ -1189,25 +1189,6 @@ impl Store {
             .flatten()
     }
 
-    /// A file's first passages, in order (at most `limit`): their number, text ("" for a
-    /// picture), the page they start on (0: none) and vector.
-    pub fn file_passages(&self, file_id: i64, limit: usize) -> Vec<(i64, String, i64, Vec<f32>)> {
-        let (lo, hi) = fts_range(file_id);
-        let db = self.reader.lock();
-        let Ok(mut st) = db.prepare_cached(
-            "SELECT v.id, COALESCE(f.text, ''), COALESCE(v.page, 0), v.vector FROM vectors v
-             LEFT JOIN chunks_fts f ON f.rowid = v.id WHERE v.id BETWEEN ? AND ? ORDER BY v.id LIMIT ?",
-        ) else {
-            return Vec::new();
-        };
-        let rows = st.query_map(params![lo, hi, limit as i64], |r| {
-            let mut vector = Vec::with_capacity(EMBED_DIM);
-            from_blob(r.get_ref(3)?.as_blob()?, &mut vector);
-            Ok((r.get::<_, i64>(0)? & CHUNK_MASK, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, vector))
-        });
-        rows.map(|rows| rows.flatten().collect()).unwrap_or_default()
-    }
-
     /// The start of a file's text, as shown in search results ("" for pictures).
     pub fn first_passage(&self, file_id: i64) -> String {
         let db = self.reader.lock();
