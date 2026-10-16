@@ -336,6 +336,8 @@ pub struct Indexer {
     ram_low_since: Mutex<Option<Instant>>, // since when memory has been almost full
     // Folders paused on their card: their work waits, the others' goes on.
     paused_folders: Mutex<HashSet<i64>>,
+    // Folders the last scan didn't find (a drive not plugged in, moved, renamed): their files stay.
+    missing: Mutex<HashSet<i64>>,
     current_folder: Mutex<Option<i64>>,
     recent: Mutex<VecDeque<(Instant, usize)>>,
     cores: AtomicUsize, // the processor's cores, for reading files at once
@@ -379,6 +381,7 @@ impl Indexer {
             vram_full_at: Mutex::new(None),
             ram_low_since: Mutex::new(None),
             paused_folders: Mutex::new(HashSet::new()),
+            missing: Mutex::new(HashSet::new()),
             current_folder: Mutex::new(None),
             recent: Mutex::new(VecDeque::with_capacity(120)),
             cores: AtomicUsize::new(crate::machine::profile().cores),
@@ -497,6 +500,19 @@ impl Indexer {
     pub fn resume_folder(&self, folder_id: i64) {
         self.paused_folders.lock().remove(&folder_id);
         self.enqueue_scan(folder_id); // (picks up what's still pending, and what changed meanwhile)
+    }
+
+    /// Folders the last scan didn't find.
+    pub fn missing_folders(&self) -> HashSet<i64> {
+        self.missing.lock().clone()
+    }
+
+    /// A folder that's gone into another (taken over): its work stops (the other's scan picks up
+    /// what was left) and nothing of it waits any longer.
+    pub fn forget_folder(&self, folder_id: i64) {
+        self.cancelled.lock().insert(folder_id);
+        self.paused_folders.lock().remove(&folder_id);
+        self.missing.lock().remove(&folder_id);
     }
 
     pub fn paused_folders(&self) -> HashSet<i64> {
@@ -794,6 +810,11 @@ impl Indexer {
     /// `report` why everything else isn't.
     fn walk(&self, root: &str, folder_id: i64, report: &mut Report, types: &Types, containers: &mut Containers, out: &mut dyn FnMut(Found)) {
         let data_dir = config::DATA_DIR.to_string_lossy().to_string();
+        // (folders inside that you left out: passed by, said so in the report)
+        let left: Vec<String> = self.store.left_out(folder_id);
+        if left.iter().any(|l| is_inside(root, l)) {
+            return;
+        }
         let mut stack = vec![root.to_string()];
         while let Some(d) = stack.pop() {
             if self.cancelled.lock().contains(&folder_id) {
@@ -822,7 +843,9 @@ impl Indexer {
                 let Ok(meta) = e.metadata() else { continue };
                 let (hidden, system) = attributes(&meta);
                 if ft.is_dir() {
-                    if let Some(why) = types.skip_dir(&name, hidden, system, &here) {
+                    if left.iter().any(|l| is_inside(&path, l)) {
+                        report.note("left_out", &path);
+                    } else if let Some(why) = types.skip_dir(&name, hidden, system, &here) {
                         report.note(why, &path);
                     } else if !types.rule("program_folders") && Path::new(&path).join("CACHEDIR.TAG").is_file() {
                         report.note("program_folder", &path); // a cache, marked as one by the program that made it
@@ -864,10 +887,12 @@ impl Indexer {
         let root = folder.path.clone();
         self.set(json!({"state": "scanning", "folder": root, "found": 0}));
         if !Path::new(&root).is_dir() {
+            self.missing.lock().insert(folder_id);
             self.set(json!({"state": "error", "message": format!("Folder not found: {root}")}));
             self.nap(Duration::from_secs(2));
             return Ok(());
         }
+        self.missing.lock().remove(&folder_id);
         let types = self.types();
         let known = self.store.file_signatures(folder_id);
         let known_ci: HashMap<String, (i64, i64, f64, String)> = known.iter().map(|(p, v)| (normcase(p), v.clone())).collect();
@@ -923,6 +948,7 @@ impl Indexer {
         let folders: Vec<_> = self.store.folders().into_iter().filter(|f| f.watch != 0).collect();
         let types = self.types();
         let data_dir = config::DATA_DIR.to_string_lossy().to_string();
+        let left: HashMap<i64, Vec<String>> = folders.iter().map(|f| (f.id, self.store.left_out(f.id))).collect();
         let mut removed = Vec::new();
         let mut by_folder: Vec<(i64, String, Vec<Found>)> = Vec::new();
         let mut unique = HashSet::new();
@@ -931,8 +957,8 @@ impl Indexer {
                 continue;
             }
             let Some(folder) = folders.iter().find(|f| is_inside(p, &f.path)) else { continue };
-            if is_inside(p, &data_dir) {
-                continue;
+            if is_inside(p, &data_dir) || left[&folder.id].iter().any(|l| is_inside(p, l)) {
+                continue; // (and what's in the folders you left out)
             }
             let rel = relative(p, &folder.path);
             let parts: Vec<&str> = rel.split('\\').filter(|x| !x.is_empty()).collect();

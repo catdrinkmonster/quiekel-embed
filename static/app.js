@@ -469,7 +469,10 @@ function route() {
   if (state.page === "search") $("q").focus();
   if (state.page === "map") openMap();
   if (state.page === "diagnostics") refreshDiagnostics();
-  if (state.page === "folders" && state.last) showProblemsBadge(state.last.folders); // seen: the badge goes
+  if (state.page === "folders" && state.last) {
+    showProblemsBadge(state.last.folders); // seen: the badge goes
+    renderGlance(state.last.folders);
+  }
 }
 
 window.addEventListener("hashchange", route);
@@ -673,48 +676,84 @@ function renderFolders(folders, progress, phase) {
   if (hadFolders !== state.hasFolders && !$("q").value.trim() && !state.similar) renderEmpty();
   if (key === state.foldersKey) return;
   state.foldersKey = key;
+  const open = !$("folder-modal").hidden && folders.find((f) => f.id === state.folderInfo);
+  if (open) renderFolderSummary(open); // (its numbers follow, as files come and go)
 
+  // The rows stay the same elements while their numbers change (a click that lands while one is
+  // drawn anew would be lost); only what changed is drawn again.
   const list = $("folders");
-  list.replaceChildren();
-  if (!folders.length) {
-    list.append(h("div", { class: "empty compact" }, waitingText()));
+  if (list.dataset.lang !== i18n.lang) {
+    list.replaceChildren();
+    list.dataset.lang = i18n.lang;
   }
-  for (const f of folders) {
-    const here = active === f.path;
-    const working = here && phase !== "paused"; // (everything paused: the rail turns it back on)
-    // Clicking the folder searches inside it.
-    const main = h("button", { type: "button", class: "folder-main", onclick: () => { setScope(f.path); goTo("search"); } },
-      h("span", { class: "folder-icon" }, icon("folder")),
-      h("span", { class: "folder-text" },
-        h("span", { class: "folder-name" }, baseName(f.path)),
-        h("span", { class: "folder-path" }, f.path)));
-    setTip(main, t("scope.here"));
-    list.append(h("div", { class: `folder${here ? ` active ${phase}` : ""}` },
-      main,
-      h("div", { class: "folder-side" },
-        h("div", { class: "stats" },
-          stat("doc", fmt(f.indexed), t("folders.col.files")),
-          stat("image", fmt(f.images), t("folders.col.images")),
-          f.errors ? stat("alert", fmt(f.errors), tp("folders.unreadable", f.errors), "bad", () => openFolderInfo(f)) : null,
-          f.paused ? stat("pause", "", t("activity.paused"), "phase paused")
-            : here ? phaseStat(phase, progress) : stat("clock", ago(f.last_scan_at), t("folders.col.scanned"))),
-        h("div", { class: "folder-actions" },
-          // Pausing a folder here holds just this one; the others go on (the rail pauses everything).
-          f.paused || working ? iconButton(f.paused ? "play" : "pause", t(f.paused ? "activity.resume" : "activity.pause"),
-            () => post(`/api/folders/${f.id}/${f.paused ? "resume" : "pause"}`).then(refresh).catch((e) => toast(e.message, "alert")),
-            f.paused ? "primary" : "") : null,
-          iconButton("info", t("folder.details"), () => openFolderInfo(f)),
-          iconButton(f.watch ? "eye" : "eyeOff", t("folders.watch_title"),
-            () => post(`/api/folders/${f.id}/watch`, { watch: !f.watch }).then(refresh), f.watch ? "on" : ""),
-          iconButton("refresh", t("folders.rescan_title"),
-            () => post(`/api/folders/${f.id}/rescan`).then(() => { toast(t("folders.rescan_queued"), "refresh"); refresh(); })),
-          iconButton("trash", t("folders.remove_title"), () => removeFolder(f), "danger"))),
-    ));
+  const rows = new Map([...list.querySelectorAll(":scope > .folder")].map((el) => [el.dataset.id, el]));
+  const wanted = folders.map((f) => {
+    const row = rows.get(String(f.id)) || folderRow();
+    rows.delete(String(f.id));
+    fillFolderRow(row, f, active, phase, progress);
+    return row;
+  });
+  for (const gone of rows.values()) gone.remove();
+  list.querySelector(":scope > .empty")?.remove();
+  if (!folders.length) wanted.push(h("div", { class: "empty compact" }, waitingText()));
+  // Where the next folder would go: a click picks one.
+  let slot = list.querySelector(":scope > .add-slot");
+  if (!slot) {
+    slot = h("button", { type: "button", class: "add-slot", onclick: () => pickFolder() }, icon("folderPlus"));
+    setTip(slot, t("folders.add"));
   }
+  wanted.push(slot);
+  wanted.forEach((el, i) => { if (list.children[i] !== el) list.insertBefore(el, list.children[i] || null); });
+  renderGlance(folders);
   // A folder that was searched in is gone: search everywhere again.
   if (state.scope && !folders.some((f) => state.scope.prefix.startsWith(`${f.path.toLowerCase().replace(/[\\/]+$/, "")}\\`))) {
     setScope(null);
   }
+}
+
+// A folder in the list. A click on it shows what's in it: its numbers, what's left out, what
+// couldn't be read.
+function folderRow() {
+  const row = h("div", { class: "folder" });
+  const main = h("button", { type: "button", class: "folder-main", onclick: () => openFolderInfo(row.folder) },
+    h("span", { class: "folder-icon" }, icon("folder")),
+    h("span", { class: "folder-text" }, h("span", { class: "folder-name" }), h("span", { class: "folder-path" })));
+  setTip(main, t("folder.details"));
+  row.append(main, h("div", { class: "folder-side" }, h("div", { class: "stats" }), h("div", { class: "folder-actions" })));
+  return row;
+}
+
+function fillFolderRow(row, f, active, phase, progress) {
+  row.folder = f;
+  row.dataset.id = f.id;
+  const here = active === f.path;
+  const working = here && phase !== "paused"; // (everything paused: the rail turns it back on)
+  row.className = `folder${here ? ` active ${phase}` : ""}${f.missing ? " missing" : ""}`;
+  const name = row.querySelector(".folder-name");
+  const path = row.querySelector(".folder-path");
+  if (name.textContent !== baseName(f.path)) name.textContent = baseName(f.path);
+  if (path.textContent !== f.path) path.textContent = f.path;
+  row.querySelector(".stats").replaceChildren(...[
+    f.missing ? stat("alert", t("folder.missing"), t("folder.missing_d"), "bad", () => locateFolder(row.folder)) : null,
+    stat("doc", fmt(f.indexed), t("folders.col.files")),
+    stat("image", fmt(f.images), t("folders.col.images")),
+    f.errors ? stat("alert", fmt(f.errors), tp("folders.unreadable", f.errors), "bad", () => openFolderInfo(row.folder)) : null,
+    f.paused ? stat("pause", "", t("activity.paused"), "phase paused")
+      : here ? phaseStat(phase, progress) : stat("clock", ago(f.last_scan_at), t("folders.col.scanned")),
+  ].filter(Boolean));
+  // Its buttons are drawn again only when they change.
+  const actions = row.querySelector(".folder-actions");
+  const key = JSON.stringify([!!f.missing, !!f.paused, working]);
+  if (actions.dataset.key === key) return;
+  actions.dataset.key = key;
+  actions.replaceChildren(...[
+    f.missing ? iconButton("folder", t("folder.locate"), () => locateFolder(row.folder), "primary") : null,
+    // Pausing a folder here holds just this one; the others go on (the rail pauses everything).
+    f.paused || working ? iconButton(f.paused ? "play" : "pause", t(f.paused ? "activity.resume" : "activity.pause"),
+      () => post(`/api/folders/${f.id}/${f.paused ? "resume" : "pause"}`).then(refresh).catch((e) => toast(e.message, "alert")),
+      f.paused ? "primary" : "") : null,
+    iconButton("trash", t("folders.remove_title"), () => removeFolder(row.folder), "danger"),
+  ].filter(Boolean));
 }
 
 // Reasons the indexer knows ("!damaged_image") come as keys; anything else as it was reported.
@@ -727,7 +766,7 @@ const problemText = (error) => (error?.startsWith("!") ? t(`problem.${error.slic
 // again" reads them anew (a rescan does too).
 
 const WHY_ICON = {
-  type: "help", off: "eyeOff", media: "film", program: "app", mailbox: "mail", hidden: "eyeOff",
+  left_out: "eyeOff", type: "help", off: "eyeOff", media: "film", program: "app", mailbox: "mail", hidden: "eyeOff",
   office_temp: "hourglass", backup: "clock", program_folder: "folder", link: "link", too_many: "archive", encrypted: "lock",
   split_archive: "archive", needs_windows: "monitor", nested_deep: "archive", nested_off: "archive",
   nested_large: "archive", odd_name: "alert", inline_image: "image", empty: "doc", too_large: "maximize",
@@ -801,9 +840,18 @@ async function openFolderInfo(f) {
   $("fm-name").textContent = baseName(f.path);
   $("fm-path").textContent = f.path;
   renderFolderSummary(f);
-  $("fm-problems").hidden = $("fm-skips").hidden = true;
+  $("fm-actions").replaceChildren(...[
+    f.missing ? iconButton("folder", t("folder.locate"), () => locateFolder(f), "primary") : null,
+    iconButton(f.watch ? "eye" : "eyeOff", t("folders.watch_title"),
+      () => post(`/api/folders/${f.id}/watch`, { watch: !f.watch }).then(() => { f.watch = !f.watch; openFolderInfo(f); refresh(); }),
+      f.watch ? "on" : ""),
+    iconButton("refresh", t("folders.rescan_title"),
+      () => post(`/api/folders/${f.id}/rescan`).then(() => { toast(t("folders.rescan_queued"), "refresh"); refresh(); })),
+  ].filter(Boolean));
+  $("fm-problems").hidden = $("fm-skips").hidden = $("fm-inside").hidden = true;
   $("fm-list").replaceChildren();
   $("fm-reasons").replaceChildren();
+  $("fm-subfolders").replaceChildren();
   $("folder-modal").hidden = false;
   let d;
   try {
@@ -813,6 +861,7 @@ async function openFolderInfo(f) {
     return;
   }
   if (state.folderInfo !== f.id) return;
+  renderSubfolders(f, d.left_out || []);
   const failed = [
     ...d.errors.map((r) => fileRow(r.path, problemText(r.error), () => revealFile({ file_id: r.id }), !r.seen)),
     ...Object.entries(d.report).filter(([key]) => key in SCAN_FAILED)
@@ -829,6 +878,42 @@ async function openFolderInfo(f) {
   $("fm-skips").hidden = !reasons.length;
   $("fm-reasons").replaceChildren(...reasons.map(reasonRow));
   if (f.errors) post(`/api/folders/${f.id}/errors/seen`).then(refresh).catch(() => {}); // the red mark has done its job
+}
+
+// The folders inside one, each with a switch: on, it's searched; off, you left it out (its files
+// leave the index, scans pass it by). Folders left out deeper inside are listed too.
+async function renderSubfolders(f, leftOut) {
+  let dirs = [];
+  try {
+    dirs = (await api(`/api/dirs?${new URLSearchParams({ path: f.path })}`)).dirs;
+  } catch { /* none to show */ }
+  if (state.folderInfo !== f.id) return;
+  const out = new Set(leftOut.map((p) => p.toLowerCase()));
+  const shown = new Set(dirs.map((d) => d.path.toLowerCase()));
+  const rows = [...dirs.map((d) => ({ path: d.path, name: d.name, count: d.count, kind: d.kind })),
+    ...leftOut.filter((p) => !shown.has(p.toLowerCase())).map((p) => ({ path: p, name: p.slice(f.path.replace(/[\\/]+$/, "").length + 1), count: null }))]
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
+  const toggle = async (path, isOut) => {
+    try {
+      await post(`/api/folders/${f.id}/leave-out`, { path, out: !isOut });
+      const d = await api(`/api/folders/${f.id}/details`);
+      renderSubfolders(f, d.left_out || []);
+      refresh();
+    } catch (e) { toast(e.message, "alert"); }
+  };
+  $("fm-subfolders").replaceChildren(...rows.map((r) => {
+    const isOut = out.has(r.path.toLowerCase());
+    const name = h("b", {}, r.name);
+    setTip(name, r.path);
+    const sw = h("input", { type: "checkbox", class: "switch", "aria-label": r.name });
+    sw.checked = !isOut;
+    sw.addEventListener("change", () => toggle(r.path, isOut));
+    setTip(sw, t(isOut ? "folder.take_back" : "folder.leave_out"));
+    return h("div", { class: `fm-file fm-sub${isOut ? " left-out" : ""}` },
+      icon(DIR_ICON[r.kind] || "folder"), h("span", { class: "fm-sub-name" }, name),
+      r.count != null && !isOut ? h("span", { class: "fm-count" }, fmt(r.count)) : null, sw);
+  }));
+  $("fm-inside").hidden = !rows.length;
 }
 
 function closeFolderInfo() {
@@ -854,6 +939,7 @@ const TYPE_RULES = [["hidden_files", "eyeOff"], ["program_folders", "folder"]];
 
 async function openTypes() {
   hideTip();
+  state.typesSeen = {};
   try {
     state.types = await api("/api/filetypes");
   } catch (e) {
@@ -869,23 +955,52 @@ const closeTypes = () => { $("types-modal").hidden = true; };
 function renderTypes() {
   const m = state.types;
   const off = m.categories.filter((c) => !c.on).map((c) => c.key);
-  const row = (ic, label, tip, checked, change) => {
+  const formatsOff = m.categories.flatMap((c) => (c.formats || []).filter((f) => !f.on).map((f) => f.ext));
+  const row = (ic, label, tip, checked, change, more = null) => {
     const sw = h("input", { type: "checkbox", class: "switch", "aria-label": label });
     sw.checked = checked;
     sw.addEventListener("change", () => change(sw.checked));
-    const r = h("label", { class: "tm-rule" }, icon(ic), h("span", { class: "fm-file-text" }, h("b", {}, label)), sw);
+    const r = h("label", { class: "tm-rule" }, icon(ic), h("span", { class: "fm-file-text" }, h("b", {}, label)), more, sw);
     if (tip) setTip(r, tip);
     return r;
   };
-  const kinds = TYPE_KINDS.map(([key, ic]) => row(ic, t(`types.cat.${key}`), t(`types.cat.${key}_d`), !off.includes(key),
-    (on) => saveTypes({ kinds_off: on ? off.filter((k) => k !== key) : [...off, key] })));
+  // A kind's formats, for the precise: folded away behind its ›; each one switches on its own. A
+  // format stays where it is while the dialog is open, even before its files are back.
+  const formatsOf = (c) => {
+    const seen = new Map((state.typesSeen?.[c.key] || []).map((f) => [f.ext, { ...f, n: 0, on: !formatsOff.includes(f.ext) }]));
+    for (const f of c.formats || []) seen.set(f.ext, f);
+    const list = [...seen.values()].sort((a, b) => a.ext.localeCompare(b.ext));
+    if (state.typesSeen) state.typesSeen[c.key] = list;
+    const chips = list.map((f) => {
+      const chip = h("button", { type: "button", class: `type-chip${f.on ? "" : " off"}`,
+        onclick: () => saveTypes({ formats_off: f.on ? [...formatsOff, f.ext] : formatsOff.filter((x) => x !== f.ext) }) },
+        f.ext.slice(1), f.on && f.n ? h("small", {}, fmt(f.n)) : null);
+      setTip(chip, t(f.on ? "folder.leave_out" : "folder.take_back"));
+      return chip;
+    });
+    return h("div", { class: "tm-formats", hidden: !state.typesOpen?.has(c.key) }, ...chips);
+  };
+  const kinds = TYPE_KINDS.flatMap(([key, ic]) => {
+    const c = m.categories.find((x) => x.key === key) || { formats: [] };
+    const formats = formatsOf(c);
+    const open = (c.formats || []).length
+      ? iconButton(state.typesOpen?.has(key) ? "chevronUp" : "chevronDown", t("types.formats"), (e) => {
+        e.preventDefault();
+        state.typesOpen = state.typesOpen || new Set();
+        state.typesOpen.has(key) ? state.typesOpen.delete(key) : state.typesOpen.add(key);
+        renderTypes();
+      }, "tm-more")
+      : null;
+    return [row(ic, t(`types.cat.${key}`), t(`types.cat.${key}_d`), !off.includes(key),
+      (on) => saveTypes({ kinds_off: on ? off.filter((k) => k !== key) : [...off, key] }), open), formats];
+  });
   const rules = TYPE_RULES.map(([key, ic]) => row(ic, t(`types.rule.${key}`),
     known(`types.rule.${key}_d`) ? t(`types.rule.${key}_d`) : "", !!m.rules[key], (on) => saveTypes({ [key]: on })));
   $("tm-body").replaceChildren(
     h("section", { class: "tm-group" }, h("div", { class: "tm-rules" }, ...kinds)),
     h("section", { class: "tm-group" }, h("div", { class: "tm-head" }, icon("settings"), h("b", {}, t("types.rules_title"))),
       h("div", { class: "tm-rules" }, ...rules)));
-  $("tm-reset").disabled = !off.length && TYPE_RULES.every(([key]) => m.rules[key] === m.defaults[key]);
+  $("tm-reset").disabled = !off.length && !formatsOff.length && TYPE_RULES.every(([key]) => m.rules[key] === m.defaults[key]);
 }
 
 async function saveTypes(change) {
@@ -901,7 +1016,7 @@ async function saveTypes(change) {
 $("types-open").addEventListener("click", openTypes);
 $("tm-close").addEventListener("click", closeTypes);
 $("types-modal").addEventListener("click", (e) => { if (e.target.id === "types-modal") closeTypes(); });
-$("tm-reset").addEventListener("click", () => saveTypes({ kinds_off: [], ...state.types.defaults }));
+$("tm-reset").addEventListener("click", () => saveTypes({ kinds_off: [], formats_off: [], ...state.types.defaults }));
 
 async function removeFolder(f) {
   const yes = await confirmDialog({
@@ -919,14 +1034,64 @@ async function addFolder(path) {
   $("folder-error").hidden = true;
   try {
     const f = await post("/api/folders", { path });
-    $("path-input").value = "";
-    toast(t("folders.added", { name: baseName(f.path) }), "folderPlus");
+    const inside = f.took_over?.length || 0;
+    toast(inside ? tp("folders.took_over", inside, { name: baseName(f.path) }) : t("folders.added", { name: baseName(f.path) }), "folderPlus");
     refresh();
   } catch (e) {
     goTo("folders");
     $("folder-error").textContent = e.message;
     $("folder-error").hidden = false;
   }
+}
+
+// A folder that moved (renamed, another drive letter): pointed at its new place, its index stays.
+async function locateFolder(f) {
+  try {
+    const { path } = await post("/api/folders/pick");
+    if (!path) return;
+    await post(`/api/folders/${f.id}/locate`, { path });
+    toast(t("folders.located", { name: baseName(path) }), "folder");
+    closeFolderInfo();
+    refresh();
+  } catch (e) {
+    toast(e.message, "alert");
+  }
+}
+
+// The index at a glance: how many files can be searched, and one bar of what kind they are.
+const GLANCE = [["documents", "doc", "--kind-docs"], ["text", "text", "--kind-text"], ["pictures", "image", "--kind-images"],
+  ["mail", "mail", "--kind-code"]];
+let glanceAt = 0;
+let glanceCounts = { at: 0, counts: {} }; // (counted at most every 10 s, and only while it's shown)
+async function renderGlance(folders) {
+  const ready = folders.reduce((n, f) => n + f.indexed, 0);
+  const box = $("glance");
+  if (!folders.length) return box.replaceChildren();
+  if (state.page !== "folders" && box.childElementCount) return;
+  const asked = ++glanceAt;
+  if (Date.now() - glanceCounts.at > 10000) {
+    try {
+      const m = await api("/api/filetypes");
+      const counts = {};
+      for (const c of m.categories) counts[c.key] = (c.formats || []).reduce((n, f) => n + f.n, 0);
+      glanceCounts = { at: Date.now(), counts };
+    } catch { /* the last ones */ }
+  }
+  if (asked !== glanceAt) return;
+  const counts = glanceCounts.counts;
+  const parts = GLANCE.map(([key, ic, color]) => ({ key, ic, color, n: counts[key] || 0 })).filter((p) => p.n > 0);
+  const total = parts.reduce((n, p) => n + p.n, 0) || 1;
+  const bar = h("div", { class: "glance-bar" }, ...parts.map((p) => {
+    const seg = h("i", { style: `flex-grow: ${p.n}; background: var(${p.color})` });
+    setTip(seg, `${t(`types.cat.${p.key}`)}\n${fmt(p.n)}`);
+    return seg;
+  }));
+  const legend = h("div", { class: "glance-legend" }, ...parts.map((p) => {
+    const item = h("span", {}, h("i", { style: `background: var(${p.color})` }), icon(p.ic), h("b", {}, fmt(p.n)));
+    setTip(item, `${t(`types.cat.${p.key}`)} · ${pct(Math.round((p.n / total) * 100))}`);
+    return item;
+  }));
+  box.replaceChildren(h("div", { class: "glance-head" }, h("b", {}, fmt(ready)), h("span", {}, t("folder.ready_long"))), bar, legend);
 }
 
 async function pickFolder() {
@@ -940,17 +1105,6 @@ async function pickFolder() {
   }
 }
 
-$("pick-btn").addEventListener("click", async (e) => {
-  e.currentTarget.disabled = true;
-  await pickFolder();
-  $("pick-btn").disabled = false;
-});
-
-$("path-form").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const p = $("path-input").value.trim();
-  if (p) addFolder(p);
-});
 
 // ---------- settings ----------
 
@@ -960,8 +1114,6 @@ function renderSettings({ settings, resources, model }) {
   const key = JSON.stringify([settings, i18n.lang]);
   if (key !== state.settingsKey) {
     state.settingsKey = key;
-    $("types-summary").textContent = settings.kinds_off.length
-      ? tp("types.summary_off", settings.kinds_off.length) : t("types.all_on");
     $("autostart-row").hidden = settings.autostart == null;
     $("autostart").checked = !!settings.autostart;
     $("autostart").setAttribute("aria-label", t("settings.autostart"));

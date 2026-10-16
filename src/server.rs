@@ -322,6 +322,12 @@ struct ExampleIn {
 }
 
 #[derive(Deserialize)]
+struct LeaveOutIn {
+    path: String,
+    out: bool,
+}
+
+#[derive(Deserialize)]
 struct ThemeIn {
     dark: bool,
 }
@@ -336,6 +342,7 @@ struct SettingsIn {
     view_files: Option<String>,
     view_images: Option<String>,
     kinds_off: Option<Vec<String>>,
+    formats_off: Option<Vec<String>>,
     problems_seen: Option<i64>,
     hidden_files: Option<bool>,
     program_folders: Option<bool>,
@@ -384,6 +391,7 @@ impl Server {
 
     fn status(&self) -> Value {
         let paused = self.b.indexer.paused_folders();
+        let missing = self.b.indexer.missing_folders();
         let e = &self.b.embedder;
         let state = e.state.read().clone();
         let update = self.b.updater.status();
@@ -396,6 +404,7 @@ impl Server {
                 let id = f.id;
                 let mut v = serde_json::to_value(f).unwrap_or_default();
                 v["paused"] = json!(paused.contains(&id));
+                v["missing"] = json!(missing.contains(&id));
                 v
             })
             .collect();
@@ -463,6 +472,13 @@ impl Server {
             let mut clean: Vec<&str> = filetypes::CATEGORIES.iter().copied().filter(|c| off.iter().any(|v| v == c)).collect();
             clean.dedup();
             let _ = s.update("kinds_off", json!(clean));
+        }
+        if let Some(formats) = &body.formats_off {
+            let mut clean: Vec<String> = formats.iter().filter_map(|f| filetypes::format_key(f)).collect();
+            clean.sort();
+            clean.dedup();
+            clean.truncate(200);
+            let _ = s.update("formats_off", json!(clean));
         }
         for (key, value) in [
             ("hidden_files", body.hidden_files),
@@ -777,18 +793,24 @@ impl Server {
         if !std::path::Path::new(&path).is_dir() {
             return Err(fail(400, "not_a_folder", json!({"path": path})));
         }
+        let mut inner = Vec::new();
         for f in self.b.store.folders() {
             if is_inside(&path, &f.path) {
                 return Err(fail(400, "already_covered", json!({"path": f.path})));
             }
             if is_inside(&f.path, &path) {
-                return Err(fail(400, "contains_folder", json!({"path": f.path})));
+                inner.push(f);
             }
         }
         let id = self.b.store.add_folder(&path).map_err(|e| detail(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        // Indexed folders inside it become part of it, with everything indexed in them.
+        for f in &inner {
+            self.b.indexer.forget_folder(f.id);
+            self.b.store.take_over(id, f.id).map_err(|e| detail(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+        }
         self.b.indexer.enqueue_scan(id);
         self.b.indexer.watcher().sync();
-        Ok(json_reply(&json!({"id": id, "path": path})))
+        Ok(json_reply(&json!({"id": id, "path": path, "took_over": inner.iter().map(|f| f.path.clone()).collect::<Vec<_>>()})))
     }
 
     fn known_folder(&self, id: i64) -> Result<(), ApiError> {
@@ -914,12 +936,47 @@ impl Server {
                 }
                 ok()
             }
+            ["api", "folders", id, "leave-out"] if post => {
+                let id = path_int("folder_id", id)?;
+                let l: LeaveOutIn = body_json(body)?;
+                let Some(folder) = b.store.folder(id) else { return Err(fail(404, "unknown_folder", json!({}))) };
+                if !is_inside(&l.path, &folder.path) || crate::store::normcase(l.path.trim_end_matches('\\')) == crate::store::normcase(folder.path.trim_end_matches('\\')) {
+                    return Err(fail(400, "not_inside", json!({})));
+                }
+                b.store.set_left_out(id, &l.path, l.out).map_err(|e| detail(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                if !l.out {
+                    b.indexer.enqueue_scan(id); // (it's read again)
+                }
+                ok()
+            }
+            ["api", "folders", id, "locate"] if post => {
+                let id = path_int("folder_id", id)?;
+                let f: FolderIn = body_json(body)?;
+                self.known_folder(id)?;
+                let to = std::fs::canonicalize(f.path.trim().trim_matches('"'))
+                    .map(config::strip_verbatim)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .map_err(|_| fail(400, "not_a_folder", json!({"path": f.path})))?;
+                if !std::path::Path::new(&to).is_dir() {
+                    return Err(fail(400, "not_a_folder", json!({"path": to})));
+                }
+                for other in b.store.folders().into_iter().filter(|o| o.id != id) {
+                    if is_inside(&to, &other.path) || is_inside(&other.path, &to) {
+                        return Err(fail(400, "already_covered", json!({"path": other.path})));
+                    }
+                }
+                b.store.relocate(id, &to).map_err(|e| detail(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+                b.indexer.enqueue_scan(id);
+                b.indexer.watcher().sync();
+                Ok(json_reply(&json!({"id": id, "path": to})))
+            }
             ["api", "folders", id, "errors"] if get => Ok(json_reply(&json!(b.store.errors(path_int("folder_id", id)?, 500)))),
             ["api", "folders", id, "details"] if get => {
                 let id = path_int("folder_id", id)?;
                 self.known_folder(id)?;
                 let mut d = b.store.details(id, 5);
                 d["errors"] = json!(b.store.errors(id, 500));
+                d["left_out"] = json!(b.store.left_out(id));
                 Ok(json_reply(&d))
             }
             ["api", "folders", id, "reveal"] if post => {
@@ -941,7 +998,7 @@ impl Server {
                 with_normal_priority(|| reveal(&target));
                 ok()
             }
-            ["api", "filetypes"] if get => Ok(json_reply(&filetypes::menu(&Types::of(&b.settings)))),
+            ["api", "filetypes"] if get => Ok(json_reply(&filetypes::menu(&Types::of(&b.settings), &b.store.format_counts()))),
             ["api", "pause"] if post => {
                 b.indexer.pause();
                 ok()
@@ -1045,7 +1102,7 @@ fn known_path(parts: &[&str]) -> bool {
             | ["api", "update", "check" | "apply" | "open"]
             | ["api", "window", "theme"]
             | ["api", "folders", _]
-            | ["api", "folders", _, "rescan" | "pause" | "resume" | "watch" | "errors" | "details" | "reveal"]
+            | ["api", "folders", _, "rescan" | "pause" | "resume" | "watch" | "errors" | "details" | "reveal" | "leave-out" | "locate"]
             | ["api", "folders", _, "errors", "seen"]
             | ["api", "map", "vector" | "related" | "dimension", _]
             | ["api", "similar" | "thumb" | "preview" | "open" | "reveal", _]
@@ -1323,6 +1380,53 @@ mod tests {
     #[test]
     fn updates_only_install_from_the_desktop_app() {
         assert_eq!(client().send(Method::POST, "/api/update/apply", &[APP], None).status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn a_folder_around_indexed_ones_takes_them_over_and_a_moved_one_can_be_found_again() {
+        let c = client();
+        let base = c.dir.join("disk");
+        let (parent, child, moved) = (base.join("Docs"), base.join("Docs").join("Taxes"), base.join("Docs moved"));
+        std::fs::create_dir_all(child.join("2024")).unwrap();
+        std::fs::create_dir_all(moved.join("Taxes").join("2024")).unwrap();
+        let store = &c.b().store;
+        let canon = |p: &std::path::Path| config::strip_verbatim(std::fs::canonicalize(p).unwrap()).to_string_lossy().to_string();
+        let r = c.post("/api/folders", json!({"path": child.to_string_lossy()}));
+        let child_id = r.json()["id"].as_i64().unwrap();
+        let file = format!(r"{}\2024\bill.pdf", canon(&child));
+        let entry = crate::store::Entry {
+            folder_id: child_id, path: file.clone(), size: 1, mtime: 1.0, kind: "doc".into(), status: "indexed".into(),
+            chunks: 0, error: None, search_name: "bill.pdf".into(),
+        };
+        store.save_files(&[entry], &[]).unwrap();
+        // Adding the folder around it: one folder, the file indexed in it, nothing read again.
+        let r = c.post("/api/folders", json!({"path": parent.to_string_lossy()}));
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.json()["took_over"], json!([canon(&child)]));
+        let folders = store.folders();
+        assert_eq!((folders.len(), folders[0].indexed), (1, 1));
+        let parent_id = folders[0].id;
+        assert_eq!(store.signature(&file).unwrap().1, 1);
+        // A folder inside the one there is already covered.
+        assert_eq!(c.post("/api/folders", json!({"path": child.to_string_lossy()})).json()["detail"]["key"], "err.already_covered");
+        // Left out: its files leave the index; back in: the next scan reads them.
+        let r = c.post(&format!("/api/folders/{parent_id}/leave-out"), json!({"path": canon(&child), "out": true}));
+        assert_eq!(r.status, StatusCode::OK);
+        assert!(store.signature(&file).is_none());
+        assert_eq!(c.get(&format!("/api/folders/{parent_id}/details")).json()["left_out"], json!([canon(&child)]));
+        c.post(&format!("/api/folders/{parent_id}/leave-out"), json!({"path": canon(&child), "out": false}));
+        assert!(store.left_out(parent_id).is_empty());
+        // Moved: pointed at its new place, what's indexed moves along.
+        let entry = crate::store::Entry {
+            folder_id: parent_id, path: file.clone(), size: 1, mtime: 1.0, kind: "doc".into(), status: "indexed".into(),
+            chunks: 0, error: None, search_name: "bill.pdf".into(),
+        };
+        store.save_files(&[entry], &[]).unwrap();
+        let r = c.post(&format!("/api/folders/{parent_id}/locate"), json!({"path": moved.to_string_lossy()}));
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(store.folders()[0].path, canon(&moved));
+        assert!(store.signature(&file).is_none());
+        assert!(store.signature(&format!(r"{}\Taxes\2024\bill.pdf", canon(&moved))).is_some());
     }
 
     #[test]

@@ -71,8 +71,9 @@ memory runs low, indexing waits. The pause button, in the app and in the tray me
 | Archives | ZIP and TAR, also one inside another; 7z, RAR, CAB and ISO with Windows 11 (2023 update or later) |
 | Anything else | read as text when there's text inside |
 
-Files are recognised by their content, not their name. Settings → File types switches kinds of files
-off. A folder's details list what wasn't searched, and why.
+Files are recognised by their content, not their name. File types, on the Index page, switches kinds
+of files off, or single formats of a kind. A folder's details list what wasn't searched, and why, and
+leave folders inside it out.
 
 ## Privacy
 

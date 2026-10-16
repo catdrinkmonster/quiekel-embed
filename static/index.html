@@ -113,12 +113,9 @@
 
     <!-- Folders -->
     <section class="page" id="page-folders" hidden>
-      <div class="folder-bar">
-        <button class="icon-btn primary" id="pick-btn" data-icon="folderPlus" data-i18n-tip="folders.add"></button>
-        <form id="path-form" class="path-form">
-          <input id="path-input" class="input" data-i18n-placeholder="folders.path_placeholder" spellcheck="false">
-          <button class="icon-btn" type="submit" data-icon="arrowRight" data-i18n-tip="folders.add_path"></button>
-        </form>
+      <div class="index-head">
+        <div class="glance" id="glance"></div>
+        <button class="icon-btn" id="types-open" data-icon="doc" data-i18n-tip="settings.types"></button>
       </div>
       <p id="folder-error" class="error" hidden></p>
       <div class="folders" id="folders"></div>
@@ -134,10 +131,6 @@
     <!-- Settings -->
     <section class="page" id="page-settings" hidden>
       <div class="card">
-        <button type="button" class="set-row set-link" id="types-open">
-          <span class="set-label"><span data-icon="doc"></span><span data-i18n="settings.types"></span></span>
-          <span class="set-controls"><span class="types-summary" id="types-summary"></span><span data-icon="chevronRight"></span></span>
-        </button>
         <label class="set-row" id="autostart-row" hidden>
           <span class="set-label"><span data-icon="power"></span><span data-i18n="settings.autostart"></span></span>
           <input type="checkbox" class="switch" id="autostart">
@@ -228,12 +221,17 @@
     <div class="modal-head">
       <span class="modal-icon" data-icon="folder"></span>
       <h3 id="fm-name"></h3>
+      <span class="fm-actions" id="fm-actions"></span>
       <button class="icon-btn small" id="fm-close" data-icon="close" data-i18n-tip="common.close"></button>
     </div>
     <p class="modal-sub" id="fm-path"></p>
     <div class="fm-body">
       <div class="fm-summary" id="fm-summary"></div>
       <div class="fm-stats" id="fm-numbers"></div>
+      <div class="fm-section" id="fm-inside" hidden>
+        <div class="fm-section-head"><span class="fm-label" data-i18n="scope.inside"></span></div>
+        <div class="fm-list" id="fm-subfolders"></div>
+      </div>
       <div class="fm-section" id="fm-problems" hidden>
         <div class="fm-section-head">
           <span class="fm-label" data-i18n="folder.unreadable_title"></span>

@@ -648,9 +648,27 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .map-card .actions { margin: 0; justify-content: flex-start; }
 
 /* ---- folders ---- */
-.folder-bar { display: flex; align-items: center; gap: var(--gap); margin-bottom: 16px; }
-.path-form { display: flex; align-items: center; gap: var(--gap); flex: 1; max-width: 560px; }
-.path-form .input { flex: 1; height: var(--ctl); padding: 0 12px; border-color: var(--border-strong); border-radius: 8px; }
+/* The index at a glance: one number, one bar of the kinds of files, File types beside it. */
+.index-head { display: flex; align-items: flex-start; gap: var(--gap-group); margin-bottom: var(--gap-group); }
+.glance { flex: 1; min-width: 0; }
+.glance-head { display: flex; align-items: baseline; gap: var(--gap); }
+.glance-head b { font: 800 28px/1.1 var(--display); color: var(--ink); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.glance-head span { font-size: 13px; color: var(--muted); }
+.glance-bar { display: flex; gap: 2px; height: 8px; margin-top: 10px; border-radius: 999px; overflow: hidden; background: var(--well); }
+.glance-bar i { flex-basis: 0; min-width: 4px; cursor: help; }
+.glance-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.glance-legend span { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
+.glance-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.glance-legend svg.i { width: 15px; height: 15px; color: var(--faint); }
+.glance-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
+/* Where the next folder would go: an empty slot with a + in it. */
+.add-slot {
+  cursor: pointer; display: grid; place-items: center; min-height: 56px; padding: 0;
+  border: 1px dashed var(--border-strong); border-radius: 8px; background: none; color: var(--muted);
+}
+.add-slot:hover { color: var(--ink); background: var(--hover); border-color: var(--faint); }
+.add-slot svg.i { width: 22px; height: 22px; }
+.folder.missing .folder-name { color: var(--muted); }
 .error { color: var(--red); font-size: 13px; font-weight: 600; margin: -6px 0 12px; }
 .folders { display: flex; flex-direction: column; gap: 8px; }
 /* A folder: its name, then its numbers and buttons. When it's narrow, numbers and buttons move under
@@ -749,10 +767,6 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; padding: 8px 0; }
 .set-row + .set-row { border-top: 1px solid var(--border); }
 label.set-row { cursor: pointer; }
-.set-link { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
-.set-link .set-controls { color: var(--muted); }
-.set-link:hover .set-controls { color: var(--ink); }
-.types-summary { font-size: 13px; font-weight: 600; }
 .set-label { display: inline-flex; align-items: center; gap: 12px; font-weight: 600; color: var(--ink); }
 .set-label > span:first-child svg.i { width: 20px; height: 20px; color: var(--muted); }
 .set-controls { display: inline-flex; align-items: center; gap: 12px; }
@@ -918,3 +932,17 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .dg-time { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .dg-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
 .dg-bar i { display: block; height: 100%; }
+
+/* A folder's details: watch and rescan in the head; the folders inside, each with a switch. */
+.fm-actions { display: flex; gap: 6px; margin-left: auto; }
+.fm-sub > svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
+.fm-sub-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-sub-name b { color: var(--ink); font-weight: 600; }
+.fm-sub.left-out .fm-sub-name b { color: var(--faint); text-decoration: line-through; }
+.fm-sub .fm-count { font: 600 12px var(--sans); color: var(--muted); }
+/* File types: a kind's formats under it, folded away until its › opens them. */
+.tm-rule .tm-more { margin-left: auto; }
+.tm-formats { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 12px 40px; border-top: 1px solid var(--border);
+  width: 0; min-width: 100%; box-sizing: border-box; }
+.tm-formats[hidden] { display: none; }
+.type-chip.off { color: var(--faint); text-decoration: line-through; background: none; }
