@@ -125,10 +125,7 @@
 
     <!-- Folders -->
     <section class="page" id="page-folders" hidden>
-      <div class="index-head">
-        <div class="glance" id="glance"></div>
-        <button class="icon-btn" id="types-open" data-icon="doc" data-i18n-tip="settings.types"></button>
-      </div>
+      <div class="index-head glance" id="glance"></div>
       <p id="folder-error" class="error" hidden></p>
       <div class="folders" id="folders"></div>
     </section>
@@ -136,6 +133,7 @@
     <!-- Diagnostics (Settings switches it on): what the app uses, the last ten minutes -->
     <section class="page page-diagnostics" id="page-diagnostics" hidden>
       <div class="dg-strip" id="dg-strip"></div>
+      <div class="card dg-activity" id="dg-activity" hidden></div>
       <div class="dg-charts" id="dg-charts"></div>
       <div class="card dg-time" id="dg-time" hidden></div>
     </section>
@@ -143,6 +141,10 @@
     <!-- Settings -->
     <section class="page" id="page-settings" hidden>
       <div class="card">
+        <button type="button" class="set-row set-link" id="types-open">
+          <span class="set-label"><span data-icon="doc"></span><span data-i18n="settings.types"></span></span>
+          <span class="set-controls"><span class="types-summary" id="types-summary"></span><span data-icon="chevronRight"></span></span>
+        </button>
         <label class="set-row" id="autostart-row" hidden>
           <span class="set-label"><span data-icon="power"></span><span data-i18n="settings.autostart"></span></span>
           <input type="checkbox" class="switch" id="autostart">

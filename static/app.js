@@ -713,12 +713,12 @@ function renderFolders(folders, progress, phase) {
   }
 }
 
-// A folder in the list. A click on it shows what's in it: its numbers, what's left out, what
-// couldn't be read.
+// A folder, as a card: the ring of its kinds, its name and place; its numbers and buttons under them.
+// A click on it shows what's in it: its numbers, what's left out, what couldn't be read.
 function folderRow() {
   const row = h("div", { class: "folder" });
   const main = h("button", { type: "button", class: "folder-main", onclick: () => openFolderInfo(row.folder) },
-    h("span", { class: "folder-icon" }, icon("folder")),
+    h("span", { class: "folder-ring" }),
     h("span", { class: "folder-text" }, h("span", { class: "folder-name" }), h("span", { class: "folder-path" })));
   setTip(main, t("folder.details"));
   row.append(main, h("div", { class: "folder-side" }, h("div", { class: "stats" }), h("div", { class: "folder-actions" })));
@@ -735,10 +735,17 @@ function fillFolderRow(row, f, active, phase, progress) {
   const path = row.querySelector(".folder-path");
   if (name.textContent !== baseName(f.path)) name.textContent = baseName(f.path);
   if (path.textContent !== f.path) path.textContent = f.path;
+  const parts = kindParts((key) => f[key] || 0);
+  const ring = row.querySelector(".folder-ring");
+  const ringKey = JSON.stringify([parts.map((p) => p.n), i18n.lang]);
+  if (ring.dataset.key !== ringKey) {
+    ring.dataset.key = ringKey;
+    ring.replaceChildren(donut(parts, 44));
+  }
   row.querySelector(".stats").replaceChildren(...[
     f.missing ? stat("alert", t("folder.missing"), t("folder.missing_d"), "bad", () => locateFolder(row.folder)) : null,
-    stat("doc", fmt(f.indexed), t("folders.col.files")),
-    stat("image", fmt(f.images), t("folders.col.images")),
+    stat("doc", fmt(f.indexed), t("folder.ready_long")),
+    stat("archive", bytes(f.bytes || 0), t("folder.size")),
     f.errors ? stat("alert", fmt(f.errors), tp("folders.unreadable", f.errors), "bad", () => openFolderInfo(row.folder)) : null,
     f.paused ? stat("pause", "", t("activity.paused"), "phase paused")
       : here ? phaseStat(phase, progress) : stat("clock", ago(f.last_scan_at), t("folders.col.scanned")),
@@ -1060,40 +1067,72 @@ async function locateFolder(f) {
   }
 }
 
-// The index at a glance: how many files can be searched, and one bar of what kind they are.
-const GLANCE = [["documents", "doc", "--kind-docs"], ["text", "text", "--kind-text"], ["pictures", "image", "--kind-images"],
-  ["mail", "mail", "--kind-code"]];
-let glanceAt = 0;
-let glanceCounts = { at: 0, counts: {} }; // (counted at most every 10 s, and only while it's shown)
-async function renderGlance(folders) {
-  const ready = folders.reduce((n, f) => n + f.indexed, 0);
+// What kind the files are, as File types counts them, in the colours of the kinds: a folder's (or
+// all folders') numbers as the parts of a ring, what's still waiting in grey.
+const KIND_PARTS = [["docs", "doc", "--kind-docs", "documents"], ["texts", "text", "--kind-text", "text"],
+  ["mails", "mail", "--kind-code", "mail"], ["images", "image", "--kind-images", "pictures"]];
+
+function kindParts(count) {
+  const parts = KIND_PARTS.map(([key, ic, color, cat]) => ({ ic, n: count(key), color: `var(${color})`, name: t(`types.cat.${cat}`) }));
+  parts.push({ ic: "hourglass", n: count("pending"), color: "var(--border-strong)", name: t("folder.waiting") });
+  return parts;
+}
+
+// A ring of parts ({ n, color, name }), clockwise from the top with a little gap between them, and
+// what's in its middle, if anything. Each part says what it is when pointed at.
+function donut(parts, size, mid = null) {
+  const shown = parts.filter((p) => p.n > 0);
+  const total = shown.reduce((s, p) => s + p.n, 0);
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.classList.add("donut-svg");
+  const circle = (cls) => {
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", 50); c.setAttribute("cy", 50); c.setAttribute("r", 42); c.setAttribute("pathLength", 100);
+    c.setAttribute("class", cls);
+    return c;
+  };
+  svg.append(circle("track"));
+  const gap = shown.length > 1 ? 1.5 : 0;
+  let at = 0;
+  for (const p of shown) {
+    const share = (p.n / total) * 100;
+    const len = Math.max(0.8, share - gap);
+    const c = circle("part");
+    c.setAttribute("stroke-dasharray", `${len.toFixed(2)} ${(100 - len).toFixed(2)}`);
+    c.setAttribute("stroke-dashoffset", (-at).toFixed(2));
+    c.style.stroke = p.color;
+    setTip(c, `${p.name}\n${fmt(p.n)} · ${pct(Math.round(share))}`);
+    svg.append(c);
+    at += share;
+  }
+  return h("span", { class: "donut", style: `--size: ${size}px` }, svg, mid);
+}
+
+// The index at a glance: the ring of all folders with the files ready in its middle; beside it,
+// each kind's number and a few facts.
+function renderGlance(folders) {
   const box = $("glance");
   if (!folders.length) return box.replaceChildren();
-  if (state.page !== "folders" && box.childElementCount) return;
-  const asked = ++glanceAt;
-  if (Date.now() - glanceCounts.at > 10000) {
-    try {
-      const m = await api("/api/filetypes");
-      const counts = {};
-      for (const c of m.categories) counts[c.key] = (c.formats || []).reduce((n, f) => n + f.n, 0);
-      glanceCounts = { at: Date.now(), counts };
-    } catch { /* the last ones */ }
-  }
-  if (asked !== glanceAt) return;
-  const counts = glanceCounts.counts;
-  const parts = GLANCE.map(([key, ic, color]) => ({ key, ic, color, n: counts[key] || 0 })).filter((p) => p.n > 0);
-  const total = parts.reduce((n, p) => n + p.n, 0) || 1;
-  const bar = h("div", { class: "glance-bar" }, ...parts.map((p) => {
-    const seg = h("i", { style: `flex-grow: ${p.n}; background: var(${p.color})` });
-    setTip(seg, `${t(`types.cat.${p.key}`)}\n${fmt(p.n)}`);
-    return seg;
-  }));
-  const legend = h("div", { class: "glance-legend" }, ...parts.map((p) => {
-    const item = h("span", {}, h("i", { style: `background: var(${p.color})` }), icon(p.ic), h("b", {}, fmt(p.n)));
-    setTip(item, `${t(`types.cat.${p.key}`)} · ${pct(Math.round((p.n / total) * 100))}`);
+  const sum = (key) => folders.reduce((n, f) => n + (f[key] || 0), 0);
+  const parts = kindParts(sum);
+  const key = JSON.stringify([parts.map((p) => p.n), sum("bytes"), Math.max(...folders.map((f) => f.last_scan_at || 0)), i18n.lang,
+    Math.floor(Date.now() / 60000)]);
+  if (box.dataset.key === key) return; // (unchanged: the ring stays as it is)
+  box.dataset.key = key;
+  const legend = h("div", { class: "glance-legend" }, ...parts.filter((p) => p.n > 0).map((p) => {
+    const item = h("span", {}, h("i", { style: `background: ${p.color}` }), icon(p.ic), h("b", {}, fmt(p.n)));
+    setTip(item, p.name);
     return item;
   }));
-  box.replaceChildren(h("div", { class: "glance-head" }, h("b", {}, fmt(ready)), h("span", {}, t("folder.ready_long"))), bar, legend);
+  const last = Math.max(...folders.map((f) => f.last_scan_at || 0));
+  box.replaceChildren(
+    donut(parts, 132, h("span", { class: "donut-mid" }, h("b", {}, fmt(sum("indexed"))))),
+    h("div", { class: "glance-text" },
+      h("div", { class: "glance-title" }, t("folder.ready_long")), legend,
+      h("div", { class: "glance-facts" }, stat("archive", bytes(sum("bytes")), t("folder.size")),
+        last ? stat("clock", ago(last), t("folders.col.scanned")) : null)));
 }
 
 async function pickFolder() {
@@ -1123,6 +1162,8 @@ function renderSettings({ settings, resources, model }) {
     setTip($("auto-update"), t("settings.auto_update"));
     $("diagnostics-on").checked = !!settings.diagnostics;
     setTip($("diagnostics-row"), t("settings.diagnostics_tip"));
+    const off = (settings.kinds_off || []).length + (settings.formats_off || []).length; // (kinds and formats)
+    $("types-summary").textContent = off ? tp("types.summary_off", off) : t("types.all_on");
     if (state.diagnostics !== !!settings.diagnostics) {
       state.diagnostics = !!settings.diagnostics;
       $("nav-diagnostics").hidden = !state.diagnostics;
@@ -1422,7 +1463,7 @@ function niceTop(v) {
   return [1, 2, 2.5, 5, 10].map((m) => m * p).find((x) => x >= v * 1.1);
 }
 
-const megabytes = (v) => (v >= 1000 ? `${fmt(v / 1000, v >= 10000 ? 0 : 1)} GB` : `${fmt(Math.round(v))} MB`);
+const megabytes = (v) => (v >= 1000 ? `${fmt(v / 1000, v >= 10000 ? 0 : 1)} GB` : `${fmt(Math.round(v) || 0)} MB`); // (never "-0")
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
 
 // One chart: the lines from t0 to t1 (seconds), its top value beside the title, each line's last
@@ -1458,6 +1499,86 @@ function diagChart(title, lines, { show, top = null, t0, t1, more = null }) {
     svg, legend, more);
 }
 
+// What indexing did, second by second: one band over the charts' time in the colour of what it was
+// doing; the legend says how long each. (Nothing to do: the band's own colour.)
+const ACTIVITY = [["indexing", "var(--orange)"], ["scanning", "var(--blue)"], ["waiting", "var(--yellow)"],
+  ["paused", "var(--faint)"], ["idle", "var(--well)"]];
+
+// (a burst shorter than a second still counts: files were read since the sample before)
+function activityOf(x, before) {
+  if (x.paused) return "paused";
+  if (x.state === "loading-model" || ((x.state === "indexing" || x.state === "scanning") && x.waiting)) return "waiting";
+  if (x.state === "indexing" || x.state === "scanning") return x.state;
+  return before?.pipeline && x.pipeline && x.pipeline.files > before.pipeline.files ? "indexing" : "idle";
+}
+
+const duration = (sec) => (sec >= 60 ? t("diag.minutes", { n: fmt(Math.round(sec / 60)) }) : t("diag.seconds", { n: fmt(Math.round(sec)) }));
+
+function renderActivityBand(s, t0, t1) {
+  const box = $("dg-activity");
+  const runs = [];
+  for (const [i, x] of s.entries()) {
+    if (x.t < t0) continue;
+    const a = activityOf(x, s[i - 1]);
+    if (runs.length && runs[runs.length - 1].a === a) continue;
+    runs.push({ a, from: x.t });
+  }
+  runs.forEach((r, i) => { r.to = i + 1 < runs.length ? runs[i + 1].from : t1; });
+  box.hidden = runs.length === 0;
+  if (!runs.length) return;
+  const span = Math.max(1, t1 - t0);
+  const color = Object.fromEntries(ACTIVITY);
+  const band = h("div", { class: "dg-band" }, ...runs.filter((r) => r.a !== "idle").map((r) => {
+    const seg = h("i", { style: `left: ${((r.from - t0) / span) * 100}%; width: ${Math.max(0.4, ((r.to - r.from) / span) * 100)}%; background: ${color[r.a]}` });
+    setTip(seg, `${t(`diag.state.${r.a}`)}\n${duration(r.to - r.from)}`);
+    return seg;
+  }));
+  const total = new Map();
+  for (const r of runs) total.set(r.a, (total.get(r.a) || 0) + (r.to - r.from));
+  const legend = h("div", { class: "dg-legend" }, ...ACTIVITY.filter(([a]) => total.get(a) >= 1).map(([a, c]) => h("span", {},
+    h("i", { style: `background: ${c}` }), t(`diag.state.${a}`), h("b", {}, duration(total.get(a))))));
+  box.replaceChildren(h("div", { class: "dg-title" }, h("span", {}, t("diag.activity"))), band, legend);
+}
+
+// Searches as bars at the time they ran: the part the model took to read the words at the bottom,
+// finding the files on top.
+function searchChart(searches, t0, t1) {
+  const W = 300, H = 80;
+  const shown = searches.filter((x) => x.t >= t0);
+  const max = niceTop(Math.max(1, ...shown.map((x) => x.ms)));
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.classList.add("dg-svg");
+  const rect = (x, y, h, color) => {
+    const r = document.createElementNS(ns, "rect");
+    r.setAttribute("x", x.toFixed(1)); r.setAttribute("y", y.toFixed(1)); r.setAttribute("width", 3); r.setAttribute("height", Math.max(0.5, h).toFixed(1));
+    r.style.fill = color;
+    svg.append(r);
+  };
+  for (const g of [1, H / 2]) {
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", 0); line.setAttribute("x2", W); line.setAttribute("y1", g); line.setAttribute("y2", g);
+    line.classList.add("dg-grid");
+    svg.append(line);
+  }
+  const scale = (v) => (Math.min(v, max) / max) * (H - 3);
+  for (const x of shown) {
+    const px = ((x.t - t0) / Math.max(1, t1 - t0)) * (W - 3);
+    const model = scale(x.model_ms), all = scale(x.ms);
+    rect(px, H - all, all - model, "var(--orange)");
+    rect(px, H - model, model, "var(--blue)");
+  }
+  const mid = (key) => (shown.length ? t("diag.ms", { n: fmt(Math.round(median(shown.map((x) => x[key])))) }) : "–");
+  const legend = h("div", { class: "dg-legend" },
+    h("span", {}, h("i", { style: "background: var(--blue)" }), t("diag.search_words"), h("b", {}, mid("model_ms"))),
+    h("span", {}, h("i", { style: "background: var(--orange)" }), t("diag.search_rest"),
+      h("b", {}, shown.length ? t("diag.ms", { n: fmt(Math.round(median(shown.map((x) => x.ms - x.model_ms)))) }) : "–")));
+  return h("div", { class: "card dg-chart" },
+    h("div", { class: "dg-title" }, h("span", {}, t("diag.searches")), h("span", { class: "dg-top" }, t("diag.ms", { n: fmt(max) }))), svg, legend);
+}
+
 // Where the model runs, and why there.
 function setupChip(d) {
   const s = d.setup;
@@ -1467,18 +1588,23 @@ function setupChip(d) {
     : s.name === "light" ? t("diag.setup_light", { gb: fmt(d.pc.ram_gb, 0), cores: d.pc.cores })
       : t(`device.why_${d.cpu_because || (d.pc.card ? "shared" : "none")}`);
   const on = t("settings.model_on", { device: s.gpu ? `${s.card} (DirectML)` : tp("device.cpu", s.threads) });
-  return stat("chip", s.gpu ? shortGpu(s.card) : t("diag.cpu"), `${on}\n${why}`, "chip");
+  return stat("chip", s.gpu ? shortGpu(s.card) : t("diag.cpu"), `${on}\n${why}`);
 }
 
 function renderDiagnostics(d) {
   const s = d.samples || [];
   const at = (f) => s.map((x) => { try { const v = f(x); return v == null ? null : [x.t, v]; } catch { return null; } }).filter(Boolean);
-  // Files per second, from the indexer's count (smoothed over 5 seconds).
-  const files = [];
-  for (let i = 5; i < s.length; i++) {
-    const a = s[i - 5].pipeline, b = s[i].pipeline;
-    if (a && b && s[i].t > s[i - 5].t) files.push([s[i].t, Math.max(0, (b.files - a.files) / (s[i].t - s[i - 5].t))]);
-  }
+  // Per second, from the indexer's counts (smoothed over 5 seconds): files read, passages and
+  // pictures through the model.
+  const rate = (key) => {
+    const out = [];
+    for (let i = 5; i < s.length; i++) {
+      const a = s[i - 5].pipeline, b = s[i].pipeline;
+      if (a && b && s[i].t > s[i - 5].t) out.push([s[i].t, Math.max(0, (b[key] - a[key]) / (s[i].t - s[i - 5].t))]);
+    }
+    return out;
+  };
+  const files = rate("files");
   // The charts start when Diagnostics was switched on and fill up to ten minutes.
   const t1 = s.length ? s[s.length - 1].t : Date.now() / 1000;
   const t0 = Math.min(t1 - 30, Math.max(s.length ? s[0].t : t1, t1 - 600));
@@ -1493,13 +1619,13 @@ function renderDiagnostics(d) {
     setupChip(d),
     stat("doc", fmt(ix.files || 0), [t("diag.index", { files: fmt(ix.files || 0), passages: fmt(ix.passages || 0) }),
       t("diag.on_disk", { size: megabytes(ix.disk_mb || 0) }),
-      ix.memory_mb > 0 ? t("diag.in_memory", { size: megabytes(ix.memory_mb) }) : t("diag.searched_on_disk")].join("\n"), "chip"),
+      ix.memory_mb > 0 ? t("diag.in_memory", { size: megabytes(ix.memory_mb) }) : t("diag.searched_on_disk")].join("\n")),
     searches.length ? stat("search", t("diag.ms", { n: fmt(Math.round(median(searches))) }), t("diag.search_tip", {
-      n: fmt(searches.length), model: fmt(Math.round(median(d.searches.map((x) => x.model_ms)))) }), "chip") : null,
-    waiting ? stat("hourglass", pace > 0 ? `${fmt(waiting)} · ${eta(waiting / pace)}` : fmt(waiting), t("diag.waiting_tip"), "chip") : null,
+      n: fmt(searches.length), model: fmt(Math.round(median(d.searches.map((x) => x.model_ms)))) })) : null,
+    waiting ? stat("hourglass", pace > 0 ? `${fmt(waiting)} · ${eta(waiting / pace)}` : fmt(waiting), t("diag.waiting_tip")) : null,
     // How far back the charts go (the same for all of them).
     stat("clock", t1 - t0 >= 60 ? t("diag.minutes", { n: fmt(Math.round((t1 - t0) / 60)) }) : t("diag.seconds", { n: fmt(Math.round(t1 - t0)) }),
-      t("diag.span_tip"), "chip"),
+      t("diag.span_tip")),
   ];
   const now = files.length ? files[files.length - 1][1] : 0;
   $("dg-strip").replaceChildren(...[
@@ -1514,10 +1640,19 @@ function renderDiagnostics(d) {
   const byKind = kinds.length ? h("div", { class: "dg-legend dg-kinds" }, ...kinds.map((k) => h("span", {},
     h("i", { style: `background: var(${k.color})` }), t(`search.kind.${k.name}`), h("b", {}, fmt(k.n))))) : null;
   const pctShow = (v) => pct(Math.round(v));
+  const perSecond = (v) => `${fmt(Math.round(v * 10) / 10)}/s`;
   const vramShared = d.setup?.shared;
+  renderActivityBand(s, t0, t1);
   $("dg-charts").replaceChildren(
     diagChart(t("diag.files"), [{ name: t("diag.files_short"), color: DIAG_COLORS.files, points: files }],
-      { show: (v) => `${fmt(Math.round(v * 10) / 10)}/s`, t0, t1, more: byKind }),
+      { show: perSecond, t0, t1, more: byKind }),
+    diagChart(t("diag.model"), [
+      { name: t("diag.passages"), color: "var(--blue)", points: rate("texts") },
+      { name: t("diag.pictures"), color: "var(--pink)", points: rate("pictures") }], { show: perSecond, t0, t1 }),
+    diagChart(t("diag.queue"), [{ name: t("folders.col.files"), color: "var(--yellow)", points: at((x) => x.pending) }],
+      { show: (v) => fmt(Math.round(v)), t0, t1 }),
+    diagChart(t("diag.disk"), [{ name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.disk.read_mbs) }],
+      { show: (v) => (v >= 1 ? `${fmt(Math.round(v * 10) / 10)} MB/s` : `${fmt(Math.round(v * 1000))} KB/s`), t0, t1 }),
     diagChart(t("diag.cpu"), [
       { name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.app.cpu) },
       { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.cpu) },
@@ -1530,6 +1665,7 @@ function renderDiagnostics(d) {
       { name: t("diag.others"), color: DIAG_COLORS.others, points: at((x) => x.pc.gpu_others) }], { show: pctShow, top: 100, t0, t1 }),
     diagChart(vramShared ? t("diag.shared_memory") : t("diag.vram"), [{ name: t("diag.model"), color: DIAG_COLORS.model,
       points: at((x) => (vramShared ? x.model.shared_mb : x.model.vram_mb)) }], { show: megabytes, t0, t1 }),
+    searchChart(d.searches || [], t0, t1),
   );
   // Where indexing time went in these minutes: one bar.
   const box = $("dg-time");

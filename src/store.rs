@@ -322,8 +322,15 @@ pub struct Folder {
     pub bytes: i64,
     pub chunks: i64,
     pub images: i64,
+    // The rest of what's searched, by kind as File types counts them (pictures are `images`).
+    pub docs: i64,
+    pub texts: i64, // text and code
+    pub mails: i64,
     pub unsearched: i64,
 }
+
+/// An email by its name (File types counts emails apart from the documents and texts they are).
+const MAIL_LIKE: &str = "(x.path LIKE '%.eml' OR x.path LIKE '%.msg' OR x.path LIKE '%.mht' OR x.path LIKE '%.mhtml')";
 
 #[derive(Clone, Debug)]
 pub struct FolderRow {
@@ -819,7 +826,7 @@ impl Store {
         }
         let db = self.reader.lock();
         let result = (|| -> rusqlite::Result<Vec<Folder>> {
-            let mut st = db.prepare(
+            let mut st = db.prepare(&format!(
                 "SELECT f.id, f.path, f.watch, f.added_at, f.last_scan_at, f.report,
                        COUNT(x.id) AS files,
                        COALESCE(SUM(x.status = 'indexed'), 0) AS indexed,
@@ -829,10 +836,13 @@ impl Store {
                        COALESCE(SUM(x.status = 'skipped'), 0) AS skipped,
                        COALESCE(SUM(CASE WHEN x.status = 'indexed' THEN x.size ELSE 0 END), 0) AS bytes,
                        COALESCE(SUM(x.chunks), 0) AS chunks,
-                       COALESCE(SUM(x.kind = 'image' AND x.status = 'indexed'), 0) AS images
+                       COALESCE(SUM(x.kind = 'image' AND x.status = 'indexed'), 0) AS images,
+                       COALESCE(SUM(x.status = 'indexed' AND x.kind = 'doc' AND NOT {MAIL_LIKE}), 0) AS docs,
+                       COALESCE(SUM(x.status = 'indexed' AND x.kind IN ('text', 'code') AND NOT {MAIL_LIKE}), 0) AS texts,
+                       COALESCE(SUM(x.status = 'indexed' AND x.kind <> 'image' AND {MAIL_LIKE}), 0) AS mails
                 FROM folders f LEFT JOIN files x ON x.folder_id = f.id
-                GROUP BY f.id ORDER BY f.path",
-            )?;
+                GROUP BY f.id ORDER BY f.path"
+            ))?;
             let rows = st.query_map([], |r| {
                 let report: Option<String> = r.get(5)?;
                 let report: Report = report.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
@@ -852,6 +862,9 @@ impl Store {
                     bytes: r.get(12)?,
                     chunks: r.get(13)?,
                     images: r.get(14)?,
+                    docs: r.get(15)?,
+                    texts: r.get(16)?,
+                    mails: r.get(17)?,
                     // Everything that isn't searched: skipped files, and what the scan left out.
                     unsearched: skipped + report.total(),
                 })

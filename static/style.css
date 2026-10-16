@@ -163,26 +163,26 @@ kbd {
   display: inline-block; text-align: center; cursor: help;
 }
 
-/* ---- icon buttons: flat; a tint on hover, a deeper one while pressed ---- */
+/* ---- icon buttons: just the icon; a tint on hover, a deeper one while pressed. The frame (card
+   colour, stronger border) only marks one that's on; the one main action is filled. ---- */
 .icon-btn {
-  --face: var(--card); --edge: var(--border-strong); --fg: var(--ink);
+  --face: transparent; --edge: transparent; --fg: var(--muted);
   cursor: pointer; flex: none; display: inline-grid; place-items: center;
   width: var(--ctl); height: var(--ctl); padding: 0;
   background: var(--face); color: var(--fg);
   border: 1px solid var(--edge); border-radius: 8px;
   transition: background-color .1s, color .1s;
 }
-.icon-btn:hover { background: color-mix(in srgb, var(--face) 92%, var(--ink)); }
+.icon-btn:hover { background: color-mix(in srgb, var(--face) 92%, var(--ink)); --fg: var(--ink); }
 .icon-btn:active { background: color-mix(in srgb, var(--face) 84%, var(--ink)); }
 .icon-btn:disabled { opacity: .55; cursor: default; background: var(--face); }
 .icon-btn.small { width: var(--ctl-sm); height: var(--ctl-sm); border-radius: 7px; }
 .icon-btn.small svg.i { width: 16px; height: 16px; }
 .icon-btn.primary { --face: var(--primary); --edge: var(--primary-edge); }
-.icon-btn.on { --fg: var(--blue); }
-.icon-btn:not(.on) .i { opacity: .9; }
+.icon-btn.on { --face: var(--card); --edge: var(--border-strong); --fg: var(--ink); }
 .icon-btn.danger:hover { --fg: var(--red); }
-.icon-btn.danger-solid { --face: var(--red); --edge: var(--red); --fg: #fff; }
-.icon-btn.primary, .icon-btn.primary svg.i { --fg: #151515; } /* dark on the soft yellow in both themes */
+.icon-btn.danger-solid, .icon-btn.danger-solid:hover { --face: var(--red); --edge: var(--red); --fg: #fff; }
+.icon-btn.primary, .icon-btn.primary:hover, .icon-btn.primary svg.i { --fg: #151515; } /* dark on the soft yellow in both themes */
 .icon-btn.working svg.i { animation: spin 1s linear infinite; }
 .icon-btn:focus-visible, .seg button:focus-visible, .nav a:focus-visible, .status:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -712,45 +712,53 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 
 /* ---- folders ---- */
 /* The index at a glance: one number, one bar of the kinds of files, File types beside it. */
-.index-head { display: flex; align-items: flex-start; gap: var(--gap-group); margin-bottom: var(--gap-group); }
-.glance { flex: 1; min-width: 0; }
-.glance-head { display: flex; align-items: baseline; gap: var(--gap); }
-.glance-head b { font: 800 28px/1.1 var(--display); color: var(--ink); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.glance-head span { font-size: 13px; color: var(--muted); }
-.glance-bar { display: flex; gap: 2px; height: 8px; margin-top: 10px; border-radius: 999px; overflow: hidden; background: var(--well); }
-.glance-bar i { flex-basis: 0; min-width: 4px; cursor: help; }
-.glance-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+/* A ring of parts (the kinds of files), its number in the middle. */
+.donut { position: relative; display: inline-grid; place-items: center; width: var(--size); height: var(--size); flex: none; }
+.donut-svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+.donut-svg circle { fill: none; stroke-width: 11; }
+.donut-svg .track { stroke: var(--well); }
+.donut-svg .part { cursor: help; transition: stroke-width .12s; }
+.donut-svg .part:hover { stroke-width: 15; }
+.donut-mid { position: relative; text-align: center; }
+.donut-mid b { font: 800 26px/1 var(--display); color: var(--ink); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+/* The index at a glance: the ring of all folders, beside it each kind's number and a few facts. */
+.index-head { display: flex; align-items: center; gap: 28px; margin: 4px 0 28px; }
+.index-head:empty { display: none; }
+.glance-text { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.glance-title { font-size: 14px; font-weight: 600; color: var(--muted); }
+.glance-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.glance-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 15px; color: var(--muted); }
 .glance-legend span { display: inline-flex; align-items: center; gap: 5px; cursor: help; }
 .glance-legend i { width: 8px; height: 8px; border-radius: 50%; }
-.glance-legend svg.i { width: 15px; height: 15px; color: var(--faint); }
+.glance-legend svg.i { width: 16px; height: 16px; color: var(--faint); }
 .glance-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
-/* Where the next folder would go: an empty slot with a + in it. */
+/* Where the next folder would go: an empty card with a + in it. */
 .add-slot {
-  cursor: pointer; display: grid; place-items: center; min-height: 56px; padding: 0;
-  border: 1px dashed var(--border-strong); border-radius: 8px; background: none; color: var(--muted);
+  cursor: pointer; display: grid; place-items: center; min-height: 118px; padding: 0;
+  border: 1px dashed var(--border-strong); border-radius: 10px; background: none; color: var(--muted);
 }
 .add-slot:hover { color: var(--ink); background: var(--hover); border-color: var(--faint); }
 .add-slot svg.i { width: 22px; height: 22px; }
 .folder.missing .folder-name { color: var(--muted); }
 .error { color: var(--red); font-size: 13px; font-weight: 600; margin: -6px 0 12px; }
-.folders { display: flex; flex-direction: column; gap: 8px; }
-/* A folder: its name, then its numbers and buttons. When it's narrow, numbers and buttons move under
-   the name as one row: numbers on the left, buttons on the right. */
+/* The folders as cards, as many side by side as fit; the + card after them. */
+.folders { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+/* A folder: the ring of its kinds with its name and place; its numbers and buttons under them. */
 .folder {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap) 14px;
-  background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 14px; min-width: 0;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
 }
-.folder-side { flex: 1 0 auto; display: flex; align-items: center; gap: 14px; }
+.folder-side { display: flex; align-items: center; gap: 12px; margin-top: auto; min-width: 0; }
+.folder-side .stats { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
 .folder-main {
-  flex: 999 1 200px; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0;
+  display: flex; align-items: center; gap: 14px; min-width: 0; padding: 0;
   border: 0; background: none; color: inherit; text-align: left; cursor: pointer;
 }
+.folder-ring { display: grid; flex: none; }
+.folder-ring .donut-svg circle { stroke-width: 16; }
 .folder-main:hover .folder-name { text-decoration: underline; text-underline-offset: 3px; }
-.folder-main:hover .folder-icon { color: var(--ink); }
 .folder-text { display: flex; flex-direction: column; min-width: 0; }
-.folder-icon { display: grid; place-items: center; color: var(--muted); }
-.folder-icon svg.i { width: 20px; height: 20px; }
-.folder-name { font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.folder-name { font-weight: 700; font-size: 15px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-path { color: var(--faint); font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats { display: flex; align-items: center; gap: 14px; }
 .stat {
@@ -824,6 +832,11 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 
 /* ---- settings ---- */
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 6px 20px; margin-bottom: 16px; }
+/* A settings row that opens a dialog (File types): what's set, then a ›. */
+.set-link { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.set-link .set-controls { color: var(--muted); }
+.set-link:hover .set-controls { color: var(--ink); }
+.types-summary { font-size: 13px; font-weight: 600; }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; padding: 8px 0; }
 .set-row + .set-row { border-top: 1px solid var(--border); }
 label.set-row { cursor: pointer; }
@@ -895,9 +908,9 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .lb-text.mono { font-family: var(--mono); font-size: 13px; }
 .lb-btn {
   cursor: pointer; flex: none; display: grid; place-items: center; width: var(--ctl); height: var(--ctl); padding: 0; border-radius: 50%;
-  background: var(--card); color: var(--ink); border: 1px solid var(--border-strong);
+  background: none; color: var(--ink); border: 0;
 }
-.lb-btn:hover { background: color-mix(in srgb, var(--card) 92%, var(--ink)); }
+.lb-btn:hover { background: var(--hover); }
 .lb-close { position: absolute; top: 18px; right: 18px; }
 
 /* One column as wide as the window: a long name inside never widens a dialog past it. */
@@ -975,8 +988,8 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 
 /* ---- diagnostics: what the app uses, the last ten minutes ---- */
 .page-diagnostics { display: flex; flex-direction: column; gap: var(--gap-group); }
-.dg-strip { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; margin-bottom: var(--gap-group); }
-.dg-strip .chip { height: var(--ctl-sm); padding: 0 10px; border-color: var(--border); color: var(--muted); }
+/* Facts as an icon and a value, no frames (the tooltip says more). */
+.dg-strip { display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap; min-height: var(--ctl-sm); margin-bottom: var(--gap-group); }
 .dg-headline { display: flex; align-items: baseline; gap: var(--gap); margin-right: var(--gap); }
 .dg-headline b { font-size: 28px; font-weight: 700; color: var(--ink); }
 .dg-headline span { color: var(--muted); font-size: 13px; }
@@ -989,12 +1002,16 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 /* A chart's top value, beside its title: small, muted. */
 .dg-top { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
 .dg-kinds { padding-top: 6px; border-top: 1px solid var(--border); }
-.dg-strip .stat.chip svg.i { color: var(--faint); }
 .dg-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
 .dg-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .dg-legend i { width: 8px; height: 8px; border-radius: 2px; }
 .dg-legend b { color: var(--ink); font-weight: 600; margin-left: 2px; }
 .dg-time { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+/* What indexing did over the charts' time: one band, coloured by what it was doing. */
+.dg-activity { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.dg-activity[hidden] { display: none; }
+.dg-band { position: relative; height: 14px; border-radius: 4px; background: var(--well); overflow: hidden; }
+.dg-band i { position: absolute; top: 0; bottom: 0; cursor: help; }
 .dg-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--well); }
 .dg-bar i { display: block; height: 100%; }
 

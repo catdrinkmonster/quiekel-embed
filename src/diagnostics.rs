@@ -1,7 +1,8 @@
 //! Diagnostics: what the app uses, for the tab Settings -> Diagnostics adds. While it's switched on,
-//! once a second: the processor and memory of the app (with its window's processes, as Task Manager
-//! counts them) and of its model process, the model's load on its graphics card and its video
-//! memory, the whole PC's load, and where indexing spends its time; and how long searches take. The
+//! once a second: what indexing is doing (and why it waits), the files waiting, the processor and
+//! memory of the app (with its window's processes, as Task Manager counts them) and of its model
+//! process, the model's load on its graphics card and its video memory, what the app reads from the
+//! disk, the whole PC's load, and where indexing spends its time; and how long searches take. The
 //! last ten minutes are kept for the tab's charts; switched off, nothing is sampled.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -41,11 +42,13 @@ impl Diagnostics {
             .name("diagnostics".into())
             .spawn(move || {
                 let mut last: HashMap<u32, (u64, Instant)> = HashMap::new();
+                let mut read: Option<(u64, Instant)> = None;
                 let mut gpu = Gpu::open();
                 let (mut window, mut n) = (Vec::new(), 0u32);
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
                     if !me.on.load(Ordering::Relaxed) {
+                        read = None;
                         if !last.is_empty() {
                             last.clear();
                             me.samples.lock().clear();
@@ -57,7 +60,7 @@ impl Diagnostics {
                         window = window_processes(std::process::id());
                     }
                     n = n.wrapping_add(1);
-                    let sample = me.sample(&embedder, &governor, &indexer, &mut last, gpu.as_mut(), &window);
+                    let sample = me.sample(&embedder, &governor, &indexer, &mut last, &mut read, gpu.as_mut(), &window);
                     let mut s = me.samples.lock();
                     if s.len() == KEEP {
                         s.pop_front();
@@ -114,6 +117,7 @@ impl Diagnostics {
         governor: &Governor,
         indexer: &Indexer,
         last: &mut HashMap<u32, (u64, Instant)>,
+        read: &mut Option<(u64, Instant)>,
         gpu: Option<&mut Gpu>,
         window: &[u32],
     ) -> Value {
@@ -144,6 +148,15 @@ impl Diagnostics {
         let m = governor.metrics();
         let p = indexer.progress();
         let r1 = |x: f64| (x * 10.0).round() / 10.0;
+        // What the app read from the disk since the last sample (the files it indexes, its index).
+        let read_mbs = read_bytes().and_then(|now| {
+            let at = Instant::now();
+            let rate = read.map(|(before, then)| now.saturating_sub(before) as f64 / 1e6 / at.duration_since(then).as_secs_f64().max(0.001));
+            *read = Some((now, at));
+            rate
+        });
+        // Indexing waits: memory running out, or the governor holding it back for another reason.
+        let waiting = governor.decision().duty <= 0.0 || p.get("note").is_some_and(|n| n.as_str().is_some_and(|s| !s.is_empty()));
         json!({
             "t": now(),
             "app": {"cpu": r1(app_cpu), "mb": app_mb.round()},
@@ -159,11 +172,24 @@ impl Diagnostics {
                 "cpu": r1(m.cpu_others + app_cpu + model_cpu).min(100.0), "ram_free_gb": r1(m.ram_free_gb),
                 "ram_total_gb": r1(m.ram_total_gb), "gpu_others": g.as_ref().map(|g| r1(g.others)),
             },
+            "disk": {"read_mbs": read_mbs.map(|x| (x * 1000.0).round() / 1000.0)},
             "state": p.get("state"),
+            "paused": p.get("paused"),
+            "waiting": waiting,
+            "model_status": embedder.status(),
+            "pending": indexer.waiting_files(),
             "queued": p.get("queued"),
             "pipeline": p.get("pipeline"),
         })
     }
+}
+
+/// Bytes the app has read so far.
+fn read_bytes() -> Option<u64> {
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessIoCounters, IO_COUNTERS};
+    let mut c = IO_COUNTERS::default();
+    unsafe { GetProcessIoCounters(GetCurrentProcess(), &mut c).ok()? };
+    Some(c.ReadTransferCount)
 }
 
 fn now() -> f64 {
