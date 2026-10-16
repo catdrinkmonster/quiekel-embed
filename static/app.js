@@ -2718,28 +2718,29 @@ function drawMap(now) {
       ctx.stroke();
     });
   }
-  // The tour's file, and where your words would sit, send out rings, one after another.
-  const ripple = (x, y, r0, rgb) => {
-    for (const k of [0, 0.5]) {
-      const ph = (now / 1800 + k) % 1;
-      ctx.lineWidth = 2 * dpr;
-      ctx.strokeStyle = `rgba(${rgb}, ${(0.55 * (1 - ph)).toFixed(3)})`;
-      ctx.beginPath();
-      ctx.arc(x, y, r0 + ph * 34 * dpr, 0, TAU);
-      ctx.stroke();
-    }
-  };
-  if (fileDot) ripple(fileDot.px, fileDot.py, fileDot.r + 4 * dpr, "245, 78, 0");
-  if (spot) ripple(spot[0], spot[1], 7 * dpr, theme.ink);
+  // The tour's file, and where your words would sit, send out rings one after another: a CSS
+  // animation over the map, so they run smoothly while the map itself stands still.
+  ripple($("map-ripple"), fileDot && [fileDot.px / dpr, fileDot.py / dpr, fileDot.r / dpr + 4]);
+  ripple($("map-ripple-spot"), spot && [spot[0] / dpr, spot[1] / dpr, 7]);
   map.screen = list;
   if (map.drag || map.fly || appear < 1 || fading || moving || (tour && age < 2600)) {
     startMapLoop();
-  } else if (turning || (tour && document.hasFocus())) {
-    // The slow turn (and the tour's rings) look the same at 30 frames a second as at a 144 Hz
-    // screen's rate, for a fraction of the work.
+  } else if (turning) {
+    // The slow turn looks the same at 30 frames a second as at a 144 Hz screen's rate,
+    // for a fraction of the work.
     clearTimeout(map.spinTimer);
     map.spinTimer = setTimeout(startMapLoop, 33);
   }
+}
+
+// Rings going out from a point on the map (CSS pixels): x, y and the radius they start from.
+function ripple(el, at) {
+  el.hidden = !at;
+  if (!at) return;
+  const [x, y, r] = at;
+  el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+  el.style.setProperty("--r", `${(r + 34).toFixed(1)}px`);
+  el.style.setProperty("--from", (r / (r + 34)).toFixed(3));
 }
 
 function mapHit(e) {
@@ -3257,7 +3258,7 @@ function renderExplain() {
   const head = h("div", { class: "mx-head" }, icon("help"), h("b", {}, t("map.help")),
     iconButton("close", t("common.close"), () => toggleHelp(false), "chip-x"));
   const dots = h("span", { class: "mx-dots" }, ...TOUR.map((_, i) => {
-    const dot = h("button", { type: "button", class: `${i === at ? "on" : ""}${i === TOUR_SEARCH ? " part" : ""}`, onclick: () => goStep(i) });
+    const dot = h("button", { type: "button", class: i === at ? "on" : "", onclick: () => goStep(i) });
     setTip(dot, t("map.step", { n: i + 1, total: TOUR.length }));
     return dot;
   }));
@@ -3272,6 +3273,28 @@ function renderExplain() {
       h("p", { class: "mx-text" }, t(`${TOUR[at]}_d`)),
       h("div", { class: "mx-stage" }, walkVisual())),
     h("div", { class: "mx-nav" }, back, dots, next));
+  requestAnimationFrame(fitStep);
+}
+
+// Once a step is laid out: its passages show as many lines as the room allows, and the passages'
+// numbers know where the average is that they fly into.
+function fitStep() {
+  const stage = document.querySelector("#map-explain .mx-stage");
+  if (!stage) return;
+  const list = stage.querySelector(".mx-passages");
+  if (list) {
+    const n = list.children.length || 1;
+    list.style.setProperty("--lines", Math.max(2, Math.min(8, Math.floor((stage.clientHeight - 64) / n / 20.8) - 1)));
+  }
+  const mean = stage.querySelector(".mx-mean");
+  if (mean) {
+    const m = mean.getBoundingClientRect();
+    for (const c of stage.querySelectorAll(".mx-prints.merge > canvas")) {
+      const r = c.getBoundingClientRect();
+      c.style.setProperty("--dx", `${(m.left + m.width / 2 - r.left - r.width / 2).toFixed(1)}px`);
+      c.style.setProperty("--dy", `${(m.top + m.height / 2 - r.top - r.height / 2).toFixed(1)}px`);
+    }
+  }
 }
 
 function goStep(i) {
@@ -3307,17 +3330,20 @@ function walkVisual() {
 // (its place in the order things come in)
 const nth = (el, i) => { el.style.setProperty("--i", i); return el; };
 
-// The file's steps: it's read (a line goes down it), cut into passages (they drop in one by one),
-// each turned into numbers (they appear beside them), and their numbers fly into the average.
+// The file's steps, as large as the panel allows: it's read (a line goes down it), cut into passages
+// (they drop in one by one), each turned into numbers (they appear beside them), and their numbers
+// fly into the average.
 function fileVisual(at) {
   const f = map.walkFile;
-  if (f?.empty) return h("div", { class: "mx-caption" }, t(state.hasFolders ? "search.still_indexing" : "activity.no_folders_sub"));
-  if (!f || f.loading) return h("div", { class: "mx-visual" }, h("span", { class: "skeleton mx-skel" }));
-  if (f.error) return h("p", { class: "mx-error" }, f.error);
-  const thumb = (cls) => h("img", { class: cls, alt: "", src: thumbUrl({ file_id: f.id, mtime: f.file.mtime, size: f.file.size }) });
+  const visual = (cls, ...kids) => h("div", { class: `mx-visual${cls ? ` ${cls}` : ""}` }, ...kids);
+  if (f?.empty) return visual("", h("div", { class: "mx-caption" }, t(state.hasFolders ? "search.still_indexing" : "activity.no_folders_sub")));
+  if (!f || f.loading) return visual("", h("span", { class: "skeleton mx-skel" }));
+  if (f.error) return visual("", h("p", { class: "mx-error" }, f.error));
+  const r = { file_id: f.id, mtime: f.file.mtime, size: f.file.size };
   if (at === 0) {
-    const page = f.file.preview ? thumb("mx-thumb") : h("p", {}, f.passages[0]?.text || "");
-    return h("div", { class: "mx-visual" },
+    const page = f.file.preview ? h("img", { class: "mx-page", alt: "", src: previewUrl(r) })
+      : h("p", { class: "mx-sheet" }, f.passages.map((ps) => ps.text).join("\n\n"));
+    return visual("",
       nth(h("div", { class: `mx-read mx-in${f.file.preview ? "" : " text"}` }, page), 0),
       nth(h("div", { class: "mx-file mx-in" }, icon(f.file.kind in ICONS ? f.file.kind : "doc"), h("b", {}, f.file.name)), 1),
       nth(h("div", { class: "mx-dir mx-in" }, f.file.dir), 2));
@@ -3325,37 +3351,36 @@ function fileVisual(at) {
   if (at === 1 || at === 2) {
     const shown = f.passages.slice(0, TOUR_PASSAGES);
     const rows = shown.map((ps, i) => nth(h("div", { class: `mx-passage${at === 1 ? " mx-in" : ""}` },
-      at === 2 ? printCanvas(ps.vector, 40, 250 + i * 170) : null,
-      h("span", {}, ps.page ? h("em", {}, t("result.page", { n: ps.page })) : null,
-        ps.text || (f.file.preview ? thumb("mx-thumb small") : "…"))), i));
+      at === 2 ? printCanvas(ps.vector, 52, 250 + i * 170) : h("span", { class: "mx-num" }, fmt(i + 1)),
+      h("span", { class: "mx-ptext" }, ps.page ? h("em", {}, t("result.page", { n: ps.page })) : null,
+        ps.text || (f.file.preview ? h("img", { class: "mx-thumb", alt: "", src: thumbUrl(r) }) : "…"))), i));
     const more = f.count > shown.length ? h("div", { class: "mx-caption" }, tp("map.more_passages", f.count - shown.length)) : null;
-    return h("div", { class: "mx-visual" }, stat("text", tp("map.passages", f.count), t("map.t2")), h("div", { class: "mx-passages" }, ...rows), more);
+    return visual("list", h("div", { class: "mx-caption" }, tp("map.passages", f.count)), h("div", { class: "mx-passages" }, ...rows), more);
   }
-  const small = f.passages.slice(0, TOUR_PASSAGES);
-  const prints = small.map((ps, i) => {
-    const c = printCanvas(ps.vector, 28);
-    c.style.setProperty("--dx", `${((small.length - 1) / 2 - i) * 32}px`); // (to the middle, where the average comes)
-    return nth(c, i);
-  });
-  return h("div", { class: "mx-visual" }, h("div", { class: "mx-prints merge" }, ...prints), printCanvas(f.mean, 120, 650),
-    h("div", { class: "mx-caption mx-in late" }, t("map.average")));
+  const prints = f.passages.slice(0, TOUR_PASSAGES).map((ps, i) => nth(printCanvas(ps.vector, 40), i));
+  const mean = printCanvas(f.mean, "min(80cqw, calc(100cqh - 110px))", 650);
+  mean.classList.add("mx-mean");
+  return visual("", h("div", { class: "mx-prints merge" }, ...prints), mean, h("div", { class: "mx-caption mx-in late" }, t("map.average")));
 }
 
-// The search's steps: your words become numbers, the closest in meaning (their bars fill up as the
-// map lights up), how many files hold your words (counted up), the results (one after another).
+// The search's steps, as large as the panel allows: your words become numbers, the closest in
+// meaning (their bars fill up as the map lights up), the files that hold your words (counted up),
+// the results (one after another).
 function searchVisual(s) {
   const q = map.query;
-  if (!q || q.loading) return h("div", { class: "mx-visual" }, h("span", { class: "skeleton mx-skel" }));
-  if (q.error) return h("p", { class: "mx-error" }, q.error);
+  const visual = (cls, ...kids) => h("div", { class: `mx-visual${cls ? ` ${cls}` : ""}` }, ...kids);
+  if (!q || q.loading) return visual("", h("span", { class: "skeleton mx-skel" }));
+  if (q.error) return visual("", h("p", { class: "mx-error" }, q.error));
   const all = q.results || [];
   const dot = (r) => h("i", { class: "mc-dot", style: `background: ${KIND_COLOR[KIND_GROUP[r.kind] || "text"]}` });
+  const named = (r, i, ...more) => nth(h("div", { class: "mc-rel mx-result mx-in" }, dot(r), h("span", { class: "mc-rel-name" }, r.name), ...more), i);
   if (s === 0) {
-    return h("div", { class: "mx-visual" }, h("div", { class: "mx-words mx-in" }, `“${q.text}”`), printCanvas(q.vector, 120, 450),
+    return visual("", h("div", { class: "mx-words mx-in" }, `“${q.text}”`), printCanvas(q.vector, "min(80cqw, calc(100cqh - 120px))", 450),
       h("div", { class: "mx-caption mx-in late" }, t("map.numbers")));
   }
   if (s === 1) {
-    const best = all.filter((r) => r.similarity != null).sort((a, b) => b.similarity - a.similarity).slice(0, 4);
-    return h("div", { class: "mx-visual" }, h("div", { class: "mx-caption" }, t("map.closest_meaning")),
+    const best = all.filter((r) => r.similarity != null).sort((a, b) => b.similarity - a.similarity).slice(0, 6);
+    return visual("list", h("div", { class: "mx-caption" }, t("map.closest_meaning")),
       h("div", { class: "mx-bars" }, ...best.map((r, i) => {
         const share = Math.max(0, Math.min(1, (r.similarity - 0.55) / 0.27)); // (the match ring's scale)
         return nth(h("div", { class: "mx-bar-row mx-in", style: `--hue: ${Math.round(share * 120)}` }, dot(r), h("span", { class: "mc-rel-name" }, r.name),
@@ -3363,17 +3388,19 @@ function searchVisual(s) {
       })));
   }
   if (s === 2) {
-    if (!q.words.size) return h("div", { class: "mx-caption" }, t("map.no_words"));
+    if (!q.words.size) return visual("", h("div", { class: "mx-caption" }, t("map.no_words")));
     const n = h("b", { class: "mx-count" }, "0");
     countUp(n, q.words.size);
-    return h("div", { class: "mx-visual" }, n, h("div", { class: "mx-caption" }, tp("map.with_words", q.words.size)));
+    const holding = all.filter((r) => q.words.has(r.file_id)).slice(0, 6);
+    return visual("", n, h("div", { class: "mx-caption" }, tp("map.with_words", q.words.size)),
+      h("div", { class: "mc-related mx-results" }, ...holding.map((r, i) => named(r, i + 1))));
   }
   // The first likely ones, the line, and the first of the rest: as the search shows them.
   const likely = Math.min(q.likely ?? all.length, all.length);
   let i = 0;
   const row = (r) => {
     const p = map.byId.get(r.file_id);
-    const el = nth(h("div", { class: "mc-rel mx-result mx-in" }, dot(r), h("span", { class: "mc-rel-name" }, r.name), matchBadge(r)), i++);
+    const el = named(r, i++, matchBadge(r));
     el.addEventListener("pointerenter", () => { map.rowHover = p || null; startMapLoop(); });
     el.addEventListener("pointerleave", () => { map.rowHover = null; startMapLoop(); });
     return el;
@@ -3381,15 +3408,15 @@ function searchVisual(s) {
   const line = (text) => nth(h("div", { class: "more-divider static mx-in" }, h("span", { class: "more-label" }, text)), i++);
   const rest = all.slice(likely, likely + 2);
   const rows = !likely && all.length
-    ? [line(t("search.no_clear_match")), ...all.slice(0, 4).map(row)] // (nothing clears the bar: the search says so)
-    : [...all.slice(0, Math.min(likely, rest.length ? 4 : 6)).map(row),
+    ? [line(t("search.no_clear_match")), ...all.slice(0, 6).map(row)] // (nothing clears the bar: the search says so)
+    : [...all.slice(0, Math.min(likely, rest.length ? 6 : 8)).map(row),
       ...(rest.length ? [line(tp("search.less_likely", all.length - likely)), ...rest.map(row)] : [])];
   const open = nth(h("button", { type: "button", class: "mx-link mx-in", onclick: () => {
     $("q").value = q.text;
     goTo("search");
     runSearch();
   } }, icon("search"), t("map.open_search")), i);
-  return h("div", { class: "mx-visual" }, h("div", { class: "mc-related mx-results" }, ...rows), open);
+  return visual("list", h("div", { class: "mc-related mx-results" }, ...rows), open);
 }
 
 // A number counting up to n, from a moment from now.
@@ -3410,10 +3437,11 @@ function popIn(k) {
   return 1 + 2.8 * (k - 1) ** 3 + 1.8 * (k - 1) ** 2;
 }
 
-// A vector as its 16 × 16 grid, `size` pixels wide; with `develop`, its squares appear in a sweep from
-// the top left, starting that many ms from now.
+// A vector as its 16 × 16 grid, `size` wide (pixels, or a CSS length); with `develop`, its squares
+// appear in a sweep from the top left, starting that many ms from now.
 function printCanvas(v, size, develop = null) {
-  const c = h("canvas", { class: "mx-print", width: 160, height: 160, style: `width: ${size}px; height: ${size}px` });
+  const s = typeof size === "number" ? `${size}px` : size;
+  const c = h("canvas", { class: "mx-print", width: 160, height: 160, style: `width: ${s}; height: ${s}` });
   if (develop == null) {
     drawFingerprint(v, null, c);
     return c;
