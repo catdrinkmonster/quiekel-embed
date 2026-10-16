@@ -8,7 +8,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use base64_lite::encode as b64;
 use parking_lot::Mutex;
 use serde_json::Value;
 use tao::dpi::LogicalSize;
@@ -46,30 +45,13 @@ enum UserEvent {
     Quit,
 }
 
-/// The base64 of bytes (for the splash's pictures).
-mod base64_lite {
-    pub fn encode(data: &[u8]) -> String {
-        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-        for c in data.chunks(3) {
-            let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-            out.push(T[(n >> 18) as usize & 63] as char);
-            out.push(T[(n >> 12) as usize & 63] as char);
-            out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-            out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
-        }
-        out
-    }
-}
-
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#x27;")
 }
 
-/// What the window shows until the app is there: Quiekel and a ring that fills up as the app
-/// starts (red to green; progress() moves it), or what went wrong.
+/// What the window shows until the app is there: a ring that fills up as the app starts (red to
+/// green; progress() moves it), or what went wrong. (Quiekel is the logo in the app, nowhere else.)
 fn page(message: &str, detail: &str, dark: bool) -> String {
-    let quiekel = b64(server::static_file(if dark { "quiekel-dark.svg" } else { "quiekel.svg" }).unwrap_or_default());
     let (bg, fg, muted) = colors(dark);
     let (track, sat, light) = if dark { ("#2b2c30", 62, 56) } else { ("#d0d1c9", 72, 44) };
     let ring = r#"<svg class="ring" viewBox="0 0 20 20" aria-hidden="true"><circle class="t" cx="10" cy="10" r="8"/><circle class="a" id="a" cx="10" cy="10" r="8" pathLength="100"/></svg>"#;
@@ -81,7 +63,7 @@ fn page(message: &str, detail: &str, dark: bool) -> String {
         r#"<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{{margin:0;height:100%;background:{bg};color:{fg};font:14px "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}}
 body{{display:grid;place-items:center}} .box{{display:grid;justify-items:center;gap:20px;max-width:560px;padding:24px;text-align:center}}
-img{{width:88px;height:auto}} p{{margin:0;font-weight:600}} code{{font:12px "Cascadia Mono",Consolas,monospace;color:{muted}}}
+p{{margin:0;font-weight:600}} code{{font:12px "Cascadia Mono",Consolas,monospace;color:{muted}}}
 .ring{{width:40px;height:40px;transform:rotate(-90deg)}} .ring circle{{fill:none;stroke-width:2.8}} .t{{stroke:{track}}}
 .a{{stroke-linecap:round;stroke-dasharray:4 100;stroke:hsl(4 {sat}% {light}%);transition:stroke-dasharray .4s ease,stroke .4s ease}}
 </style><script>
@@ -92,7 +74,7 @@ function progress(share) {{
   a.style.strokeDasharray = (share * 100).toFixed(1) + " 100";
   a.style.stroke = "hsl(" + Math.round(share * 120) + " {sat}% {light}%)";
 }}
-</script></head><body><div class="box"><img src="data:image/svg+xml;base64,{quiekel}" alt="">{body}</div></body></html>"#
+</script></head><body><div class="box">{body}</div></body></html>"#
     )
 }
 

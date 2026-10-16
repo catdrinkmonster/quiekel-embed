@@ -130,6 +130,23 @@ fn render(page: &PdfPage, zoom: f64) -> ReadResult<RgbImage> {
     Ok(bitmap.as_image().to_rgb8())
 }
 
+/// A page's text as PDFium gives it, made fit to search: the U+0002 it puts where a word was split
+/// at a line end goes (the halves are one word: "ge\u{2}worfen"), other control codes and the
+/// glyphs of symbol fonts (the private use area: bullets, arrows, no letters) become spaces.
+fn clean_pdf_text(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n").replace("\u{2}\n", "");
+    text.chars()
+        .filter(|&c| c != '\u{2}')
+        .map(|c| if (c.is_control() && c != '\n' && c != '\t') || ('\u{e000}'..='\u{f8ff}').contains(&c) { ' ' } else { c })
+        .collect()
+}
+
+/// Whether there's anything to read: a letter or a digit somewhere. A PDF without (a scan, or one
+/// whose fonts don't say which letters they show) is looked at instead.
+fn has_words(text: &str) -> bool {
+    text.chars().any(char::is_alphanumeric)
+}
+
 fn read_pdf(path: &Path) -> ReadResult<(String, Vec<RgbImage>)> {
     let (_one, pdfium) = pdfium()?; // (dropped last, after the document)
     let doc = open_pdf(pdfium, path)?;
@@ -137,8 +154,7 @@ fn read_pdf(path: &Path) -> ReadResult<(String, Vec<RgbImage>)> {
     let mut parts = Vec::new();
     let mut total = 0;
     for page in pages.iter() {
-        let text = page.text().map(|t| t.all()).unwrap_or_default();
-        let mut text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut text = clean_pdf_text(&page.text().map(|t| t.all()).unwrap_or_default());
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }
@@ -148,9 +164,10 @@ fn read_pdf(path: &Path) -> ReadResult<(String, Vec<RgbImage>)> {
             break;
         }
     }
-    let text = parts.join("\n\n");
+    let mut text = parts.join("\n\n");
     let mut images = Vec::new();
-    if text.trim().is_empty() {
+    if !has_words(&text) {
+        text.clear();
         let n = (pages.len() as usize).min(config::SCANNED_PDF_PAGES);
         for i in 0..n {
             let page = pages.get(i as u16).map_err(|_| ReadError::Damaged("pdf"))?;
@@ -370,6 +387,17 @@ mod tests {
     fn paths_and_text() {
         assert_eq!(join("OEBPS/text/ch1.xhtml", "../images/a%20b.jpg#x"), "OEBPS/images/a b.jpg");
         assert_eq!(html_text("<html><body><p>One</p><p>Two  three</p></body></html>"), "One\nTwo three\n");
+    }
+
+    #[test]
+    fn pdf_text_joins_split_words_and_drops_glyphs_without_letters() {
+        // As PDFium gives it: U+0002 where a word was split at a line end, a symbol font's bullet
+        // in the private use area, a control code for another one.
+        let raw = "Ein Würfel wird ge\u{2}worfen.\r\n\u{f}Die Grundgesamtheit\r\n\u{f0b7} Bal\u{2}\r\nkon\tWetter";
+        assert_eq!(clean_pdf_text(raw), "Ein Würfel wird geworfen.\n Die Grundgesamtheit\n  Balkon\tWetter");
+        // Only bullets and full stops: nothing to read, so the pages are looked at instead.
+        assert!(!has_words(&clean_pdf_text("\u{f0d3}\n\n\u{f0b7}\u{f0b7}\u{f0b7}\n.\n,\n.")));
+        assert!(has_words("Seite 3") && has_words("3"));
     }
 
     #[test]

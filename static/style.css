@@ -20,6 +20,8 @@
   --faint: #93958c;
   --orange: #f54e00;
   --yellow: #f7a501;
+  --primary: #ffe28a; /* the main action: a soft yellow (the strong one is for attention) */
+  --primary-edge: #f0c94f;
   --blue: #1d4aff;
   --green: #2f9e44;
   --red: #d93025;
@@ -42,11 +44,9 @@
   --yellow-line: #f2d27c;
   --yellow-fg: #5c3f00;
   --yellow-icon: #9a6a00;
-  --yellow-hover: rgba(122, 82, 0, .1);
   --blue-bg: #e7ecff;
   --blue-line: #c2cdfd;
   --blue-fg: #1a2f8f;
-  --blue-hover: rgba(29, 74, 255, .14);
   --pink-bg: #fde8ee;
   --pink-fg: #a8264f;
   --red-bg: #fff7f6;
@@ -85,6 +85,8 @@
   --faint: #6c6e68;
   --orange: #ff6d2e;
   --yellow: #f7a501;
+  --primary: #f0d27a;
+  --primary-edge: #f0d27a;
   --blue: #7189ff;
   --green: #4cc46b;
   --red: #ff6b5e;
@@ -109,11 +111,9 @@
   --yellow-line: #6b5419;
   --yellow-fg: #ffd77a;
   --yellow-icon: #f7b733;
-  --yellow-hover: rgba(255, 215, 122, .1);
   --blue-bg: #1d264f;
   --blue-line: #33437f;
   --blue-fg: #bfcbff;
-  --blue-hover: rgba(113, 137, 255, .18);
   --pink-bg: #3c1c28;
   --pink-fg: #ff9fbd;
   --red-bg: #33191a;
@@ -177,12 +177,12 @@ kbd {
 .icon-btn:disabled { opacity: .55; cursor: default; background: var(--face); }
 .icon-btn.small { width: var(--ctl-sm); height: var(--ctl-sm); border-radius: 7px; }
 .icon-btn.small svg.i { width: 16px; height: 16px; }
-.icon-btn.primary { --face: var(--yellow); --edge: var(--yellow); }
+.icon-btn.primary { --face: var(--primary); --edge: var(--primary-edge); }
 .icon-btn.on { --fg: var(--blue); }
 .icon-btn:not(.on) .i { opacity: .9; }
 .icon-btn.danger:hover { --fg: var(--red); }
 .icon-btn.danger-solid { --face: var(--red); --edge: var(--red); --fg: #fff; }
-.icon-btn.primary, .icon-btn.primary svg.i { --fg: #151515; } /* dark on yellow in both themes */
+.icon-btn.primary, .icon-btn.primary svg.i { --fg: #151515; } /* dark on the soft yellow in both themes */
 .icon-btn.working svg.i { animation: spin 1s linear infinite; }
 .icon-btn:focus-visible, .seg button:focus-visible, .nav a:focus-visible, .status:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -263,9 +263,9 @@ kbd {
 .status.paused { --c: var(--muted); }
 /* Waiting: a bold hourglass whose sand runs down before it turns over, and again. */
 svg.i .frame { stroke-width: 2.6; }
-.status-inner .timer { transform-box: view-box; transform-origin: 50% 50%; animation: timer-turn 3.2s infinite; }
-.status-inner .sand { transform-box: fill-box; transform-origin: 50% 100%; animation: sand-top 3.2s linear infinite; }
-.status-inner .sand.bottom { animation-name: sand-bottom; }
+.status-inner .timer, .map-busy .timer { transform-box: view-box; transform-origin: 50% 50%; animation: timer-turn 3.2s infinite; }
+.status-inner .sand, .map-busy .sand { transform-box: fill-box; transform-origin: 50% 100%; animation: sand-top 3.2s linear infinite; }
+.status-inner .sand.bottom, .map-busy .sand.bottom { animation-name: sand-bottom; }
 @keyframes timer-turn {
   0%, 40% { transform: rotate(0deg); animation-timing-function: cubic-bezier(.65, 0, .35, 1); }
   50%, 90% { transform: rotate(180deg); animation-timing-function: cubic-bezier(.65, 0, .35, 1); }
@@ -327,36 +327,38 @@ svg.i .frame { stroke-width: 2.6; }
 .toolbar .seg, .map-bar .seg { gap: var(--gap-in); padding: 0; background: none; border-color: transparent; }
 .toolbar .seg button, .map-bar .seg button { width: var(--ctl); height: var(--ctl); }
 
+/* A filter that's on (the file whose similar files are shown): a chosen control, card colour and a
+   stronger border, the same height as the toolbar's buttons; no colour of its own. */
 .chip {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 340px;
-  background: var(--blue-bg); color: var(--blue-fg); border: 1px solid var(--blue-line); border-radius: 999px; padding: 3px 4px 3px 10px;
+  display: inline-flex; align-items: center; gap: 6px; max-width: 340px; height: var(--ctl);
+  background: var(--card); color: var(--ink); border: 1px solid var(--border-strong); border-radius: 8px; padding: 0 5px 0 10px;
   font-weight: 600; font-size: 13px;
 }
+.chip > [data-icon] svg.i { width: 16px; height: 16px; color: var(--muted); }
 .chip-name { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-x {
-  cursor: pointer; display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
-  border: 0; border-radius: 50%; background: transparent; color: inherit;
+  cursor: pointer; display: grid; place-items: center; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 6px; background: transparent; color: var(--muted);
 }
-.chip-x:hover { background: var(--blue-hover); }
+.chip-x:hover { color: var(--ink); background: var(--hover); }
 .chip-x svg.i { width: 14px; height: 14px; }
 .hint-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--yellow-bg); color: var(--yellow-icon); cursor: help; }
 .hint-icon svg.i { width: 17px; height: 17px; }
-/* Narrowing to one folder: a pill that opens a little folder browser. */
-.scope { display: inline-flex; align-items: center; gap: 2px; border-radius: 999px; }
-.scope.on { background: var(--yellow-bg); box-shadow: inset 0 0 0 1px var(--yellow-line); padding-right: 4px; }
+/* Narrowing to one folder: a control that opens a little folder browser. Off: muted, no frame; on:
+   a chosen control (card colour, stronger border), like every other filter that's on. */
+.scope { display: inline-flex; align-items: center; gap: 2px; border-radius: 8px; }
+.scope.on { background: var(--card); box-shadow: inset 0 0 0 1px var(--border-strong); padding-right: 5px; }
 .scope-pill {
   cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 260px; height: var(--ctl);
-  padding: 0 10px; border: 1px solid transparent; border-radius: 999px; background: transparent;
+  padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: transparent;
   color: var(--muted); font-weight: 600; font-size: 13px;
 }
 .scope-pill:hover { color: var(--ink); background: var(--hover); }
-.scope.on .scope-pill { color: var(--yellow-fg); }
-.scope.on .scope-pill:hover { background: var(--yellow-hover); }
+.scope.on .scope-pill { color: var(--ink); }
+.scope.on .scope-pill svg.i:first-child { color: var(--muted); }
 .scope-pill svg.i { width: 16px; height: 16px; }
 .scope-pill svg.i:last-child { width: 14px; height: 14px; opacity: .6; }
 .scope-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scope .chip-x { color: var(--yellow-fg); }
-.scope .chip-x:hover { background: var(--yellow-hover); }
 .menu {
   position: fixed; left: 0; top: 0; z-index: 45; width: 280px; max-height: 360px; overflow: auto; padding: 4px;
   background: var(--card); border: 1px solid var(--border-strong); border-radius: 9px;
@@ -366,7 +368,7 @@ svg.i .frame { stroke-width: 2.6; }
   background: none; border: 0; border-radius: 6px; text-align: left; color: var(--text); font-size: 13px;
 }
 .menu-row:hover { background: var(--well); color: var(--ink); }
-.menu-row.on { background: var(--yellow-bg); color: var(--yellow-fg); font-weight: 600; }
+.menu-row.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
 .menu-row svg.i { width: 16px; height: 16px; color: var(--faint); }
 .menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-count { font: 600 11px var(--mono); color: var(--faint); }
@@ -383,33 +385,32 @@ svg.i .frame { stroke-width: 2.6; }
 }
 .result:hover { border-color: var(--border-strong); }
 
-/* Between the likely results and the rest: a line with how many more there are on it. */
+/* Between the likely results and the rest: a line with a muted label on it, no pill. The two are
+   groups, so a group's gap (16px) above and below it. */
 .more-divider {
   display: flex; align-items: center; gap: var(--gap); width: 100%; min-height: var(--ctl-sm);
+  margin: calc(var(--gap-group) - 8px) 0; /* (plus the results' own 8px) */
   padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
 }
 .more-divider::before, .more-divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
-.more-label {
-  display: inline-flex; align-items: center; gap: var(--gap-in); height: var(--ctl-sm); padding: 0 10px;
-  border: 1px solid var(--border); border-radius: 999px; background: var(--card); white-space: nowrap;
-}
+.more-label { display: inline-flex; align-items: center; gap: var(--gap-in); white-space: nowrap; }
 .more-label .i { width: 14px; height: 14px; }
 .more-divider:hover { color: var(--ink); }
-.more-divider:hover .more-label { border-color: var(--border-strong); background: var(--well); }
-.results.grid .more-divider { grid-column: 1 / -1; }
-.results.list .more-divider { min-height: 36px; border-top: 1px solid var(--border); padding: 0 12px; }
+.more-divider:hover::before, .more-divider:hover::after { border-color: var(--border-strong); }
+.results.grid .more-divider { grid-column: 1 / -1; margin: calc(var(--gap-group) - 12px) 0; } /* (the grid's gap is 12px) */
 .result.selected, .tile.selected { border-color: var(--faint); }
 .thumb {
   width: 64px; height: 64px; flex: none; border-radius: 5px; object-fit: contain; /* the whole picture, never squashed */
   background: var(--well); border: 1px solid var(--border); cursor: zoom-in;
 }
+/* A file without a picture: its kind's icon and its extension, muted; as wide as a thumbnail, so
+   the text beside it starts where it does next to a picture. */
 .ext {
-  --c: #6b6d65;
-  width: 42px; height: 50px; flex: none; border-radius: 5px; display: grid; place-items: center;
-  font: 800 10px var(--mono); text-transform: uppercase; letter-spacing: .02em;
-  color: color-mix(in srgb, var(--c) 80%, var(--ink)); background: color-mix(in srgb, var(--c) 11%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--c) 35%, var(--card));
+  width: 64px; height: 64px; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; color: var(--muted); font: 700 10px var(--mono); text-transform: uppercase; letter-spacing: .04em;
 }
+.ext svg.i { width: 26px; height: 26px; stroke-width: 1.6; }
+.ext span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); }
 /* The name with the buttons beside it, the folder under the name (cut off before the buttons), then
    the passage and the details across the whole card. */
 .body { min-width: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: center; }
@@ -462,10 +463,12 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
   aspect-ratio: 4 / 3; display: grid; place-items: center; cursor: pointer;
   background: var(--well); border-bottom: 1px solid var(--border);
 }
-.tile-ext .ext { width: 64px; height: 78px; font-size: 14px; border-radius: 8px; }
+.tile-ext .ext { width: 100%; height: auto; gap: 8px; font-size: 13px; }
+.tile-ext .ext svg.i { width: 40px; height: 40px; stroke-width: 1.4; }
 
-/* List: one line per file, in one card. Columns line up from row to row. */
-.results.list { gap: 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+/* List: one line per file, in a card (the likely ones, and the rest below the divider). Columns line
+   up from row to row. No results, no card: an empty one would show as a line under the toolbar. */
+.list-card { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .line {
   display: grid; grid-template-columns: 30px minmax(120px, 1.2fr) minmax(0, 2fr) 104px 64px 44px auto;
   align-items: center; gap: 12px; min-height: 44px; padding: 4px 8px 4px 12px;
@@ -474,7 +477,9 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .line:first-child { border-top: 0; }
 .line.selected { background: var(--well); }
 .line .mini { width: 30px; height: 30px; object-fit: contain; border-radius: 4px; background: var(--well); cursor: zoom-in; }
-.line .ext { width: 30px; height: 30px; font-size: 8px; border-radius: 5px; }
+.line .ext { width: 30px; height: 30px; }
+.line .ext svg.i { width: 20px; height: 20px; }
+.line .ext span { display: none; } /* (too small for it: the name says it) */
 .line .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .line .dir { margin: 0; }
 .line .info { margin: 0; white-space: nowrap; text-align: right; }
@@ -483,12 +488,9 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .line:hover .actions, .line.selected .actions, .line .actions:focus-within { opacity: 1; }
 
 .empty { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 64px 20px 40px; color: var(--muted); }
-.empty img { width: 150px; height: auto; }
-.empty img.small { width: 72px; }
-.empty p { margin: -6px 0 0; font-weight: 600; }
+.empty p { margin: 0; font-weight: 600; }
 .empty p.waiting { max-width: 380px; text-align: center; font-size: 15px; font-weight: 500; line-height: 1.6; color: var(--muted); text-wrap: balance; }
 .empty.compact { padding: 40px 20px; }
-.empty.compact img { width: 110px; }
 .link {
   cursor: pointer; font-weight: 700; color: var(--ink);
   text-decoration: underline; text-decoration-color: var(--orange); text-decoration-thickness: 2px; text-underline-offset: 3px;
@@ -518,11 +520,9 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 }
 #map-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .map-center { position: absolute; left: 50%; top: 50%; translate: -50% -50%; }
-.map-empty { width: 110px; }
-/* Sniffing: tilts left and right around its middle, and bobs up as it passes the middle. */
-.map-busy { width: 90px; animation: sniff-tilt 1.2s ease-in-out infinite, sniff-bob .6s ease-in-out infinite; }
-@keyframes sniff-tilt { 0%, 100% { rotate: -7deg; } 50% { rotate: 7deg; } }
-@keyframes sniff-bob { 0%, 100% { transform: none; } 50% { transform: translateY(-4px); } }
+/* The first layout is being worked out: the waiting hourglass in the middle of the cube. */
+.map-busy { color: var(--muted); cursor: help; }
+.map-busy svg.i { width: 30px; height: 30px; }
 .map-card {
   position: absolute; top: 14px; right: 14px; width: 248px; max-height: calc(100% - 28px); overflow: auto; padding: 12px;
   background: var(--card); border: 1px solid var(--border-strong); border-radius: 10px;
@@ -834,6 +834,7 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 /* ---- diagnostics: what the app uses, the last ten minutes ---- */
 .page-diagnostics { display: flex; flex-direction: column; gap: var(--gap-group); }
 .dg-strip { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; }
+.dg-strip .chip { height: var(--ctl-sm); padding: 0 10px; border-color: var(--border); color: var(--muted); }
 .dg-headline { display: flex; align-items: baseline; gap: var(--gap); margin-right: var(--gap); }
 .dg-headline b { font-size: 28px; font-weight: 700; color: var(--ink); }
 .dg-headline span { color: var(--muted); font-size: 13px; }
