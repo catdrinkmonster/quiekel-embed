@@ -3138,6 +3138,7 @@ function walkVisual() {
     return null;
   }
   const f = map.walkFile;
+  if (f?.empty) return h("div", { class: "mx-caption" }, t(state.hasFolders ? "search.still_indexing" : "activity.no_folders_sub"));
   if (!f || f.loading) return h("div", { class: "mx-visual" }, h("span", { class: "skeleton mx-skel" }));
   if (f.error) return h("p", { class: "mx-error" }, f.error);
   if (at === 0) {
@@ -3205,7 +3206,10 @@ async function loadSearchWalk(tries = 0) {
 
 async function loadIndexWalk() {
   const p = map.selected || centralPoint();
-  if (!p) return;
+  if (!p) { // (no file on the map yet)
+    map.walkFile = { empty: true };
+    return renderExplain();
+  }
   if (map.walkFile?.id === p.id && !map.walkFile.error) return;
   map.walkFile = { id: p.id, loading: true, only: new Set([p.id]) };
   renderExplain();
