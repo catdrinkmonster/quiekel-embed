@@ -1075,7 +1075,8 @@ impl Server {
                 let v = self.mean_vector(path_int("file_id", id)?)?;
                 Ok(json_reply(&b.maps.related(&v)))
             }
-            // How a file came to its dot: its passages, each one's numbers, and their mean.
+            // How a file came to its dot: its passages, each one's numbers and where those would sit
+            // on the map, and their mean.
             ["api", "map", "passages", id] if get => {
                 let id = path_int("file_id", id)?;
                 let Some(f) = b.store.file(id) else { return Err(fail(404, "file_not_found", json!({}))) };
@@ -1085,7 +1086,9 @@ impl Server {
                     .store
                     .file_passages(id, MAP_PASSAGES)
                     .into_iter()
-                    .map(|(n, text, page, v)| json!({"n": n, "text": text.chars().take(320).collect::<String>(), "page": page, "vector": rounded(&v)}))
+                    .map(|(n, text, page, v)| {
+                        json!({"n": n, "text": text.chars().take(320).collect::<String>(), "page": page, "vector": rounded(&v), "spot": b.maps.spot(&v)})
+                    })
                     .collect();
                 Ok(json_reply(&json!({
                     "file": {"id": id, "name": name, "dir": dir, "kind": f.kind, "size": f.size, "mtime": f.mtime,
