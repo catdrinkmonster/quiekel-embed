@@ -166,6 +166,25 @@ pub fn search_name(path: &str, root: &str) -> String {
     }
 }
 
+/// The page each of a PDF's `n` passages starts on, as indexing cuts them now (0 where that can't
+/// be told: inside an archive or an email, unreadable, or cut into a different number of passages
+/// than when it was indexed). A scan's passages are its pages.
+pub fn page_numbers(path: &str, n: usize) -> Vec<i64> {
+    let unknown = vec![0; n];
+    if archive::split(path).is_some() {
+        return unknown;
+    }
+    let Ok((text, scans)) = crate::paged::read_paged(Path::new(path)) else { return unknown };
+    if text.trim().is_empty() && !scans.is_empty() {
+        return if scans.len() == n { (1..=n as i64).collect() } else { unknown };
+    }
+    let passages = extract::chunk_pages(&text);
+    if passages.len() != n {
+        return unknown;
+    }
+    passages.iter().map(|(_, page)| page.map_or(0, i64::from)).collect()
+}
+
 /// Title given to the model: the file name, with its folder when that adds meaning.
 pub fn embed_title(path: &str, root: &str) -> String {
     let rel: Vec<&str> = relative(path, root).split('\\').filter(|p| !p.is_empty() && *p != ".").collect();
@@ -209,10 +228,10 @@ impl Group {
             for (i, c) in chunks.iter().enumerate() {
                 if let Some(img) = &c.image {
                     images.push(img);
-                    meta_i.push((entry, i, &c.snippet));
+                    meta_i.push((entry, i, &c.snippet, c.page));
                 } else {
                     texts.push(c.text.clone().unwrap_or_default());
-                    meta_t.push((entry, i, &c.snippet));
+                    meta_t.push((entry, i, &c.snippet, c.page));
                 }
             }
         }
@@ -220,7 +239,7 @@ impl Group {
         let tv = embedder.documents(&texts)?;
         let iv = embedder.images(&images)?;
         for (vecs, meta) in [(tv, meta_t), (iv, meta_i)] {
-            for (v, (entry, i, snippet)) in vecs.into_iter().zip(meta) {
+            for (v, (entry, i, snippet, page)) in vecs.into_iter().zip(meta) {
                 rows.push(VectorRow {
                     path: entry.path.clone(),
                     folder_id: entry.folder_id,
@@ -228,6 +247,7 @@ impl Group {
                     kind: entry.kind.clone(),
                     text: snippet.clone(),
                     vector: v,
+                    page: page.map(i64::from),
                 });
             }
         }
@@ -712,6 +732,9 @@ impl Indexer {
                 Ok(j) => j,
                 Err(_) => {
                     self.manage_device();
+                    if !self.is_paused() {
+                        self.backfill_pages(Duration::from_millis(400)); // (nothing else to do)
+                    }
                     continue;
                 }
             };
@@ -722,6 +745,25 @@ impl Indexer {
                 log::error!("A job failed: {text}");
                 self.set(json!({"state": "error", "message": format!("panic: {text}")}));
                 std::thread::sleep(Duration::from_secs(2));
+            }
+        }
+    }
+
+    /// PDFs indexed before passages knew their page learn them without going to the model again:
+    /// their text is read once more and cut the same way. A little at a time, while there's nothing
+    /// else to do.
+    fn backfill_pages(&self, budget: Duration) {
+        let start = Instant::now();
+        while start.elapsed() < budget {
+            let todo = self.store.pdfs_without_pages(4);
+            if todo.is_empty() {
+                return;
+            }
+            for (id, path, chunks) in todo {
+                let _ = self.store.set_pages(id, &page_numbers(&path, chunks.max(0) as usize));
+                if start.elapsed() >= budget {
+                    return;
+                }
             }
         }
     }
@@ -1478,13 +1520,28 @@ mod tests {
     }
 
     #[test]
+    fn a_pdf_indexed_before_gets_the_pages_indexing_gives_now() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures");
+        for name in ["lease.pdf", "scan.pdf"] {
+            let path = fixtures.join(name);
+            let size = std::fs::metadata(&path).unwrap().len();
+            let now: Vec<i64> = extract(&path, size, None, None).unwrap().chunks.iter().map(|c| c.page.map_or(0, i64::from)).collect();
+            assert!(now.iter().all(|&p| p >= 1), "{name}: {now:?}");
+            assert_eq!(page_numbers(&path.to_string_lossy(), now.len()), now, "{name}");
+            // Cut differently than when it was indexed: not known.
+            assert!(page_numbers(&path.to_string_lossy(), now.len() + 1).iter().all(|&p| p == 0));
+        }
+        assert_eq!(page_numbers(r"C:\x.zip\a.pdf", 2), [0, 0]); // (inside an archive)
+    }
+
+    #[test]
     fn groups_fill_up() {
         let mut g = Group::default();
         let entry = Entry {
             folder_id: 1, path: "x".into(), size: 1, mtime: 0.0, kind: "text".into(), status: "indexed".into(),
             chunks: 0, error: None, search_name: String::new(),
         };
-        let chunks: Vec<Chunk> = (0..128).map(|_| Chunk { snippet: String::new(), text: Some("a".into()), image: None }).collect();
+        let chunks: Vec<Chunk> = (0..128).map(|_| Chunk { snippet: String::new(), text: Some("a".into()), image: None, page: None }).collect();
         g.add(entry, chunks);
         assert!(g.full(1.0));
         assert_eq!(g.entries[0].chunks, 128);

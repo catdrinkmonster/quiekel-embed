@@ -287,7 +287,7 @@ function renderKeys() {
       [["↑"], ["↓"], "keys.pick"],
       [["Enter"], "keys.open"],
       [[ctrl, "Enter"], "keys.reveal"],
-      [["Shift", "Enter"], "keys.preview"],
+      [["Shift", "Enter"], [t("keys.space")], "keys.preview"],
       [["Esc"], "keys.clear"],
     ]],
     ["cube", "nav.map", [
@@ -392,8 +392,10 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
 // Previews are cached by the browser, and file ids can be reused after a folder is
 // removed and re-added, so the URL carries the file's version.
-const thumbUrl = (r) => `/api/thumb/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}`;
-const previewUrl = (r) => `/api/preview/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}`;
+// (page: of a document, that page's picture)
+const atPage = (page) => (page > 1 ? `&page=${page}` : "");
+const thumbUrl = (r, page) => `/api/thumb/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}${atPage(page)}`;
+const previewUrl = (r, page) => `/api/preview/${r.file_id}?v=${Math.floor(r.mtime)}-${r.size}${atPage(page)}`;
 const pictureUrl = (r) => r.picture || thumbUrl(r); // (the empty page's examples bring their own)
 
 // Wrap query words in <mark>, building DOM nodes (never innerHTML with file content).
@@ -449,7 +451,7 @@ function rotatePlaceholder() {
   $("q").placeholder = `${examples[exampleAt++ % examples.length]}…`;
   if (!$("q").value.trim() && !state.similar && state.hasFolders) renderEmpty(); // (its example result too)
 }
-setInterval(() => { if (!$("q").value) rotatePlaceholder(); }, 4500);
+setInterval(() => { if (!$("q").value && !state.similar) rotatePlaceholder(); }, 4500);
 
 // ---------- pages ----------
 
@@ -1364,7 +1366,7 @@ function filtersQuery() {
 
 async function runSearch() {
   const q = $("q").value.trim();
-  if (state.similar) return runSimilar(state.similar);
+  if (state.similar) return state.similar.file ? runExample(state.similar) : runSimilar(state.similar);
   if (!q) return renderResults(null);
   const qs = filtersQuery();
   qs.set("q", q);
@@ -1372,25 +1374,29 @@ async function runSearch() {
   await fetchResults(`/api/search?${qs}`);
 }
 
+// Files like one file; words typed meanwhile make it "like this, and like these words".
 async function runSimilar(target) {
   state.similar = target;
-  state.terms = [];
-  $("similar-chip").hidden = false;
-  $("similar-name").textContent = target.name;
-  setTip($("similar-chip"), target.name);
-  await fetchResults(`/api/similar/${target.id}?${filtersQuery()}`);
+  const q = $("q").value.trim();
+  state.terms = q ? queryTerms(q) : [];
+  $("q").placeholder = `${t("search.add_words")}…`;
+  const qs = filtersQuery();
+  if (q) qs.set("q", q);
+  await fetchResults(`/api/similar/${target.id}?${qs}`);
 }
 
-async function fetchResults(url) {
+async function fetchResults(url, options = {}) {
   searchCtl?.abort();
   searchCtl = new AbortController();
   try {
-    const res = await fetch(url, { signal: searchCtl.signal });
+    const res = await fetch(url, { ...options, signal: searchCtl.signal });
     if (!res.ok) throw new Error(apiMessage((await res.json().catch(() => ({}))).detail, res.statusText));
     const data = await res.json();
     state.semantic = data.semantic;
     state.expanded = false; // each search shows its likely results first
     state.fetched = { items: data.results, likely: data.likely };
+    state.reference = data.reference || null;
+    if (state.reference && state.similar?.picture) state.reference.picture = state.similar.picture;
     updateNotice();
     renderResults(data.results, data.likely);
   } catch (e) {
@@ -1512,8 +1518,12 @@ function renderResults(items, likely) {
   hideTip();
   state.selected = -1;
   state.likely = Math.min(likely ?? (items || []).length, (items || []).length);
-  // Sorted by something else than relevance: the likely ones and the rest each in that order.
-  if (items) items = [...sortPart(items.slice(0, state.likely)), ...sortPart(items.slice(state.likely))];
+  // Similar files: the nearly identical ones come first (the server puts them there).
+  const near = state.similar && items ? items.filter((r) => r.near).length : 0;
+  // Sorted by something else than relevance: each part (likely and the rest, or nearly the same
+  // and related) in that order.
+  const cut = state.similar ? near : state.likely;
+  if (items) items = [...sortPart(items.slice(0, cut)), ...sortPart(items.slice(cut))];
   state.results = items || [];
   const view = currentView();
   box.className = `results ${view}`;
@@ -1534,10 +1544,23 @@ function renderResults(items, likely) {
       box.append(el);
     }
   };
+  const label = (key) => h("div", { class: "more-divider static" }, h("span", { class: "more-label" }, t(key)));
+  if (state.similar) {
+    // The file they are like, on top; then the nearly identical ones, if any, apart from the related.
+    if (state.reference) box.append(referenceCard(state.reference));
+    if (!near) return put(items, 0);
+    box.append(label("search.near"));
+    put(items.slice(0, near), 0);
+    if (near < items.length) {
+      box.append(label("search.related"));
+      put(items.slice(near), near);
+    }
+    return;
+  }
   if (!state.likely) {
     // Nothing clears the bar: say so, and show what there is.
     state.expanded = true; // (the keyboard steps through all of them)
-    box.append(h("div", { class: "more-divider static" }, h("span", { class: "more-label" }, t("search.no_clear_match"))));
+    box.append(label("search.no_clear_match"));
     return put(items, 0);
   }
   put(items.slice(0, state.likely), 0);
@@ -1654,7 +1677,99 @@ document.addEventListener("pointerdown", (e) => {
 
 const openFile = (r) => post(`/api/open/${r.file_id}`).catch((e) => toast(e.message, "alert"));
 const revealFile = (r) => post(`/api/reveal/${r.file_id}`).catch((e) => toast(e.message, "alert"));
-const similarTo = (r) => { goTo("search"); window.scrollTo(0, 0); closeLightbox(); runSimilar({ id: r.file_id, name: r.name }); };
+const similarTo = (r) => {
+  goTo("search");
+  window.scrollTo(0, 0);
+  closeLightbox();
+  $("q").value = ""; // (words typed now are added to it)
+  runSimilar({ id: r.file_id, name: r.name });
+};
+
+// The file the similar ones are like: on top of them, with the way back to searching.
+function referenceCard(r) {
+  let visual;
+  if (r.picture || r.preview) {
+    visual = h("img", { class: "mini", src: r.picture || thumbUrl(r), alt: "" });
+    visual.addEventListener("error", () => visual.replaceWith(extBadge(r)), { once: true });
+  } else {
+    visual = extBadge(r);
+  }
+  // (a dropped or pasted file isn't in the index: nothing to open, no folder)
+  const name = h("span", { class: "name", onclick: r.file_id ? () => openFile(r) : null }, r.name);
+  if (r.path) setTip(name, r.path);
+  const back = h("button", { type: "button", class: "chip-x", onclick: () => clearSimilar() }, icon("close"));
+  setTip(back, t("search.back"));
+  return h("div", { class: "reference" }, icon("similar"), visual,
+    h("div", { class: "ref-body" }, name, r.dir ? dirButton(r) : null), back);
+}
+
+// ---------- search by example ----------
+//
+// A file dropped on the window, or a picture pasted (Ctrl+V): the files like it, whether it's
+// indexed or not. It's read and compared on this PC like any other; nothing is kept.
+
+const MAX_EXAMPLE = 64 * 1024 * 1024;
+
+function searchByExample(file) {
+  if (!file) return;
+  if (file.size > MAX_EXAMPLE) return toast(t("search.too_big"), "alert");
+  goTo("search");
+  window.scrollTo(0, 0);
+  closeLightbox();
+  if (state.similar?.picture) URL.revokeObjectURL(state.similar.picture);
+  $("q").value = ""; // (words typed now are added to it)
+  const picture = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+  runExample({ file, name: file.name || t("search.pasted"), picture });
+}
+
+async function runExample(target) {
+  state.similar = target;
+  const q = $("q").value.trim();
+  state.terms = q ? queryTerms(q) : [];
+  $("q").placeholder = `${t("search.add_words")}…`;
+  const qs = filtersQuery();
+  qs.set("name", target.file.name || "pasted.png");
+  if (q) qs.set("q", q);
+  await fetchResults(`/api/similar-to?${qs}`, {
+    method: "POST", body: target.file, headers: { "x-quiekel-embed": "1", "Content-Type": "application/octet-stream" },
+  });
+}
+
+{
+  const veil = $("drop-veil");
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  let depth = 0; // (enter and leave come for every element passed over)
+  window.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth += 1;
+    veil.hidden = false;
+  });
+  window.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); // (else the window would open the file)
+    e.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (!depth) veil.hidden = true;
+  });
+  window.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    veil.hidden = true;
+    searchByExample(e.dataTransfer.files[0]);
+  });
+  // A picture pasted anywhere (also into the search box: text goes in as text).
+  document.addEventListener("paste", (e) => {
+    const file = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith("image/"));
+    if (!file || e.target.closest?.("#scope-menu, .modal")) return;
+    e.preventDefault();
+    searchByExample(file);
+  });
+}
 
 function actionButtons(r) {
   return h("span", { class: "actions" },
@@ -1733,7 +1848,8 @@ function dirButton(r) {
 function row(r, i) {
   let visual;
   if (r.preview) {
-    visual = h("img", { class: "thumb", src: pictureUrl(r), loading: "lazy", alt: "", onclick: () => openLightbox(i) });
+    // (a document: the page its passage is on)
+    visual = h("img", { class: "thumb", src: r.picture || thumbUrl(r, r.page), loading: "lazy", alt: "", onclick: () => openLightbox(i) });
     visual.addEventListener("error", () => visual.replaceWith(extBadge(r)), { once: true });
   } else {
     visual = extBadge(r);
@@ -1749,6 +1865,7 @@ function row(r, i) {
       h("div", { class: "side" }, h("span", { class: "info" }, `${ago(r.mtime)} · ${bytes(r.size)}`), actionButtons(r)),
       dirButton(r),
       passage ? h("p", { class: "snippet", onclick: () => el.classList.toggle("expanded") },
+        r.page ? h("span", { class: "page-no" }, t("result.page", { n: fmt(r.page) })) : null,
         highlighted(passage, state.terms)) : null,
     ),
   );
@@ -1802,16 +1919,16 @@ function select(i, scroll = true) {
   }
 }
 
+// (in the similar files of one file, the words typed are added to it)
 $("search-form").addEventListener("submit", (e) => {
   e.preventDefault();
   clearTimeout(searchTimer);
-  clearSimilar(false);
   runSearch();
 });
 
 $("q").addEventListener("input", () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { clearSimilar(false); runSearch(); }, 300);
+  searchTimer = setTimeout(runSearch, 300);
 });
 
 for (const b of $("kinds").querySelectorAll("button")) {
@@ -1825,38 +1942,49 @@ for (const b of $("kinds").querySelectorAll("button")) {
 
 function clearSimilar(rerun = true) {
   if (!state.similar) return;
+  if (state.similar.picture) URL.revokeObjectURL(state.similar.picture);
   state.similar = null;
-  $("similar-chip").hidden = true;
+  state.reference = null;
+  rotatePlaceholder();
   if (rerun) runSearch();
 }
 
-$("similar-clear").addEventListener("click", () => clearSimilar());
-
-// ---------- lightbox ----------
-
-function previewable() {
-  return state.results.map((r, i) => (r.preview ? i : -1)).filter((i) => i >= 0);
-}
+// ---------- quick look ----------
+//
+// Any result, large: a picture, a document at the page its passage is on, or for everything else
+// the passage itself, your words marked. ← → go through the results shown; Enter opens the file.
 
 function openLightbox(i) {
   const r = state.results[i];
-  if (!r || !r.preview) return;
+  if (!r) return;
   hideTip();
   state.lightbox = i;
-  $("lb-img").src = previewUrl(r);
+  const img = $("lb-img");
+  const text = $("lb-text");
+  img.hidden = !r.preview;
+  text.hidden = !!r.preview;
+  if (r.preview) {
+    img.src = r.picture || previewUrl(r, r.page);
+  } else {
+    img.removeAttribute("src");
+    text.className = `lb-text${r.kind === "code" ? " mono" : ""}`;
+    text.replaceChildren(...highlighted(r.snippet || "", state.terms));
+    text.scrollTop = 0;
+  }
   $("lb-name").textContent = r.name;
   setTip($("lb-name"), r.path);
+  $("lb-page").textContent = r.page ? t("result.page", { n: fmt(r.page) }) : "";
   $("lb-actions").replaceChildren(...actionButtons(r).childNodes);
-  const list = previewable();
-  $("lb-prev").style.visibility = list.indexOf(i) > 0 ? "visible" : "hidden";
-  $("lb-next").style.visibility = list.indexOf(i) < list.length - 1 ? "visible" : "hidden";
+  $("lb-prev").style.visibility = i > 0 ? "visible" : "hidden";
+  $("lb-next").style.visibility = i < visibleResults() - 1 ? "visible" : "hidden";
   $("lightbox").hidden = false;
 }
 
 function stepLightbox(dir) {
-  const list = previewable();
-  const pos = list.indexOf(state.lightbox) + dir;
-  if (pos >= 0 && pos < list.length) openLightbox(list[pos]);
+  const next = state.lightbox + dir;
+  if (next < 0 || next >= visibleResults()) return;
+  select(next);
+  openLightbox(next);
 }
 
 function closeLightbox() {
@@ -2501,7 +2629,7 @@ function renderScopes() {
   const s = state.scope;
   for (const box of [$("scope-search"), $("scope-map")]) {
     const pill = h("button", { type: "button", class: `scope-pill${s ? " on" : ""}`, onclick: () => openScopeMenu(box) },
-      icon("folder"), h("span", { class: "scope-name" }, s ? s.name : t("search.all_folders")), icon("chevronDown"));
+      icon("folder"), h("span", { class: "scope-name" }, s ? shortDir(s.path) : t("search.all_folders")), icon("chevronDown"));
     setTip(pill, s ? s.path : t("scope.pick"));
     const parts = [pill];
     if (s) {
@@ -2514,32 +2642,80 @@ function renderScopes() {
   }
 }
 
-// A small folder browser: click a folder to search in it and see the folders inside it.
+// A small folder browser. A click on a folder searches in it; the › at its end shows the folders
+// inside it instead. The field on top finds a folder anywhere by its name. Archives and emails are
+// folders too, with their own icon.
+const DIR_ICON = { archive: "archive", mail: "mail" };
+let scopeFindTimer = null;
+
 async function openScopeMenu(box, path = state.scope?.path || "") {
-  let data;
-  try {
-    data = await api(`/api/dirs?${new URLSearchParams({ path })}`);
-  } catch (e) {
-    toast(e.message, "alert");
-    return;
-  }
   const menu = $("scope-menu");
-  const roots = (state.last?.folders || []).map((f) => f.path.toLowerCase());
-  const parent = !path ? null : roots.includes(path.toLowerCase()) ? "" : path.replace(/[\\/][^\\/]+[\\/]?$/, "");
-  const row = (name, label, count, onclick, on = false) => h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick },
-    icon(name), h("span", { class: "menu-name" }, label), count != null ? h("span", { class: "menu-count" }, fmt(count)) : null);
-  const rows = [];
-  if (state.scope) rows.push(row("globe", t("scope.clear"), null, () => { setScope(null); closeScopeMenu(); }));
-  if (parent !== null) rows.push(row("up", parent ? baseName(parent) : t("search.all_folders"), null, () => openScopeMenu(box, parent)));
-  for (const d of data.dirs) {
-    rows.push(row("folder", d.name, d.count, () => { setScope(d.path); openScopeMenu(box, d.path); },
-      state.scope?.path.toLowerCase() === d.path.toLowerCase()));
-  }
-  if (!data.dirs.length) rows.push(h("div", { class: "menu-empty" }, t("scope.no_subfolders")));
-  menu.replaceChildren(...rows);
+  const find = h("input", { type: "search", class: "input menu-find", spellcheck: "false", placeholder: `${t("scope.find")}…`,
+    "aria-label": t("scope.find") });
+  const list = h("div", { class: "menu-list" });
+  find.addEventListener("input", () => {
+    clearTimeout(scopeFindTimer);
+    scopeFindTimer = setTimeout(() => fillScopeList(box, list, path, find.value.trim()), 150);
+  });
+  menu.replaceChildren(find, list);
+  if (!(await fillScopeList(box, list, path, ""))) return;
   menu.hidden = false;
   const r = box.getBoundingClientRect();
   menu.style.transform = `translate(${Math.round(Math.min(r.left, innerWidth - menu.offsetWidth - 8))}px, ${Math.round(r.bottom + 6)}px)`;
+}
+
+// The menu's rows: the folders in `path`, or those named like `text` anywhere. (Only the last one
+// asked for is shown: typing and opening can overtake each other.)
+let scopeAsked = 0;
+async function fillScopeList(box, list, path, text) {
+  const asked = ++scopeAsked;
+  let data;
+  try {
+    data = await api(`/api/dirs?${new URLSearchParams(text ? { find: text } : { path })}`);
+  } catch (e) {
+    toast(e.message, "alert");
+    return false;
+  }
+  if (asked !== scopeAsked) return true;
+  const choose = (p) => { setScope(p); closeScopeMenu(); };
+  const isScope = (p) => state.scope?.path.toLowerCase() === p.toLowerCase();
+  const row = (name, label, count, onclick, { on = false, open = null } = {}) => {
+    const main = h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick },
+      icon(name), h("span", { class: "menu-name" }, label), count != null ? h("span", { class: "menu-count" }, fmt(count)) : null);
+    if (!open) return main;
+    const more = h("button", { type: "button", class: "menu-open", onclick: open }, icon("chevronRight"));
+    setTip(more, t("scope.inside"));
+    return h("div", { class: "menu-line" }, main, more);
+  };
+  const rows = [];
+  if (text) {
+    for (const d of data.dirs) {
+      const label = shortDir(d.path);
+      const el = row(DIR_ICON[d.kind] || "folder", label, d.count, () => choose(d.path), { on: isScope(d.path) });
+      setTip(el, d.path);
+      rows.push(el);
+    }
+    if (!data.dirs.length) rows.push(h("div", { class: "menu-empty" }, t("scope.none_found")));
+    list.replaceChildren(...rows);
+    return true;
+  }
+  const roots = (state.last?.folders || []).map((f) => f.path.toLowerCase());
+  const parent = !path ? null : roots.includes(path.toLowerCase()) ? "" : path.replace(/[\\/][^\\/]+[\\/]?$/, "");
+  if (state.scope) rows.push(row("globe", t("scope.clear"), null, () => { setScope(null); closeScopeMenu(); }));
+  if (parent !== null) {
+    rows.push(row("up", parent ? baseName(parent) : t("search.all_folders"), null, () => fillScopeList(box, list, parent, "")));
+    // (the folder shown: a click searches in it)
+    const self = (state.last?.folders || []).find((f) => f.path.toLowerCase() === path.toLowerCase());
+    rows.push(row("folder", baseName(path), self ? self.indexed + self.pending : null, () => choose(path), { on: isScope(path) }));
+    rows.push(h("div", { class: "menu-sep" }));
+  }
+  for (const d of data.dirs) {
+    rows.push(row(DIR_ICON[d.kind] || "folder", d.name, d.count, () => choose(d.path),
+      { on: isScope(d.path), open: () => fillScopeList(box, list, d.path, "") }));
+  }
+  if (!data.dirs.length) rows.push(h("div", { class: "menu-empty" }, t("scope.no_subfolders")));
+  list.replaceChildren(...rows);
+  return true;
 }
 
 const closeScopeMenu = () => { $("scope-menu").hidden = true; };
@@ -2639,7 +2815,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (!$("lightbox").hidden) {
-    if (e.key === "Escape") closeLightbox();
+    if (e.key === "Escape" || e.key === " ") closeLightbox();
     else if (e.key === "ArrowLeft") stepLightbox(-1);
     else if (e.key === "ArrowRight") stepLightbox(1);
     else if (e.key === "Enter") openFile(state.results[state.lightbox]);
@@ -2677,8 +2853,11 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     const r = state.results[state.selected];
     if (e.ctrlKey) revealFile(r);
-    else if (e.shiftKey && r.preview) openLightbox(state.selected);
+    else if (e.shiftKey) openLightbox(state.selected);
     else openFile(r);
+  } else if (e.key === " " && state.selected >= 0 && document.activeElement !== q) {
+    e.preventDefault(); // (in the search box, a space is a space)
+    openLightbox(state.selected);
   } else if (e.key === "Escape") {
     if (state.selected >= 0) select(-1);
     else if (state.similar) clearSimilar();

@@ -411,6 +411,14 @@ pub fn load_image(path: &Path, max_side: u32) -> ReadResult<RgbImage> {
 
 /// A file as a picture, for previews: an image itself, a document's first page, or the preview
 /// picture a document carries.
+/// A file's picture as `picture` gives it, but for a document with pages, the page asked for.
+pub fn picture_at(path: &Path, page: Option<u32>, size: u32) -> ReadResult<RgbImage> {
+    match page {
+        Some(n) if n > 1 && crate::paged::has_pages(path) => crate::paged::page_picture(path, n, size),
+        _ => picture(path, size),
+    }
+}
+
 pub fn picture(path: &Path, size: u32) -> ReadResult<RgbImage> {
     let ext = suffix(&path.to_string_lossy());
     if ext == ".svg" {

@@ -1,7 +1,7 @@
 //! The local web server on 127.0.0.1: the page (embedded in the app) and its API, shown in the
 //! desktop window or a browser.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -26,6 +26,11 @@ use crate::store::{FileRecord, Settings, Store};
 use crate::updater::{REPO_URL, Updater};
 
 const THEMES: [&str; 3] = ["auto", "light", "dark"];
+// Two files this close as a whole (their passages' means) are nearly the same file: a copy, another
+// format, a version. Copies under other names and folders measured 0.98-0.99 (the name is part of
+// what the model reads), different bills 0.80. Not calibrated yet: the duplicates work will set it on
+// the lab's sets.
+const NEAR_IDENTICAL: f32 = 0.96;
 const VIEWS: [&str; 3] = ["cards", "list", "grid"]; // results with passages, one line each, thumbnails
 // Opening these would run them (or, for .reg, change Windows): they open in an editor instead.
 const RUNNABLE_EXTS: [&str; 29] = [
@@ -37,7 +42,7 @@ const RUNNABLE_EXTS: [&str; 29] = [
 const SECURITY_HEADERS: [(&str, &str); 6] = [
     (
         "content-security-policy",
-        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; \
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; \
          base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     ),
     ("x-content-type-options", "nosniff"),
@@ -263,12 +268,23 @@ fn etag_of(bytes: &[u8]) -> String {
 type Query = HashMap<String, String>;
 
 /// A request that doesn't fit (a body, number or field the API can't read): 422 with the reason.
+/// The model couldn't do it (busy, out of memory): try again in a moment.
+fn model_failed(e: crate::embedder::EmbedError) -> ApiError {
+    log::info!("Comparing a file failed: {e}");
+    fail(503, "model_busy", json!({}))
+}
+
 fn unreadable(what: impl std::fmt::Display) -> ApiError {
     detail(StatusCode::UNPROCESSABLE_ENTITY, &what.to_string())
 }
 
 fn query_int(q: &Query, key: &str) -> Result<Option<i64>, ApiError> {
     q.get(key).map(|v| v.trim().parse::<i64>().map_err(|_| unreadable(format!("{key}: not a whole number")))).transpose()
+}
+
+/// `page`, for the picture of a document's page (from 1).
+fn page_of(q: &Query) -> Result<Option<u32>, ApiError> {
+    Ok(query_int(q, "page")?.filter(|&n| n >= 1).map(|n| n.min(100_000) as u32))
 }
 
 fn path_int(name: &str, v: &str) -> Result<i64, ApiError> {
@@ -473,10 +489,13 @@ impl Server {
     fn present(&self, results: Vec<crate::search::Result>) -> Value {
         let ids: Vec<i64> = results.iter().map(|r| r.file_id).collect();
         let files = self.b.store.files_by_ids(&ids);
+        let key = |r: &crate::search::Result| (r.file_id << crate::store::FTS_SHIFT) | r.chunk;
+        let pages = self.b.store.pages(&results.iter().map(key).collect::<Vec<_>>());
         let out: Vec<Value> = results
             .into_iter()
             .filter_map(|r| {
                 let f = files.get(&r.file_id)?;
+                let page = pages.get(&key(&r)).copied();
                 let (dir, name) = split_path(&f.path);
                 let mut v = serde_json::to_value(&r).ok()?;
                 let m = v.as_object_mut()?;
@@ -487,6 +506,9 @@ impl Server {
                 m.insert("mtime".into(), json!(f.mtime));
                 m.insert("size".into(), json!(f.size));
                 m.insert("preview".into(), json!(has_preview(&f.path, &f.kind)));
+                if let Some(page) = page {
+                    m.insert("page".into(), json!(page)); // (the page the passage starts on)
+                }
                 Some(v)
             })
             .collect();
@@ -546,6 +568,115 @@ impl Server {
         Ok(json_reply(&json!({"results": items, "likely": likely, "semantic": e.ready()})))
     }
 
+    /// Files like this one, by meaning (the files' own vectors: no model needed), or like it and
+    /// like the words in `q` too (the two vectors' average; the model turns the words into one).
+    /// Files nearly the same as a whole (copies, other formats, versions) come first, marked
+    /// "near". With the result: the file itself, for the page to show what's compared with.
+    fn similar(&self, id: i64, q: &Query) -> Result<Response, ApiError> {
+        let kind = q.get("kind").map(String::as_str).unwrap_or("all");
+        let folder = query_int(q, "folder")?;
+        let limit = query_int(q, "limit")?.unwrap_or(30).clamp(0, 100) as usize;
+        let reference = self.mean_vector(id)?;
+        let words = q.get("q").map(|s| s.trim()).filter(|s| !s.is_empty());
+        let mut v = reference.clone();
+        let mut with_words = false;
+        if let Some(text) = words {
+            self.b.indexer.wake_model();
+            if let Some(w) = self.b.embedder.ready().then(|| self.b.embedder.query(text).ok()).flatten() {
+                let mix: Vec<f32> = v.iter().zip(&w).map(|(a, b)| a + b).collect();
+                let norm = crate::store::dot(&mix, &mix).sqrt().max(1e-9);
+                v = mix.into_iter().map(|x| x / norm).collect();
+                with_words = true;
+            }
+        }
+        let hits: Vec<_> = self
+            .vector_hits(&v, limit * 6, kind, folder, q.get("under").map(String::as_str))
+            .into_iter()
+            .filter(|h| h.file_id != id)
+            .collect();
+        let results = fuse(&hits, &[], "", limit, None);
+        // (with words added, it's a search of its own: no "nearly the same" part)
+        let near: HashSet<i64> = results
+            .iter()
+            .filter(|r| !with_words && self.mean_vector(r.file_id).is_ok_and(|m| crate::store::dot(&m, &reference) >= NEAR_IDENTICAL))
+            .map(|r| r.file_id)
+            .collect();
+        let Value::Array(mut items) = self.present(results) else { unreachable!() };
+        for item in &mut items {
+            if item["file_id"].as_i64().is_some_and(|f| near.contains(&f)) {
+                item["near"] = json!(true);
+            }
+        }
+        items.sort_by_key(|item| item["near"] != true); // (stable: each part keeps its order)
+        let me = crate::search::Result {
+            file_id: id, chunk: 0, snippet: String::new(), similarity: None, score: 0.0, keyword: false, exact: false,
+        };
+        let reference = self.present(vec![me]).as_array().and_then(|a| a.first().cloned()).unwrap_or(Value::Null);
+        Ok(json_reply(&json!({"results": items, "reference": reference, "semantic": true, "words": with_words})))
+    }
+
+    /// Files like one that doesn't have to be indexed: dropped on the window or pasted (the bytes,
+    /// `name` its file name). It's read as indexing reads it, in a temp folder that's removed right
+    /// after, and its passages or picture go to the model; files are compared with their mean.
+    fn similar_to(&self, q: &Query, body: &[u8]) -> Result<Response, ApiError> {
+        let name = q.get("name").map(|n| crate::config::file_name(n).trim().to_string()).filter(|n| !n.is_empty());
+        let name = name.unwrap_or_else(|| "pasted.png".into());
+        if body.is_empty() {
+            return Err(fail(400, "empty_file", json!({})));
+        }
+        let e = &self.b.embedder;
+        if !e.ready() {
+            self.b.indexer.wake_model();
+            return Err(fail(503, "model_waking", json!({})));
+        }
+        let copy = archive::temp_copy(&name, body).map_err(|err| detail(StatusCode::INTERNAL_SERVER_ERROR, &err.to_string()))?;
+        let read = crate::extract::extract(&copy.file, body.len() as u64, None, None);
+        drop(copy);
+        let ex = read.map_err(|err| fail(415, "not_comparable", json!({"why": crate::extract::problem(&err)})))?;
+        // (enough of it to say what it's about: a long document's first passages, a scan's pages)
+        let texts: Vec<String> = ex.chunks.iter().filter_map(|c| c.text.clone()).take(24).collect();
+        let pictures: Vec<&image::RgbImage> = ex.chunks.iter().filter_map(|c| c.image.as_ref()).take(6).collect();
+        let mut vectors = if texts.is_empty() { Vec::new() } else { e.documents(&texts).map_err(model_failed)? };
+        if !pictures.is_empty() {
+            vectors.extend(e.images(&pictures).map_err(model_failed)?);
+        }
+        if vectors.is_empty() {
+            return Err(fail(415, "not_comparable", json!({})));
+        }
+        let mut mean = vec![0f32; EMBED_DIM];
+        for v in &vectors {
+            mean.iter_mut().zip(v).for_each(|(m, x)| *m += x);
+        }
+        let norm = crate::store::dot(&mean, &mean).sqrt().max(1e-9);
+        let mean: Vec<f32> = mean.into_iter().map(|x| x / norm).collect();
+        // (words typed too: like this file and like the words, as for an indexed file)
+        let mut v = mean.clone();
+        if let Some(w) = q.get("q").map(|s| s.trim()).filter(|s| !s.is_empty()).and_then(|text| e.query(text).ok()) {
+            let mix: Vec<f32> = v.iter().zip(&w).map(|(a, b)| a + b).collect();
+            let norm = crate::store::dot(&mix, &mix).sqrt().max(1e-9);
+            v = mix.into_iter().map(|x| x / norm).collect();
+        }
+        let kind = q.get("kind").map(String::as_str).unwrap_or("all");
+        let limit = query_int(q, "limit")?.unwrap_or(30).clamp(0, 100) as usize;
+        let hits = self.vector_hits(&v, limit * 6, kind, None, q.get("under").map(String::as_str));
+        let results = fuse(&hits, &[], "", limit, None);
+        let near: HashSet<i64> = results
+            .iter()
+            .filter(|r| self.mean_vector(r.file_id).is_ok_and(|m| crate::store::dot(&m, &mean) >= NEAR_IDENTICAL))
+            .map(|r| r.file_id)
+            .collect();
+        let Value::Array(mut items) = self.present(results) else { unreachable!() };
+        for item in &mut items {
+            if item["file_id"].as_i64().is_some_and(|f| near.contains(&f)) {
+                item["near"] = json!(true);
+            }
+        }
+        items.sort_by_key(|item| item["near"] != true);
+        let reference = json!({"file_id": 0, "name": name, "path": "", "dir": "", "kind": ex.kind, "size": body.len(),
+                               "mtime": 0, "preview": false});
+        Ok(json_reply(&json!({"results": items, "reference": reference, "semantic": true})))
+    }
+
     fn mean_vector(&self, file_id: i64) -> Result<Vec<f32>, ApiError> {
         let vecs = self.b.store.file_vectors(file_id);
         if vecs.is_empty() {
@@ -572,18 +703,20 @@ impl Server {
     }
 
     /// JPEG preview of an image, or of a document's first page, kept on disk.
-    fn rendered(&self, file_id: i64, size: u32, quality: u8) -> Result<Response, ApiError> {
+    /// A file's picture (`page`: of a document, that page), cached in thumbs\.
+    fn rendered(&self, file_id: i64, size: u32, quality: u8, page: Option<u32>) -> Result<Response, ApiError> {
         let f = self.indexed_file(file_id)?;
         let dir = config::thumbs_dir();
         let _ = std::fs::create_dir_all(&dir);
-        let out = dir.join(format!("{file_id}-{}-{size}.jpg", f.mtime as i64));
+        let at = page.filter(|&n| n > 1).map(|n| format!("-p{n}")).unwrap_or_default();
+        let out = dir.join(format!("{file_id}-{}-{size}{at}.jpg", f.mtime as i64));
         if !out.exists() {
             let made = (|| -> anyhow::Result<()> {
                 let img = if archive::split(&f.path).is_none() {
-                    crate::pictures::picture(std::path::Path::new(&f.path), size).map_err(|e| anyhow::anyhow!("{e}"))?
+                    crate::pictures::picture_at(std::path::Path::new(&f.path), page, size).map_err(|e| anyhow::anyhow!("{e}"))?
                 } else {
                     let copy = archive::extracted(&f.path, max_bytes(&f.kind, crate::config::file_name(&f.path)))?;
-                    crate::pictures::picture(&copy.file, size).map_err(|e| anyhow::anyhow!("{e}"))?
+                    crate::pictures::picture_at(&copy.file, page, size).map_err(|e| anyhow::anyhow!("{e}"))?
                 };
                 let tmp = out.with_extension("jpg.tmp");
                 {
@@ -823,6 +956,9 @@ impl Server {
             }
             ["api", "search"] if get => self.search(q),
             ["api", "dirs"] if get => {
+                if let Some(find) = q.get("find").filter(|f| !f.trim().is_empty()) {
+                    return Ok(json_reply(&json!({"find": find, "dirs": b.store.find_dirs(find, 30)})));
+                }
                 let path = q.get("path").cloned().unwrap_or_default();
                 if path.is_empty() {
                     let dirs: Vec<Value> = b
@@ -878,21 +1014,10 @@ impl Server {
                 }
                 Ok(json_reply(&b.maps.dimension(index as usize)))
             }
-            ["api", "similar", id] if get => {
-                let id = path_int("file_id", id)?;
-                let kind = q.get("kind").map(String::as_str).unwrap_or("all");
-                let folder = query_int(q, "folder")?;
-                let limit = query_int(q, "limit")?.unwrap_or(30).clamp(0, 100) as usize;
-                let v = self.mean_vector(id)?; // (the files' own vectors: no need for the model)
-                let hits: Vec<_> = self
-                    .vector_hits(&v, limit * 6, kind, folder, q.get("under").map(String::as_str))
-                    .into_iter()
-                    .filter(|h| h.file_id != id)
-                    .collect();
-                Ok(json_reply(&json!({"results": self.present(fuse(&hits, &[], "", limit, None)), "semantic": true})))
-            }
-            ["api", "thumb", id] if get => self.rendered(path_int("file_id", id)?, 360, 82),
-            ["api", "preview", id] if get => self.rendered(path_int("file_id", id)?, 1600, 88),
+            ["api", "similar", id] if get => self.similar(path_int("file_id", id)?, q),
+            ["api", "similar-to"] if post => self.similar_to(q, body),
+            ["api", "thumb", id] if get => self.rendered(path_int("file_id", id)?, 360, 82, page_of(q)?),
+            ["api", "preview", id] if get => self.rendered(path_int("file_id", id)?, 1600, 88, page_of(q)?),
             ["api", "open", id] if post => self.open_file(path_int("file_id", id)?),
             ["api", "reveal", id] if post => {
                 let f = self.indexed_file(path_int("file_id", id)?)?;
@@ -916,7 +1041,7 @@ impl Server {
 fn known_path(parts: &[&str]) -> bool {
     matches!(
         parts,
-        [""] | ["api", "status" | "diagnostics" | "settings" | "pause" | "resume" | "retry-model" | "search" | "dirs" | "map" | "filetypes" | "show" | "report-bug" | "folders"]
+        [""] | ["api", "status" | "diagnostics" | "settings" | "pause" | "resume" | "retry-model" | "search" | "dirs" | "map" | "filetypes" | "show" | "report-bug" | "folders" | "similar-to"]
             | ["api", "update", "check" | "apply" | "open"]
             | ["api", "window", "theme"]
             | ["api", "folders", _]
@@ -955,7 +1080,8 @@ async fn handle(State(server): State<Arc<Server>>, req: Request) -> Response {
         r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"));
         r
     } else {
-        let bytes = axum::body::to_bytes(body, 16 * 1024 * 1024).await.unwrap_or_default();
+        // (up to 64 MB: a file dropped on the window to find ones like it)
+        let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024).await.unwrap_or_default();
         let query: Query = parts
             .uri
             .query()
@@ -1162,7 +1288,7 @@ mod tests {
     }
 
     fn row(folder_id: i64, path: &str, chunk: i64, kind: &str, text: &str, vector: Vec<f32>) -> VectorRow {
-        VectorRow { path: path.into(), folder_id, chunk, kind: kind.into(), text: text.into(), vector }
+        VectorRow { path: path.into(), folder_id, chunk, kind: kind.into(), text: text.into(), vector, page: None }
     }
 
     // ---- who may ask --------------------------------------------------------------------------------
