@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="static/quiekel-dark.svg">
-    <img src="static/quiekel.svg" width="96" alt="Quiekel">
-  </picture>
+  <img src="static/quiekel.svg" width="96" alt="Quiekel">
 </p>
 
 <h1 align="center">Quiekel Embed</h1>

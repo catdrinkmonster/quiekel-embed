@@ -12,12 +12,12 @@ use regex::Regex;
 use serde::Serialize;
 use unicode_normalization::UnicodeNormalization;
 
-/// What the filters in the page mean, by the kind stored with every file.
+/// What the filters in the page mean, by the kind stored with every file. Text is any file that
+/// holds text, code included (as File types counts them).
 pub fn kinds(filter: &str) -> &'static [&'static str] {
     match filter {
         "docs" => &["doc"],
-        "text" => &["text"],
-        "code" => &["code"],
+        "text" | "code" => &["text", "code"],
         "images" => &["image"],
         _ => &[],
     }
