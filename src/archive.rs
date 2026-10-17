@@ -1175,7 +1175,9 @@ fn opened_dir() -> PathBuf {
     std::env::temp_dir().join("Quiekel Embed") // copies of opened files
 }
 
-/// A copy of the entry to open in its app (which needs a real file), in a temp folder.
+/// A copy of the entry to open in its app (which needs a real file), in a temp folder. It carries
+/// the mark of where it came from (`origin_mark`), so Office opens it in Protected View and Windows
+/// warns before running it, as they would the file opened from Explorer.
 pub fn open_copy(path: &str, limit: u64) -> Result<PathBuf> {
     let (disk, names) = split(path).ok_or(ArchiveError::NotFound)?;
     let stem = Path::new(&disk).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1190,7 +1192,33 @@ pub fn open_copy(path: &str, limit: u64) -> Result<PathBuf> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&target, read(path, limit)?)?;
+    let stream = format!("{}:Zone.Identifier", target.display());
+    match origin_mark(&disk, &names) {
+        Some(mark) => {
+            if let Err(e) = std::fs::write(&stream, mark) {
+                log::warn!("Could not mark {} as coming from the internet: {e}", target.display());
+            }
+        }
+        None => {
+            let _ = std::fs::remove_file(&stream); // (left by a copy opened before)
+        }
+    }
     Ok(target)
+}
+
+/// Where a file inside a container came from, as Windows notes it on downloads (the
+/// Zone.Identifier stream): the container's own mark (a ZIP from the internet), or the internet's
+/// (zone 3) for anything that came with an email. None: a container of your own, unmarked.
+fn origin_mark(disk: &str, names: &[String]) -> Option<String> {
+    let outer = &names[..names.len().saturating_sub(1)];
+    let by_mail = std::iter::once(disk).chain(outer.iter().map(String::as_str)).any(|c| container_type(c) == Some("mail"));
+    let own = std::fs::read_to_string(format!("{disk}:Zone.Identifier")).ok();
+    let zone = |mark: &str| mark.lines().find_map(|l| l.trim().strip_prefix("ZoneId=")?.trim().parse::<u32>().ok());
+    match own {
+        Some(mark) if zone(&mark).is_some_and(|z| z >= 3 || !by_mail) => Some(mark),
+        _ if by_mail => Some("[ZoneTransfer]\r\nZoneId=3\r\n".to_string()),
+        _ => None,
+    }
 }
 
 /// Copies of opened files from earlier sessions are no longer needed.
@@ -1507,6 +1535,39 @@ mod tests {
         let file = tmp.file.clone();
         drop(tmp);
         assert!(!file.exists()); // temporary copies are cleaned up
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_opened_copy_keeps_the_mark_of_where_it_came_from() {
+        let dir = temp();
+        let mark = |p: &Path| std::fs::read_to_string(format!("{}:Zone.Identifier", p.display())).ok();
+        let mut copies = Vec::new();
+        // A ZIP of your own: its files have no mark, and neither have their copies.
+        let own = put(&dir, "own.zip", &zip_with(&[("a.txt", b"A")]));
+        copies.push(open_copy(&format!(r"{own}\a.txt"), 100).unwrap());
+        assert_eq!(mark(&copies[0]), None);
+        // A downloaded one: its mark goes with the copy.
+        let web = put(&dir, "web.zip", &zip_with(&[("b.docm", b"B")]));
+        let downloaded = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.com/web.zip\r\n";
+        std::fs::write(format!("{web}:Zone.Identifier"), downloaded).unwrap();
+        copies.push(open_copy(&format!(r"{web}\b.docm"), 100).unwrap());
+        assert_eq!(mark(&copies[1]).as_deref(), Some(downloaded));
+        // An email's attachment came from outside, the email marked or not (here a file in a ZIP in it).
+        let mut eml = b"From: a@example.com\r\nSubject: Rechnung\r\nContent-Type: multipart/mixed; boundary=B\r\n\r\n\
+            --B\r\nContent-Type: text/plain\r\n\r\nAnbei.\r\n\
+            --B\r\nContent-Type: application/zip\r\nContent-Disposition: attachment; filename=\"rechnung.zip\"\r\n\
+            Content-Transfer-Encoding: base64\r\n\r\n"
+            .to_vec();
+        eml.extend(base64(&zip_with(&[("rechnung.xlsm", b"R")])).as_bytes());
+        eml.extend(b"\r\n--B--\r\n");
+        let e = put(&dir, "Rechnung.eml", &eml);
+        copies.push(open_copy(&format!(r"{e}\rechnung.zip\rechnung.xlsm"), 100).unwrap());
+        assert!(mark(&copies[2]).is_some_and(|m| m.contains("ZoneId=3")));
+        for copy in copies {
+            let top = copy.ancestors().find(|a| a.parent() == Some(opened_dir().as_path())).map(Path::to_path_buf);
+            let _ = std::fs::remove_dir_all(top.unwrap());
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 }

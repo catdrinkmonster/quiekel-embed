@@ -12,6 +12,7 @@ const state = {
   sort: { key: "relevance", desc: false }, fetched: null,
 };
 let searchCtl = null;
+let refreshCtl = null; // (the same search again, as the index changed)
 let searchTimer = null;
 let toastTimer = null;
 let pollTimer = null;
@@ -19,18 +20,34 @@ let pollTimer = null;
 // ---------- icons ----------
 
 // Line icons on a 24px grid. Static markup only, never anything from files or the network.
+//
+// folder, folderPlus and hourglass (and the timer's glass) are Lucide's (lucide.dev):
+//   ISC License
+//   Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT).
+//   All other copyright (c) for Lucide are held by Lucide Contributors 2022.
+//   Permission to use, copy, modify, and/or distribute this software for any purpose with or
+//   without fee is hereby granted, provided that the above copyright notice and this permission
+//   notice appear in all copies.
+//   THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+//   SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE
+//   AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+//   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
+//   NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
+//   OF THIS SOFTWARE.
+const GLASS = "M5 22h14M5 2h14M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"
+  + "M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2";
 const ICONS = {
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/>',
-  folder: '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.4l2 2.2h8.6A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/>',
-  folderPlus: '<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.4l2 2.2h8.6A1.5 1.5 0 0 1 21 9.7v8.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M12 11v6M9 14h6"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  folderPlus: '<path d="M12 10v6M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
   settings: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
   pause: '<path d="M9 6v12M15 6v12"/>',
   play: '<path d="M8 5.5v13l10.5-6.5z"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
-  hourglass: '<path d="M6.5 4h11M6.5 20h11M8 4v2.5c0 2 1.8 3.6 4 5.5 2.2-1.9 4-3.5 4-5.5V4M8 20v-2.5c0-2 1.8-3.6 4-5.5 2.2 1.9 4 3.5 4 5.5V20"/>',
-  // Bold, with sand: in the status ring it runs down and turns over (style.css, .timer).
-  timer: '<g class="timer"><path class="frame" d="M5.5 3.5h13M5.5 20.5h13M7.5 3.5v2.1c0 2.6 1.8 4.6 4.5 6.4-2.7 1.8-4.5 3.8-4.5 6.4v2.1M16.5 3.5v2.1c0 2.6-1.8 4.6-4.5 6.4 2.7 1.8 4.5 3.8 4.5 6.4v2.1"/>'
-    + '<path class="sand solid" d="M9.3 7.4h5.4L12 10.6z"/><path class="sand bottom solid" d="M12 15.3l3.1 3.7H8.9z"/></g>',
+  hourglass: `<path d="${GLASS}"/><path class="solid" d="M9.3 7.3h5.4L12 10z"/><path class="solid" d="M12 16.6l3.4 3.8H8.6z"/>`, // (with its sand: solid, as the others)
+  // The same glass, bold, with sand: in the status ring it runs down and turns over (style.css, .timer).
+  timer: `<g class="timer"><path class="frame" d="${GLASS}"/>`
+    + '<path class="sand solid" d="M10 7.7h4L12 9.7z"/><path class="sand bottom solid" d="M12 16.4l3.2 3.8H8.8z"/></g>',
 
   alert: '<path d="M12 4 21 19.5H3z"/><path d="M12 10v4M12 16.8v.2"/>',
   refresh: '<path d="M20 11.5A8 8 0 1 1 17.7 6"/><path d="M20 4.5V9h-4.5"/>',
@@ -532,6 +549,39 @@ function render(s) {
   renderFolders(s.folders, s.progress, phase, s.removing || []);
   renderSettings(s);
   renderUpdate(s);
+  if (state.followed == null) state.followed = s.index;
+  else if (s.index !== state.followed) indexChanged();
+}
+
+// ---------- following the index ----------
+//
+// As files are indexed, what shows the index follows without being opened again: the folder menu's
+// counts, the map's dots, the results of the search shown, a folder's details and File types'
+// counts. At most every few seconds, and never while you press (a redraw between a press and its
+// release would lose the click) or point at the results (they'd move under the pointer).
+const FOLLOW_MS = 3000;
+let followTimer = 0;
+let followAt = 0;
+let pressing = false;
+document.addEventListener("pointerdown", () => { pressing = true; }, true);
+for (const type of ["pointerup", "pointercancel"]) document.addEventListener(type, () => { pressing = false; }, true);
+
+function indexChanged() {
+  if (!followTimer) followTimer = setTimeout(followIndex, Math.max(250, followAt + FOLLOW_MS - Date.now()));
+}
+
+function followIndex() {
+  followTimer = 0;
+  if (document.hidden) return; // (the first status once the window shows again comes back here)
+  if (pressing) return indexChanged();
+  followAt = Date.now();
+  state.followed = state.last.index;
+  if (!$("scope-menu").hidden && state.scopeAt) fillScopeList(...state.scopeAt, true);
+  if (state.page === "map") loadMap();
+  if (state.page === "search") refreshResults();
+  const f = !$("folder-modal").hidden && state.last.folders.find((x) => x.id === state.folderInfo);
+  if (f) fillFolderInfo(f, true);
+  if (!$("types-modal").hidden) refreshTypes();
 }
 
 // ---------- status (bottom of the rail) ----------
@@ -602,8 +652,7 @@ function renderActivity({ model, progress: p, folders, resources, settings }, ph
     s = {
       kind: { paused: "paused", waiting: "warn", scanning: "busy", indexing: "busy" }[phase],
       icon: { paused: "pause", waiting: "timer", scanning: "search" }[phase],
-      label: phase === "indexing" ? pct(Math.floor(frac * 100)) : null,
-      frac, spin: phase === "scanning", lines,
+      frac, spin: phase === "scanning", lines, // (indexing: the ring alone, how far in its tooltip)
     };
   } else if (p.state === "error") {
     s = { kind: "warn", icon: "alert", lines: [t("activity.error"), p.message] };
@@ -854,17 +903,10 @@ const problemText = (error) => (error?.startsWith("!") ? t(`problem.${error.slic
 
 // ---------- a folder's details ----------
 //
-// Its numbers, the files that couldn't be read, and everything that isn't searched, by reason. A
-// new unreadable file shows as a red mark on the folder once: looking here counts as seen. "Try
-// again" reads them anew (a rescan does too).
+// Its numbers, the files that couldn't be read, and everything that isn't searched, by type of
+// file. A new unreadable file shows as a red mark on the folder once: looking here counts as seen.
+// "Try again" reads them anew (a rescan does too).
 
-const WHY_ICON = {
-  left_out: "eyeOff", type: "help", off: "eyeOff", media: "film", program: "app", mailbox: "mail", hidden: "eyeOff",
-  office_temp: "hourglass", backup: "clock", program_folder: "folder", link: "link", too_many: "archive", encrypted: "lock",
-  split_archive: "archive", needs_windows: "monitor", nested_deep: "archive", nested_off: "archive",
-  nested_large: "archive", odd_name: "alert", inline_image: "image", empty: "doc", too_large: "maximize",
-  tiny_image: "image", binary: "code", no_text: "text", password: "lock", not_image: "archive",
-};
 // What the scan couldn't open goes with the files that couldn't be read, said of each one.
 const SCAN_FAILED = { no_access_dir: "problem.no_access", unreadable_dir: "problem.unreadable_dir",
   damaged_archive: "problem.damaged_archive" };
@@ -883,28 +925,62 @@ function fileRow(path, why, reveal, isNew = false) {
 // Reasons that Settings → File types can change: their row has a way there.
 const CHANGEABLE = new Set(["off", "hidden", "program_folder", "too_many", "nested_off"]);
 const known = (key) => key in (i18n.catalog.en || {});
+// A reason as the server gives it: "!key" for one it knows, anything else as it was reported. Each
+// shows as an icon; its words are in the tooltip.
+const whyKey = (why) => (why?.startsWith("!") ? why.slice(1) : null);
+const whyText = (why) => (whyKey(why) ? t(`why.${whyKey(why)}`) : why || "");
+const WHY_ICON = {
+  left_out: "eyeOff", off: "eyeOff", hidden: "eyeOff", type: "help", media: "film", program: "app", mailbox: "mail",
+  office_temp: "lock", backup: "clock", program_folder: "folder", link: "link", too_many: "archive",
+  split_archive: "archive", nested_deep: "archive", nested_off: "archive", nested_large: "archive", not_image: "archive",
+  encrypted: "lock", password: "lock", needs_windows: "monitor", odd_name: "alert", inline_image: "image",
+  tiny_image: "image", empty: "doc", too_large: "maximize", binary: "code", no_text: "text",
+};
+const whyIcon = (why) => icon(WHY_ICON[whyKey(why)] || "skip");
 
-// One reason: what it is and how many; opened, which types and a few of the files.
-function reasonRow(r) {
-  const label = r.key ? t(`why.${r.key}`) : r.raw;
-  const more = r.n - r.files.length;
-  const exts = Object.entries(r.exts || {}).sort((a, b) => b[1] - a[1]).slice(0, 40)
-    .map(([ext, n]) => h("span", { class: "type-chip static" }, ext || t("why.no_ext"), h("small", {}, fmt(n))));
-  const summary = h("summary", {}, icon(WHY_ICON[r.key] || "skip"),
-    h("span", { class: "fm-file-text" }, h("b", {}, label)),
-    CHANGEABLE.has(r.key) ? iconButton("settings", t("settings.types"), (e) => {
+// One type of file that isn't searched (or the folders passed by as a whole): why, as an icon (the
+// most common reason's), its extension and how many; opened, a few of them, each shown in its
+// folder. The reasons' words are in the tooltips.
+function typeRow(g, open) {
+  const key = g.ext ?? "/";
+  const several = g.reasons.length > 1;
+  const name = g.ext == null ? t("why.folders") : g.ext ? g.ext.slice(1) : t("why.no_ext");
+  const head = [
+    whyIcon(g.reasons[0][0]),
+    h("span", { class: "fm-file-text" }, h("b", { class: g.ext ? "fm-ext" : "" }, name)),
+    g.reasons.some(([w]) => CHANGEABLE.has(whyKey(w))) ? iconButton("settings", t("settings.types"), (e) => {
       e.preventDefault();
       closeFolderInfo();
       openTypes();
     }) : null,
-    h("span", { class: "fm-count" }, fmt(r.n)), icon("chevronDown"));
-  if (r.key && known(`why.${r.key}_d`)) setTip(summary, t(`why.${r.key}_d`));
-  return h("details", { class: "fm-reason" }, summary,
-    h("div", { class: "fm-reason-body" },
-      exts.length ? h("div", { class: "tm-chips" }, ...exts) : null,
-      ...r.files.map((file, i) => fileRow(file.path, "",
-        () => (file.id ? revealFile({ file_id: file.id }) : revealExample(r.key, i)))),
+    h("span", { class: "fm-count" }, fmt(g.n)),
+  ];
+  // (its tooltip: each reason, how many if there are several, and what the one reason means)
+  const tip = several
+    ? g.reasons.map(([w, n]) => `${whyText(w)}: ${fmt(n)}`).join("\n")
+    : [whyText(g.reasons[0][0]), known(`why.${whyKey(g.reasons[0][0])}_d`) ? t(`why.${whyKey(g.reasons[0][0])}_d`) : ""].filter(Boolean).join("\n");
+  if (!g.examples.length) {
+    const row = h("div", { class: "fm-reason bare", "data-key": key }, h("div", { class: "fm-reason-head" }, ...head));
+    setTip(row.firstChild, tip);
+    return row;
+  }
+  const summary = h("summary", { class: "fm-reason-head" }, ...head, icon("chevronDown"));
+  setTip(summary, tip);
+  const more = g.n - g.examples.length;
+  // (with several reasons, each file shows its own as an icon, its words with the path on hover)
+  const example = (ex) => {
+    const row = fileRow(ex.path, "", () => (ex.id != null ? revealFile({ file_id: ex.id }) : revealExample(ex.reason, ex.index)));
+    if (several) {
+      row.prepend(whyIcon(ex.why));
+      setTip(row.querySelector("b"), `${whyText(ex.why)}\n${ex.path}`);
+    }
+    return row;
+  };
+  const el = h("details", { class: "fm-reason", "data-key": key }, summary,
+    h("div", { class: "fm-reason-body" }, ...g.examples.map(example),
       more > 0 ? h("p", { class: "help-note" }, t("why.more", { n: fmt(more) })) : null));
+  el.open = open.has(key);
+  return el;
 }
 
 // The folder at a glance: how many of its files can be searched, one bar for what's what, and a
@@ -942,18 +1018,26 @@ async function openFolderInfo(f) {
       () => post(`/api/folders/${f.id}/rescan`).then(() => { toast(t("folders.rescan_queued"), "refresh"); refresh(); })),
   ].filter(Boolean));
   $("fm-problems").hidden = $("fm-skips").hidden = $("fm-inside").hidden = true;
+  $("fm-skips").open = false; // (what isn't searched opens when asked for)
   $("fm-list").replaceChildren();
   $("fm-reasons").replaceChildren();
   $("fm-subfolders").replaceChildren();
   $("folder-modal").hidden = false;
+  if (!(await fillFolderInfo(f))) return;
+  if (f.errors) post(`/api/folders/${f.id}/errors/seen`).then(refresh).catch(() => {}); // the red mark has done its job
+}
+
+// A folder's lists: the folders inside it, the files that couldn't be read, what isn't searched.
+// Filled again as its files are indexed (`quietly`): what's open stays open.
+async function fillFolderInfo(f, quietly = false) {
   let d;
   try {
     d = await api(`/api/folders/${f.id}/details`);
   } catch (e) {
-    toast(e.message, "alert");
-    return;
+    if (!quietly) toast(e.message, "alert");
+    return false;
   }
-  if (state.folderInfo !== f.id) return;
+  if (state.folderInfo !== f.id) return false;
   renderSubfolders(f, d.left_out || []);
   const failed = [
     ...d.errors.map((r) => fileRow(r.path, problemText(r.error), () => revealFile({ file_id: r.id }), !r.seen)),
@@ -962,15 +1046,12 @@ async function openFolderInfo(f) {
   ];
   $("fm-problems").hidden = !failed.length;
   $("fm-list").replaceChildren(...failed);
-  const reasons = [
-    ...Object.entries(d.report).filter(([key]) => !(key in SCAN_FAILED))
-      .map(([key, r]) => ({ key, n: r.n, exts: r.exts, files: r.examples.map((path) => ({ path })) })),
-    ...d.skipped.map((s) => ({ key: s.reason?.startsWith("!") ? s.reason.slice(1) : null, raw: s.reason, n: s.n,
-      files: s.examples })),
-  ].sort((a, b) => b.n - a.n);
-  $("fm-skips").hidden = !reasons.length;
-  $("fm-reasons").replaceChildren(...reasons.map(reasonRow));
-  if (f.errors) post(`/api/folders/${f.id}/errors/seen`).then(refresh).catch(() => {}); // the red mark has done its job
+  const groups = d.unsearched || [];
+  const open = new Set([...$("fm-reasons").querySelectorAll(".fm-reason[open]")].map((el) => el.dataset.key));
+  $("fm-skips").hidden = !groups.length;
+  $("fm-skips-n").textContent = fmt(groups.reduce((n, g) => n + g.n, 0));
+  $("fm-reasons").replaceChildren(...groups.map((g) => typeRow(g, open)));
+  return true;
 }
 
 // The folders inside one, each with a switch: on, it's searched; off, you left it out (its files
@@ -1044,6 +1125,16 @@ async function openTypes() {
 }
 
 const closeTypes = () => { $("types-modal").hidden = true; };
+
+// Its counts again, as files are indexed (the chips stay where they are).
+async function refreshTypes() {
+  try {
+    state.types = await api("/api/filetypes");
+  } catch {
+    return;
+  }
+  if (!$("types-modal").hidden) renderTypes();
+}
 
 function renderTypes() {
   const m = state.types;
@@ -1823,7 +1914,10 @@ function filtersQuery() {
 async function runSearch() {
   const q = $("q").value.trim();
   if (state.similar) return state.similar.file ? runExample(state.similar) : runSimilar(state.similar);
-  if (!q) return renderResults(null);
+  if (!q) {
+    state.resultsUrl = null;
+    return renderResults(null);
+  }
   const qs = filtersQuery();
   qs.set("q", q);
   state.terms = queryTerms(q);
@@ -1843,7 +1937,9 @@ async function runSimilar(target) {
 
 async function fetchResults(url, options = {}) {
   searchCtl?.abort();
+  refreshCtl?.abort();
   searchCtl = new AbortController();
+  state.resultsUrl = options.method ? null : url; // (a file dropped on the window isn't sent again)
   try {
     const res = await fetch(url, { ...options, signal: searchCtl.signal });
     if (!res.ok) throw new Error(apiMessage((await res.json().catch(() => ({}))).detail, res.statusText));
@@ -1858,6 +1954,35 @@ async function fetchResults(url, options = {}) {
   } catch (e) {
     if (e.name !== "AbortError") renderMessage(e.message);
   }
+}
+
+// The results shown, searched again as the index changed: drawn anew only when they changed,
+// keeping the rest shown or not and the result picked (by its file). Not while pointing at them
+// or looking at one large.
+async function refreshResults() {
+  const url = state.resultsUrl;
+  if (!url || !state.fetched || state.lightbox >= 0) return;
+  if ($("results").matches(":hover")) return indexChanged(); // (once the pointer has left)
+  refreshCtl?.abort();
+  refreshCtl = new AbortController();
+  let data;
+  try {
+    const res = await fetch(url, { signal: refreshCtl.signal });
+    if (!res.ok) return;
+    data = await res.json();
+  } catch {
+    return;
+  }
+  if (url !== state.resultsUrl) return; // (searched anew meanwhile)
+  const ids = (items) => items.map((r) => r.id).join();
+  if (data.likely === state.fetched.likely && ids(data.results) === ids(state.fetched.items)) return;
+  const picked = state.results[state.selected]?.id;
+  state.semantic = data.semantic;
+  state.fetched = { items: data.results, likely: data.likely };
+  updateNotice();
+  renderResults(data.results, data.likely);
+  const i = picked == null ? -1 : state.results.findIndex((r) => r.id === picked);
+  if (i >= 0 && (i < visibleResults())) select(i, false);
 }
 
 // The hourglass next to the results: matches by meaning aren't there yet (the model is waking up),
@@ -2454,6 +2579,7 @@ async function loadMap() {
   if (m.status !== "computing" && m.rev !== map.rev) {
     map.rev = m.rev;
     setPoints(m.points, m.total);
+    if ($("map-q").value.trim()) mapSearch(); // (new files may hold the words)
   }
   // Still computing, or the index changed since: look again in a moment.
   if (m.status !== "ready") map.timer = setTimeout(loadMap, m.status === "computing" ? 1500 : 8000);
@@ -3278,8 +3404,8 @@ function renderSide() {
   renderExplain();
 }
 
-// How it works, a step at a time: which part (a file, a search), its title and one sentence, what it
-// shows in the room left, and ‹ dots › to go through.
+// How it works, a step at a time: its title and one sentence (the first of each part says it's an
+// example), what it shows in the room left, and ‹ dots › to go through.
 function renderExplain() {
   const box = $("map-explain");
   $("map-help").classList.toggle("on", map.help);
@@ -3299,7 +3425,6 @@ function renderExplain() {
   next.disabled = at === TOUR.length - 1;
   box.replaceChildren(head,
     h("div", { class: "mx-body" },
-      h("div", { class: "mx-part" }, t(at < TOUR_SEARCH ? "map.part.file" : "map.part.search")),
       h("div", { class: "mx-title" }, t(TOUR[at])),
       h("p", { class: "mx-text" }, t(`${TOUR[at]}_d`)),
       h("div", { class: "mx-stage" }, walkVisual())),
@@ -3307,14 +3432,22 @@ function renderExplain() {
   requestAnimationFrame(fitStep);
 }
 
-// Once a step is laid out: each passage beside its numbers shows as many lines as its row has room
-// for, a list loses the rows from its end that don't fit, and the passages' numbers know where the
-// average is that they fly into.
+// Once a step is laid out: each passage shows as many lines as its share of the room has (beside
+// its numbers, or come apart from the page), a list loses the rows from its end that don't fit, and
+// the passages' numbers know where the average is that they fly into.
 function fitStep() {
   const stage = document.querySelector("#map-explain .mx-stage");
   if (!stage) return;
-  const rows = stage.querySelector(".mx-rows");
-  if (rows?.firstElementChild) rows.style.setProperty("--lines", Math.max(1, Math.floor(rows.firstElementChild.clientHeight / 20.8)));
+  const parts = stage.querySelector(".mx-rows, .mx-pieces");
+  const piece = parts?.querySelector(".mx-piece");
+  if (piece) {
+    const n = parts.querySelectorAll(".mx-piece").length;
+    const box = getComputedStyle(piece), line = parseFloat(getComputedStyle(piece.querySelector("p")).lineHeight) || 22;
+    const pad = parseFloat(box.paddingTop) + parseFloat(box.paddingBottom);
+    // (a row's own height; pieces still coming apart, their share of the room once they have)
+    const room = parts.classList.contains("mx-rows") ? piece.clientHeight : (parts.clientHeight - (n - 1) * 10) / n;
+    parts.style.setProperty("--lines", Math.max(1, Math.floor((room - pad) / line)));
+  }
   const visual = stage.firstElementChild;
   const trim = [...stage.querySelectorAll(".mx-trim")];
   while (trim.length && visual.offsetHeight > stage.clientHeight) trim.pop().remove();
@@ -3484,28 +3617,40 @@ function walkVisual() {
 // (its place in the order things come in)
 const nth = (el, i) => { el.style.setProperty("--i", i); return el; };
 
-// The letter's steps, as large as the panel allows: its page is read (a line goes down it), comes
-// apart into its passages, each passage gets its numbers beside it (the rows share the room), and
-// their numbers fly into the average. Captions under what they name.
+// The letter's steps, as large as the panel allows: its page is read (its words light up one after
+// another), comes apart into its numbered passages (sharing the room), each passage gets its
+// numbers beside it, and their numbers fly into the average. Captions under what they name.
 function fileVisual(at) {
   const visual = (cls, ...kids) => h("div", { class: `mx-visual${cls ? ` ${cls}` : ""}` }, ...kids);
   const passages = t("tour.letter").split("|");
   const caption = h("div", { class: "mx-caption mx-in late" }, tp("map.passages", passages.length));
+  // A passage on its piece of the page: its number, then its text.
+  const piece = (text, i) => h("div", { class: "mx-piece" },
+    h("div", { class: "mx-piece-in" }, h("span", { class: "mx-num" }, fmt(i + 1)), h("p", {}, text)));
   if (at === 0) {
-    return visual("",
-      nth(h("div", { class: "mx-read mx-in" }, h("div", { class: "mx-letter" }, ...passages.map((text) => h("p", {}, text)))), 0),
+    let w = 0;
+    const words = (text) => text.split(/(\s+)/).map((part) => {
+      if (!/\S/.test(part)) return part;
+      const word = h("span", { class: "mx-w" }, part);
+      word.style.setProperty("--w", w++);
+      return word;
+    });
+    return visual("fill",
+      nth(h("div", { class: "mx-read mx-in" }, h("div", { class: "mx-letter" }, ...passages.map((text) => h("p", {}, ...words(text))))), 0),
       nth(h("div", { class: "mx-file mx-in" }, icon("doc"), h("b", {}, tourNames()[0])), 1),
       nth(h("div", { class: "mx-dir mx-in" }, t("tour.folder")), 2));
   }
   if (at === 1) {
-    return visual("", h("div", { class: "mx-pieces" }, ...passages.map((text, i) =>
-      nth(h("div", { class: "mx-piece" }, h("span", { class: "mx-num" }, fmt(i + 1)), h("p", {}, text)), i))), caption);
+    // (the page as it was read, the rest of it below the text; it comes apart from there)
+    return visual("fill", h("div", { class: "mx-pieces" }, ...passages.map((text, i) => nth(piece(text, i), i)),
+      h("div", { class: "mx-rest" })), caption);
   }
   if (at === 2) {
-    // (each row's share of the room, less the caption and the gaps; the numbers as tall as a row)
-    const n = passages.length, size = `min(calc((100cqh - ${30 + (n - 1) * 12}px) / ${n}), 36cqw)`;
-    return visual("rows", h("div", { class: "mx-rows", style: `--n: ${n}` }, ...passages.map((text, i) =>
-      nth(h("div", { class: "mx-row mx-in" }, h("span", { class: "mx-ptext" }, text), printCanvas(TOUR_PRINTS[i], size, 250 + i * 170)), i))), caption);
+    // (each row's share of the room, less the caption and the gaps; the numbers as tall as a row,
+    // leaving the passage most of the width)
+    const n = passages.length, size = `min(calc((100cqh - ${30 + (n - 1) * 10}px) / ${n}), 30cqw)`;
+    return visual("fill", h("div", { class: "mx-rows", style: `--n: ${n}` }, ...passages.map((text, i) =>
+      nth(h("div", { class: "mx-row" }, piece(text, i), printCanvas(TOUR_PRINTS[i], size, 450 + i * 170)), i))), caption);
   }
   const prints = TOUR_PRINTS.map((v, i) => nth(printCanvas(v, 40), i));
   const mean = printCanvas(TOUR_MEAN, "min(80cqw, calc(100cqh - 110px))", 650);
@@ -3541,7 +3686,7 @@ function searchVisual(s) {
     const words = queryTerms(t("tour.words"));
     const found = [t("tour.letter").split("|")[0], ...t("tour.snippets").split("|")]; // (where each holds the words)
     return visual("", n, h("div", { class: "mx-caption" }, tp("map.with_words", TOUR_LIKELY)),
-      h("div", { class: "mx-hits" }, ...found.slice(0, TOUR_LIKELY).map((text, i) => nth(h("div", { class: "mx-hit mx-in" },
+      h("div", { class: "mx-hits" }, ...found.slice(0, TOUR_LIKELY).map((text, i) => nth(h("div", { class: `mx-hit mx-in${i ? " mx-trim" : ""}` },
         h("div", { class: "mx-hit-name" }, dot(i), h("span", { class: "mc-rel-name" }, names[i])),
         h("p", { class: "mx-snip" }, ...highlighted(text, words))), i + 1))));
   }
@@ -3703,44 +3848,47 @@ async function openScopeMenu(box, path = state.scope?.path || "") {
 }
 
 // The menu's rows: the folders in `path`, or those named like `text` anywhere. (Only the last one
-// asked for is shown: typing and opening can overtake each other.)
+// asked for is shown: typing and opening can overtake each other.) Filled again as files are
+// indexed (`quietly`): then rows that stay only get their numbers changed.
 let scopeAsked = 0;
-async function fillScopeList(box, list, path, text) {
+async function fillScopeList(box, list, path, text, quietly = false) {
   const asked = ++scopeAsked;
+  state.scopeAt = [box, list, path, text];
   let data;
   try {
     data = await api(`/api/dirs?${new URLSearchParams(text ? { find: text } : { path })}`);
   } catch (e) {
-    toast(e.message, "alert");
+    if (!quietly) toast(e.message, "alert");
     return false;
   }
   if (asked !== scopeAsked) return true;
+  const show = (rows) => putRows(list, rows);
   const choose = (p) => { setScope(p); closeScopeMenu(); };
   const isScope = (p) => state.scope?.path.toLowerCase() === p.toLowerCase();
-  const row = (name, label, count, onclick, { on = false, open = null } = {}) => {
-    const main = h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick },
+  const row = (name, label, count, onclick, { on = false, open = null, key = "" } = {}) => {
+    const main = h("button", { type: "button", class: `menu-row${on ? " on" : ""}`, onclick, "data-key": key },
       icon(name), h("span", { class: "menu-name" }, label), on ? menuMark("check") : null,
       count != null ? h("span", { class: "menu-count" }, fmt(count)) : null);
     if (!open) return main;
     const more = h("button", { type: "button", class: "menu-open", onclick: open }, icon("chevronRight"));
     setTip(more, t("scope.inside"));
-    return h("div", { class: "menu-line" }, main, more);
+    return h("div", { class: "menu-line", "data-key": key }, main, more);
   };
   const rows = [];
   if (text) {
     for (const d of data.dirs) {
       const label = shortDir(d.path);
-      const el = row(DIR_ICON[d.kind] || "folder", label, d.count, () => choose(d.path), { on: isScope(d.path) });
+      const el = row(DIR_ICON[d.kind] || "folder", label, d.count, () => choose(d.path), { on: isScope(d.path), key: d.path });
       setTip(el, d.path);
       rows.push(el);
     }
     if (!data.dirs.length) rows.push(h("div", { class: "menu-empty" }, t("scope.none_found")));
-    list.replaceChildren(...rows);
+    show(rows);
     return true;
   }
   const roots = (state.last?.folders || []).map((f) => f.path.toLowerCase());
   const parent = !path ? null : roots.includes(path.toLowerCase()) ? "" : path.replace(/[\\/][^\\/]+[\\/]?$/, "");
-  if (state.scope) rows.push(row("globe", t("scope.clear"), null, () => { setScope(null); closeScopeMenu(); }));
+  if (state.scope) rows.push(row("globe", t("scope.clear"), null, () => { setScope(null); closeScopeMenu(); }, { key: "/" }));
   if (parent !== null) {
     // Where you are: back a level on the left, then the way down from the indexed folder to this
     // one, this one in ink, with the files in it you can find; a click on it searches in it.
@@ -3755,15 +3903,27 @@ async function fillScopeList(box, list, path, text) {
       isScope(path) ? menuMark("check") : null,
       data.count != null ? h("span", { class: "menu-count" }, fmt(data.count)) : null);
     setTip(here, `${path}\n${t("scope.here")}`);
-    rows.push(h("div", { class: "menu-line" }, back, here), h("div", { class: "menu-sep" }));
+    rows.push(h("div", { class: "menu-line", "data-key": `here:${path}` }, back, here), h("div", { class: "menu-sep", "data-key": "-" }));
   }
   for (const d of data.dirs) {
     rows.push(row(DIR_ICON[d.kind] || "folder", d.name, d.count, () => choose(d.path),
-      { on: isScope(d.path), open: () => fillScopeList(box, list, d.path, "") }));
+      { on: isScope(d.path), open: () => fillScopeList(box, list, d.path, ""), key: d.path }));
   }
   if (!data.dirs.length) rows.push(h("div", { class: "menu-empty" }, t("scope.no_subfolders")));
-  list.replaceChildren(...rows);
+  show(rows);
   return true;
+}
+
+// A list's rows, or, when the same rows are there already, just their numbers (what's pointed at
+// stays as it is).
+function putRows(list, rows) {
+  const keys = (els) => els.map((el) => el.dataset.key ?? "?").join("\n");
+  const old = [...list.children];
+  if (!old.length || keys(old) !== keys(rows)) return list.replaceChildren(...rows);
+  old.forEach((el, i) => {
+    const [was, now] = [el, rows[i]].map((r) => r.querySelectorAll(".menu-count"));
+    was.forEach((c, k) => { if (now[k] && c.textContent !== now[k].textContent) c.textContent = now[k].textContent; });
+  });
 }
 
 const closeScopeMenu = () => { $("scope-menu").hidden = true; };

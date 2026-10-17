@@ -447,6 +447,7 @@ impl Server {
             "folders": folders,
             "update": update,
             "app_mode": self.hooks.app_mode,
+            "index": self.b.store.version(), // (goes up with every change: what shows the index follows it)
             // Folders on their way out, with the files still to take out of the index.
             "removing": self.b.store.removing_view().into_iter()
                 .map(|(id, path, left)| json!({"id": id, "path": path, "left": left})).collect::<Vec<_>>(),
@@ -1048,11 +1049,7 @@ impl Server {
             ["api", "folders", id, "reveal"] if post => {
                 let id = path_int("folder_id", id)?;
                 let ex: ExampleIn = body_json(body)?;
-                let report = b.store.details(id, 5)["report"].clone();
-                let examples: Vec<String> = report[&ex.reason]["examples"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                    .unwrap_or_default();
+                let examples = b.store.report(id).data.get(&ex.reason).map(|r| r.examples.clone()).unwrap_or_default();
                 if ex.index < 0 || ex.index as usize >= examples.len() {
                     return Err(fail(404, "file_not_found", json!({})));
                 }
@@ -1708,18 +1705,24 @@ mod tests {
         store.save_files(&[empty], &[]).unwrap();
         let mut report = filetypes::Report::default();
         report.add("media", r"C:\docs\a.mp4", Some(".mp4"), 2);
+        report.note("program_folder", r"C:\docs\node_modules");
         store.mark_scanned(folder, Some(&report));
         let d = c.get(&format!("/api/folders/{folder}/details")).json();
         assert_eq!(d["report"]["media"]["n"], 2);
-        let skipped: Vec<(String, i64, String)> = d["skipped"]
+        // By type, the most first; what was passed by as whole folders apart, without one.
+        let groups: Vec<(Value, i64, Value, String)> = d["unsearched"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|s| (s["reason"].as_str().unwrap().into(), s["n"].as_i64().unwrap(), s["examples"][0]["path"].as_str().unwrap().into()))
+            .map(|g| (g["ext"].clone(), g["n"].as_i64().unwrap(), g["reasons"].clone(), g["examples"][0]["path"].as_str().unwrap().into()))
             .collect();
-        assert_eq!(skipped, [("!empty".to_string(), 1, r"C:\docs\leer.txt".to_string())]);
+        assert_eq!(groups, [
+            (json!(".mp4"), 2, json!([["!media", 2]]), r"C:\docs\a.mp4".to_string()),
+            (json!(".txt"), 1, json!([["!empty", 1]]), r"C:\docs\leer.txt".to_string()),
+            (Value::Null, 1, json!([["!program_folder", 1]]), r"C:\docs\node_modules".to_string()),
+        ]);
         assert_eq!(d["errors"], json!([]));
-        assert_eq!(c.status()["folders"][0]["unsearched"], 3);
+        assert_eq!(c.status()["folders"][0]["unsearched"], 4);
         assert_eq!(c.get("/api/folders/999/details").status, StatusCode::NOT_FOUND);
     }
 

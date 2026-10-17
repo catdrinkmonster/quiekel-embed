@@ -30,11 +30,8 @@ Windows 10 or 11, 64-bit. Open PowerShell (not as administrator) and run:
 irm https://github.com/catdrinkmonster/quiekel-embed/raw/main/install.ps1 | iex
 ```
 
-From Command Prompt:
-
-```bat
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/catdrinkmonster/quiekel-embed/raw/main/install.ps1 | iex"
-```
+Run it in PowerShell itself: started from Command Prompt or the Run box, Windows Security can
+block the same line.
 
 This puts the latest release in `%LOCALAPPDATA%\Programs\Quiekel Embed` (under 40 MB to download),
 adds Desktop and Start Menu shortcuts and opens the app. On its first start the app downloads the AI

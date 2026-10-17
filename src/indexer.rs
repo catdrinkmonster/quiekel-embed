@@ -294,13 +294,13 @@ impl Containers {
             types.max_entries(),
             &mut |item| {
                 if let Some(p) = item.problem {
-                    found.note(p, &item.path);
+                    found.add_type(p, &item.path);
                     return true;
                 }
                 let rest = item.path.get(path.len() + 1..).unwrap_or("");
                 let parts: Vec<&str> = rest.split('\\').collect();
                 if let Some(why) = skipped_part(types, &parts) {
-                    found.note(why, &item.path);
+                    found.add_type(why, &item.path);
                 } else {
                     // (inside an archive only its name says what a file is)
                     match types.decide(&item.name, None) {
@@ -864,7 +864,7 @@ impl Indexer {
                     continue;
                 }
                 if let Some(why) = types.skip_file(&name, hidden, system) {
-                    report.note(why, &path);
+                    report.add_type(why, &path);
                     continue;
                 }
                 let (read, inside) = match types.decide(&name, Some(&path)) {
@@ -942,6 +942,7 @@ impl Indexer {
             })
             .collect();
         self.store.add_pending(folder_id, &pending)?;
+        self.store.save_report(folder_id, &report); // (what isn't searched shows while indexing goes on)
         self.index_files(folder_id, &root, todo, Some(types))?;
         if !self.cancelled.lock().contains(&folder_id) {
             let rows: Vec<ContainerRow> = containers.seen.into_values().collect();
@@ -1084,8 +1085,12 @@ impl Indexer {
         }
         let types = types.unwrap_or_else(|| self.types());
         let total = files.len();
+        // The folder's other files count as done, so its progress goes on from where it was, after
+        // a restart too. (These files are in the index already: found by a scan or noted by the
+        // watcher.)
+        let before = (self.store.folder_file_count(folder_id).max(0) as usize).saturating_sub(total);
         *self.current_folder.lock() = Some(folder_id);
-        self.set(json!({"state": "indexing", "folder": root, "done": 0, "total": total, "current": ""}));
+        self.set(json!({"state": "indexing", "folder": root, "done": before, "total": before + total, "current": ""}));
         self.recent.lock().clear();
         // Reading and decoding files (CPU) runs ahead of embedding (GPU) in its own thread, so the
         // GPU isn't left waiting between groups.
@@ -1118,7 +1123,7 @@ impl Indexer {
                 }
                 let rate = self.files_per_min();
                 self.update(json!({
-                    "done": done, "current": entry.path,
+                    "done": before + done, "current": entry.path,
                     "eta_s": rate.filter(|r| *r > 0.0).map(|r| ((total - done) as f64 / r * 60.0).round() as i64),
                 }));
                 group.add(entry, chunks);
@@ -1131,7 +1136,7 @@ impl Indexer {
             if let Err(e) = self.flush(group)? {
                 return Ok(Err(e));
             }
-            self.update(json!({"done": total, "current": "", "eta_s": null}));
+            self.update(json!({"done": before + total, "current": "", "eta_s": null}));
             Ok(Ok(()))
         })();
         *self.current_folder.lock() = None;
