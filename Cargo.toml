@@ -60,7 +60,7 @@ cfb = "0.10"
 mail-parser = "0.11"
 
 # the map
-nalgebra = "0.34"
+nalgebra = "0.35"
 bhtsne = "0.5"
 
 # the server and the window
