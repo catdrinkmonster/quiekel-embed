@@ -1585,10 +1585,20 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_are_off_until_switched_on() {
+    fn diagnostics_keep_the_activity_and_measure_only_once_switched_on() {
         let c = client();
-        let d = c.get("/api/diagnostics").json();
-        assert!(d["on"] == false && d["samples"].as_array().unwrap().is_empty());
+        // Switched off: indexing's activity is kept (for the tab to show once it's on), nothing is measured.
+        let started = std::time::Instant::now();
+        let samples = loop {
+            let d = c.get("/api/diagnostics").json();
+            assert!(d["on"] == false);
+            let s = d["samples"].as_array().unwrap().clone();
+            if !s.is_empty() || started.elapsed() > std::time::Duration::from_secs(5) {
+                break s;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+        assert!(!samples.is_empty() && samples.iter().all(|s| s.get("pipeline").is_some() && s.get("app").is_none()));
         assert_eq!(c.post("/api/settings", json!({"diagnostics": true})).status, StatusCode::OK);
         assert!(c.get("/api/diagnostics").json()["on"] == true && c.settings()["diagnostics"] == true);
     }

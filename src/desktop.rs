@@ -379,7 +379,7 @@ impl Tray {
                 let borrowed: Vec<(&str, Value)> = owned.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
                 self.tr(key, &borrowed)
             };
-            let mut text = if p.get("paused").and_then(|v| v.as_bool()).unwrap_or(false) {
+            let mut text = if crate::indexer::Indexer::shows_paused(&p) {
                 self.tr("tray.title.paused", &[])
             } else if state == "loading-model" {
                 self.tr("tray.title.starting", &[])

@@ -540,10 +540,27 @@ impl Indexer {
         self.paused.load(Ordering::SeqCst)
     }
 
+    /// Whether indexing shows as paused, from its progress: everything paused, the folder it's on
+    /// paused on its card, or, with nothing else to do, files waiting in folders paused on their
+    /// cards. The tray and Diagnostics say so; the page has the same rule (workPhase).
+    pub fn shows_paused(p: &Map<String, Value>) -> bool {
+        let flag = |k: &str| p.get(k).and_then(Value::as_bool).unwrap_or(false);
+        let idle = matches!(p.get("state").and_then(Value::as_str), Some("idle") | None);
+        flag("paused") || flag("folder_paused") || (idle && p.get("held").and_then(Value::as_i64).unwrap_or(0) > 0)
+    }
+
     pub fn progress(&self) -> Map<String, Value> {
         let mut p = self.progress.lock().clone();
         p.insert("queued".into(), json!(self.jobs_rx.len()));
         p.insert("paused".into(), json!(self.is_paused()));
+        // The folder it's on was paused on its card (its work waits, as if everything was paused),
+        // and the files waiting in folders paused on their cards (shows_paused).
+        let paused = self.paused_folders.lock().clone();
+        let working = matches!(p.get("state").and_then(Value::as_str), Some("indexing" | "scanning"));
+        let folder = p.get("folder_id").and_then(Value::as_i64);
+        p.insert("folder_paused".into(), json!(working && folder.is_some_and(|f| paused.contains(&f))));
+        let held: i64 = if paused.is_empty() { 0 } else { self.store.folders().iter().filter(|f| paused.contains(&f.id)).map(|f| f.pending).sum() };
+        p.insert("held".into(), json!(held));
         p.insert("files_per_min".into(), json!(self.files_per_min()));
         let n = |c: &AtomicU64| c.load(Ordering::Relaxed);
         let ms = |c: &AtomicU64| n(c) / 1000;
@@ -894,7 +911,7 @@ impl Indexer {
             return Ok(());
         }
         let root = folder.path.clone();
-        self.set(json!({"state": "scanning", "folder": root, "found": 0}));
+        self.set(json!({"state": "scanning", "folder": root, "folder_id": folder_id, "found": 0}));
         if !Path::new(&root).is_dir() {
             self.missing.lock().insert(folder_id);
             self.set(json!({"state": "error", "message": format!("Folder not found: {root}")}));
@@ -1090,7 +1107,7 @@ impl Indexer {
         // watcher.)
         let before = (self.store.folder_file_count(folder_id).max(0) as usize).saturating_sub(total);
         *self.current_folder.lock() = Some(folder_id);
-        self.set(json!({"state": "indexing", "folder": root, "done": before, "total": before + total, "current": ""}));
+        self.set(json!({"state": "indexing", "folder": root, "folder_id": folder_id, "done": before, "total": before + total, "current": ""}));
         self.recent.lock().clear();
         // Reading and decoding files (CPU) runs ahead of embedding (GPU) in its own thread, so the
         // GPU isn't left waiting between groups.
@@ -2353,6 +2370,17 @@ mod tests {
         assert!(!worker.is_finished()); // waiting, paused
         t.ix.remove_folder(fid).unwrap();
         join_within(worker, 5.0); // gone at once, not when everything goes on again
+    }
+
+    #[test]
+    fn paused_shows_for_everything_a_folder_on_its_card_or_files_held_back() {
+        let p = |v: Value| v.as_object().unwrap().clone();
+        assert!(Indexer::shows_paused(&p(json!({"state": "indexing", "paused": true}))));
+        assert!(Indexer::shows_paused(&p(json!({"state": "indexing", "folder_paused": true}))));
+        assert!(!Indexer::shows_paused(&p(json!({"state": "indexing", "held": 5})))); // (other work goes on)
+        assert!(Indexer::shows_paused(&p(json!({"state": "idle", "held": 5}))));
+        assert!(!Indexer::shows_paused(&p(json!({"state": "idle", "held": 0}))));
+        assert!(!Indexer::shows_paused(&p(json!({"state": "loading-model", "held": 5}))));
     }
 
     #[test]
