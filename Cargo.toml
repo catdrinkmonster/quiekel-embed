@@ -20,7 +20,7 @@ parking_lot = "0.12"
 crossbeam-channel = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 regex = "1"
-fancy-regex = "0.14"
+fancy-regex = "0.19"
 unicode-normalization = "0.1"
 html-escape = "0.2"
 encoding_rs = "0.8"
