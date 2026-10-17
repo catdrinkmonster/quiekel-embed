@@ -38,6 +38,8 @@ jobs:
       # These machines have no graphics card: the model's own tests skip themselves without its files.
       - name: Test
         run: cargo test --release --locked -- --test-threads=1
+      - name: install.ps1 in Windows PowerShell and PowerShell 7 (the newest of several releases)
+        run: .github/install-test.ps1
 
   release:
     name: release
