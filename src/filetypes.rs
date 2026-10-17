@@ -22,7 +22,9 @@ pub const RULES: [(&str, bool); 2] = [
 const SYSTEM_DIRS: [&str; 2] = ["$recycle.bin", "system volume information"]; // never, whatever the rules
 const ANDROID_APP_DIRS: [&str; 2] = ["data", "obb"];
 const MAIL_EXTS: [&str; 4] = [".eml", ".msg", ".mht", ".mhtml"];
-pub const FORMAT: i64 = 3; // bump when what's found inside containers changes
+pub const FORMAT: i64 = 4; // bump when what's found inside containers changes (or what's noted of it)
+/// Reasons in a report that are problems: they show with the files that couldn't be read.
+pub const PROBLEMS: [&str; 3] = ["no_access_dir", "unreadable_dir", "damaged_archive"];
 
 /// The category a file of this kind counts in.
 pub fn category(kind: &str, name: &str) -> &'static str {
@@ -184,12 +186,31 @@ thread_local! {
     pub static TEST_MAX_ENTRIES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-/// Why files weren't searched: counts by reason, a few examples each, and for types, which.
+/// Why files weren't searched: counts by reason, a few examples each, and of files, their types
+/// (folders passed by as a whole have none).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Reason {
     pub n: i64,
     pub examples: Vec<String>,
     pub exts: BTreeMap<String, i64>,
+}
+
+impl Reason {
+    /// A few examples, and one of each of its types beyond them (up to MAX_EXAMPLES), so every
+    /// type of file it passed by can be shown.
+    fn example(&mut self, path: &str) {
+        if self.examples.len() < Report::EXAMPLES {
+            return self.examples.push(path.to_string());
+        }
+        let type_of = |p: &str| suffix(config::file_name(p));
+        let ext = type_of(path);
+        if self.examples.len() < Report::MAX_EXAMPLES
+            && self.exts.contains_key(&ext)
+            && !self.examples.iter().any(|p| type_of(p) == ext)
+        {
+            self.examples.push(path.to_string());
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -200,22 +221,23 @@ pub struct Report {
 
 impl Report {
     const EXAMPLES: usize = 5;
+    const MAX_EXAMPLES: usize = 40;
 
     pub fn add(&mut self, reason: &str, path: &str, ext: Option<&str>, n: i64) {
         let r = self.data.entry(reason.to_string()).or_default();
         r.n += n;
-        if r.examples.len() < Self::EXAMPLES {
-            r.examples.push(path.to_string());
-        }
         if let Some(e) = ext {
             *r.exts.entry(e.to_string()).or_insert(0) += n;
         }
+        r.example(path);
     }
 
+    /// A folder passed by as a whole.
     pub fn note(&mut self, reason: &str, path: &str) {
         self.add(reason, path, None, 1);
     }
 
+    /// A file, by its type.
     pub fn add_type(&mut self, reason: &str, path: &str) {
         let ext = suffix(config::file_name(path));
         self.add(reason, path, Some(&ext), 1);
@@ -225,16 +247,18 @@ impl Report {
         for (reason, r) in &other.data {
             let mine = self.data.entry(reason.clone()).or_default();
             mine.n += r.n;
-            let room = Self::EXAMPLES.saturating_sub(mine.examples.len());
-            mine.examples.extend(r.examples.iter().take(room).cloned());
             for (ext, n) in &r.exts {
                 *mine.exts.entry(ext.clone()).or_insert(0) += n;
+            }
+            for p in &r.examples {
+                mine.example(p);
             }
         }
     }
 
-    pub fn total(&self) -> i64 {
-        self.data.values().map(|r| r.n).sum()
+    /// What was passed by (the problems, folders that couldn't be opened, count apart).
+    pub fn unsearched(&self) -> i64 {
+        self.data.iter().filter(|(why, _)| !PROBLEMS.contains(&why.as_str())).map(|(_, r)| r.n).sum()
     }
 }
 

@@ -255,10 +255,14 @@
         </div>
         <div class="fm-list" id="fm-list"></div>
       </div>
-      <div class="fm-section" id="fm-skips" hidden>
-        <div class="fm-section-head"><span class="fm-label" data-i18n="folder.unsearched_title"></span></div>
+      <details class="fm-section fm-skips" id="fm-skips" hidden>
+        <summary class="fm-section-head">
+          <span class="fm-label" data-i18n="folder.unsearched_title"></span>
+          <span class="fm-count" id="fm-skips-n"></span>
+          <span class="fm-fold" data-icon="chevronDown"></span>
+        </summary>
         <div class="fm-list" id="fm-reasons"></div>
-      </div>
+      </details>
     </div>
   </div>
 </div>

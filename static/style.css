@@ -713,30 +713,28 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .mx-head b { flex: 1; min-width: 0; color: var(--ink); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-head .chip-x { flex: none; color: var(--muted); }
 .mx-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; padding-top: 20px; }
-.mx-part { font-size: 11px; font-weight: 700; color: var(--faint); }
-.mx-title { margin-top: 4px; font: 700 19px/1.25 var(--display); color: var(--ink); letter-spacing: -.01em; }
+.mx-title { font: 700 19px/1.25 var(--display); color: var(--ink); letter-spacing: -.01em; }
 .mx-text { margin: 6px 0 0; min-height: 3.1em; font-size: 13px; line-height: 1.55; color: var(--muted); } /* (two lines kept: what a step shows stays in place) */
-/* (a size container: what a step shows takes the room there is) */
-.mx-stage { flex: 1; min-height: 0; margin: 20px 0 8px; container-type: size; overflow: auto; }
+/* (a size container: what a step shows takes the room there is, fitted to it, so what moves in
+   never makes it scroll) */
+.mx-stage { flex: 1; min-height: 0; margin: 20px 0 8px; container-type: size; overflow: hidden; }
 .mx-visual { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
 .mx-visual.wide { align-items: stretch; } /* (lists: the width of the panel) */
 .mx-words { max-width: 100%; font-size: 20px; font-weight: 700; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
 .mx-print { display: block; border-radius: 4px; background: var(--well); image-rendering: pixelated; flex: none; }
-.mx-caption { font-size: 11px; color: var(--faint); text-align: center; }
+.mx-caption { flex: none; font-size: 11px; color: var(--faint); text-align: center; }
 /* The tour: what a step shows comes in piece by piece (--i: the order); "late" after the rest. */
 .mx-in { animation: mx-in .42s cubic-bezier(.2, .8, .3, 1) both; animation-delay: calc(var(--i, 0) * 90ms); }
 .mx-in.late { animation-delay: 950ms; }
 @keyframes mx-in { from { opacity: 0; transform: translateY(8px); } }
-/* A file being read: a line goes down its page (on a light tint, as tall as the room). */
-.mx-read { position: relative; flex: 1 0 auto; align-self: stretch; display: flex; flex-direction: column; overflow: hidden; border-radius: 6px; }
+/* A file being read: its page (on a light tint, as tall as the room), its words lighting up one
+   after another as they're read. */
+.mx-read { position: relative; flex: 1 1 auto; min-height: 0; align-self: stretch; display: flex; flex-direction: column; overflow: hidden; border-radius: 6px; } /* (in a small room the page goes on below it) */
 .mx-letter { flex: 1 0 auto; padding: 18px 20px; border-radius: 6px; background: var(--well); font-size: 13px; line-height: 1.7; color: var(--text); }
 .mx-letter p { margin: 0 0 12px; }
 .mx-letter p:last-child { margin: 0; }
-.mx-read::after {
-  content: ""; position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--orange);
-  animation: mx-scan 1.3s ease-in-out .5s both;
-}
-@keyframes mx-scan { from { top: 0; opacity: 1; } 85% { opacity: 1; } to { top: calc(100% - 2px); opacity: 0; } }
+.mx-w { animation: mx-word .45s linear both; animation-delay: calc(500ms + var(--w, 0) * 28ms); }
+@keyframes mx-word { from { color: var(--faint); } 25% { color: var(--orange); } to { color: var(--text); } }
 /* The passages' numbers fly into their average below them. */
 .mx-prints { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
 .mx-prints.merge > canvas { animation: mx-merge .55s cubic-bezier(.5, 0, .75, .3) both; animation-delay: calc(300ms + var(--i, 0) * 45ms); }
@@ -753,22 +751,37 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 @keyframes mx-bar { from { width: 0; } }
 /* How many files hold your words, counted up. */
 .mx-count { font: 800 64px/1 var(--display); color: var(--ink); font-variant-numeric: tabular-nums; }
-/* The page comes apart into its passages (the last one is the rest of the page), numbered. */
-.mx-pieces { flex: 1 0 auto; align-self: stretch; display: flex; flex-direction: column; gap: 10px; }
-.mx-piece { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border-radius: 6px; background: var(--well); font-size: 13px; line-height: 22px; color: var(--text); }
-.mx-piece:last-child { flex: 1 0 auto; }
-.mx-piece p { margin: 0; min-width: 0; }
-.mx-piece + .mx-piece { animation: mx-apart .5s cubic-bezier(.2, .8, .3, 1) both; animation-delay: calc(150ms + var(--i, 0) * 150ms); }
-@keyframes mx-apart { from { margin-top: -10px; } }
-.mx-num { flex: none; width: 14px; font: 700 12px/22px var(--mono); color: var(--faint); text-align: right; animation: mx-fade .3s ease both; animation-delay: calc(250ms + var(--i, 0) * 150ms); }
-@keyframes mx-fade { from { opacity: 0; } }
-/* Each passage beside its numbers: the rows share the room, the numbers as tall as a row. */
-.mx-visual.rows { height: 100%; }
-.mx-rows { flex: 1; min-height: 0; align-self: stretch; display: grid; grid-template-rows: repeat(var(--n, 3), minmax(0, 1fr)); gap: 12px; }
-.mx-row { display: flex; align-items: center; gap: 14px; min-height: 0; font-size: 13px; line-height: 1.6; color: var(--text); }
-.mx-ptext {
-  flex: 1; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: var(--lines, 3); -webkit-box-orient: vertical; overflow: hidden;
+/* The page comes apart into its passages: it starts as it was read (the rest of the page under
+   the text), then gaps open between them, each gets its number (its text moving over to make
+   room) and they share the room, the rest of the page going. */
+.mx-visual.fill { height: 100%; }
+.mx-pieces { flex: 1; min-height: 0; align-self: stretch; display: flex; flex-direction: column; }
+.mx-piece {
+  flex: 1 1 auto; min-height: 0; display: flex; align-items: center; overflow: hidden;
+  padding: 10px 14px; border-radius: 6px; background: var(--well); font-size: 13px; line-height: 1.7; color: var(--text);
 }
+.mx-piece-in { display: flex; align-items: flex-start; min-width: 0; }
+.mx-piece p {
+  margin: 0; min-width: 0; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: var(--lines, 99); -webkit-box-orient: vertical; overflow: hidden;
+}
+.mx-pieces .mx-piece { animation: mx-apart .6s cubic-bezier(.4, 0, .2, 1) .35s both; }
+.mx-pieces .mx-piece + .mx-piece { margin-top: 10px; }
+.mx-pieces .mx-piece:first-child { animation-name: mx-apart-first; }
+@keyframes mx-apart { from { flex-grow: 0; margin-top: 0; padding: 6px 20px; border-radius: 0; } }
+@keyframes mx-apart-first { from { flex-grow: 0; padding: 18px 20px 6px; border-radius: 6px 6px 0 0; } }
+.mx-rest { flex: 0 0 0; background: var(--well); border-radius: 0 0 6px 6px; animation: mx-rest .6s cubic-bezier(.4, 0, .2, 1) .35s both; }
+@keyframes mx-rest { from { flex-grow: 1; padding-top: 6px; } }
+.mx-num { flex: none; width: 12px; margin-right: 8px; overflow: hidden; font: 700 12px/22px var(--mono); color: var(--faint); text-align: right; }
+.mx-pieces .mx-num { animation: mx-num .45s cubic-bezier(.4, 0, .2, 1) both; animation-delay: calc(450ms + var(--i, 0) * 150ms); }
+@keyframes mx-num { from { width: 0; margin-right: 0; opacity: 0; } }
+/* Each passage (still numbered) beside its numbers: the rows share the room, the numbers as tall
+   as a row, opening up beside the passages one after another. */
+.mx-rows { flex: 1; min-height: 0; align-self: stretch; display: grid; grid-template-rows: repeat(var(--n, 3), minmax(0, 1fr)); gap: 10px; }
+.mx-row { display: flex; align-items: stretch; gap: 14px; min-height: 0; }
+.mx-row .mx-piece { flex: 1; min-width: 0; }
+.mx-row > .mx-print { align-self: center; animation: mx-open .5s cubic-bezier(.4, 0, .2, 1) both; animation-delay: calc(150ms + var(--i, 0) * 170ms); }
+@keyframes mx-open { from { width: 0; margin-left: -14px; } }
 /* The files that hold your words: each name, and the words in it marked (as a result shows them). */
 .mx-hits { align-self: stretch; display: flex; flex-direction: column; gap: 14px; margin-top: 10px; }
 .mx-hit-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
@@ -776,10 +789,10 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
   margin: 4px 0 0 16px; color: var(--text); font-size: 13px; line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
-.mx-file { align-self: stretch; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mx-file { flex: none; align-self: stretch; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .mx-file svg.i { width: 16px; height: 16px; color: var(--faint); flex: none; }
 .mx-file b { min-width: 0; font-size: 14px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mx-dir { align-self: stretch; font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-dir { flex: none; align-self: stretch; font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mx-results { align-self: stretch; min-height: 0; margin-bottom: 0; }
 .mx-results .mc-rel { height: 32px; font-size: 13px; }
 .mx-results .more-divider { margin: 4px 0; min-height: 22px; cursor: default; }
@@ -908,22 +921,35 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .fm-file-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .fm-file-text b { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 .fm-why { font-size: 12.5px; color: var(--red); }
-.fm-reason summary .icon-btn { margin-right: 2px; }
-/* Not searched: one row per reason, opened for its types and a few files */
+/* Not searched: one fold, closed at first; in it a row per type of file (the most first): why as
+   an icon, its extension, how many; opened, a few of its files. The reasons' words are in the
+   tooltips. */
+.fm-skips > summary { cursor: pointer; list-style: none; margin-bottom: 0; gap: 8px; }
+.fm-skips > summary::-webkit-details-marker { display: none; }
+.fm-skips > summary:hover .fm-label { color: var(--ink); }
+.fm-skips > summary .fm-count { margin-left: auto; }
+.fm-skips[open] > summary { margin-bottom: 8px; }
+.fm-fold svg.i { width: 16px; height: 16px; color: var(--faint); transition: transform .15s; }
+.fm-skips[open] .fm-fold svg.i { transform: rotate(180deg); }
 .fm-reason + .fm-reason { border-top: 1px solid var(--border); }
-.fm-reason summary {
-  display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; list-style: none;
-  min-height: 46px; /* the same with or without a button in the row */
+.fm-reason-head {
+  display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+  min-height: 40px; /* the same with or without a button in the row */
 }
-.fm-reason summary::-webkit-details-marker { display: none; }
-.fm-reason summary:hover { background: var(--well); }
-.fm-reason summary > svg.i { flex: none; width: 18px; height: 18px; color: var(--faint); }
-.fm-reason summary > svg.i:last-child { width: 16px; height: 16px; transition: transform .15s; }
-.fm-reason[open] summary > svg.i:last-child { transform: rotate(180deg); }
+summary.fm-reason-head { cursor: pointer; list-style: none; }
+summary.fm-reason-head::-webkit-details-marker { display: none; }
+summary.fm-reason-head:hover { background: var(--well); }
+.fm-reason-head .icon-btn { margin-right: 2px; }
+.fm-reason-head > svg.i { flex: none; width: 16px; height: 16px; color: var(--faint); }
+.fm-reason-head > svg.i:last-child { transition: transform .15s; }
+.fm-reason[open] .fm-reason-head > svg.i:last-child { transform: rotate(180deg); }
+.fm-reason.bare .fm-reason-head { padding-right: 38px; } /* (its number in line with the others', which have a › after it) */
+.fm-ext { font-family: var(--mono); }
 .fm-count { font: 700 14px var(--display); color: var(--ink); font-variant-numeric: tabular-nums; }
-.fm-reason-body { padding: 0 0 6px 40px; display: flex; flex-direction: column; }
-.fm-reason-body .tm-chips { padding: 2px 12px 8px 0; }
+/* (its files under the type's name; a file's own reason, when the type has several, in the gutter) */
+.fm-reason-body { padding: 0 0 6px 38px; display: flex; flex-direction: column; }
 .fm-reason-body .fm-file { padding-left: 0; }
+.fm-reason-body .fm-file > svg.i { flex: none; width: 14px; height: 14px; margin-left: -24px; color: var(--faint); }
 .fm-reason-body .fm-file + .fm-file { border-top-style: dashed; }
 
 /* ---- settings ---- */

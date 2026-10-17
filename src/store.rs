@@ -866,7 +866,7 @@ impl Store {
                     texts: r.get(16)?,
                     mails: r.get(17)?,
                     // Everything that isn't searched: skipped files, and what the scan left out.
-                    unsearched: skipped + report.total(),
+                    unsearched: skipped + report.unsearched(),
                 })
             })?;
             rows.collect()
@@ -1161,42 +1161,101 @@ impl Store {
         Ok(())
     }
 
-    /// Why a folder's files aren't searched: what its last scan left out, and the files that were
-    /// skipped, by reason (a few of each).
-    pub fn details(&self, folder_id: i64, examples: i64) -> Value {
+    /// A scan has walked the folder: when, and what it found isn't searched, kept at once, so they
+    /// show while its files are indexed (mark_scanned keeps them again at the end).
+    pub fn save_report(&self, folder_id: i64, report: &Report) {
+        let db = self.db.lock();
+        let report = serde_json::to_string(report).unwrap_or_default();
+        let _ = db.execute("UPDATE folders SET report = ?, last_scan_at = ? WHERE id = ?", params![report, now(), folder_id]);
+        drop(db);
+        self.restructured();
+    }
+
+    /// What a folder's last scan found isn't searched.
+    pub fn report(&self, folder_id: i64) -> Report {
         let db = self.reader.lock();
-        let report: Value = db
-            .query_row("SELECT report FROM folders WHERE id = ?", [folder_id], |r| r.get::<_, Option<String>>(0))
+        db.query_row("SELECT report FROM folders WHERE id = ?", [folder_id], |r| r.get::<_, Option<String>>(0))
             .optional()
             .ok()
             .flatten()
             .flatten()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_else(|| json!({}));
-        let mut skipped = Vec::new();
-        let counts: Vec<(Option<String>, i64)> = db
-            .prepare(
-                "SELECT error, COUNT(*) AS n FROM files WHERE folder_id = ? AND status = 'skipped'
-                 GROUP BY error ORDER BY n DESC",
-            )
-            .and_then(|mut st| st.query_map([folder_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
-            .unwrap_or_default();
-        for (error, n) in counts {
-            let files: Vec<Value> = db
-                .prepare(
-                    "SELECT id, path FROM files WHERE folder_id = ? AND status = 'skipped' AND error IS ?
-                     ORDER BY indexed_at DESC LIMIT ?",
-                )
-                .and_then(|mut st| {
-                    st.query_map(params![folder_id, error, examples], |r| {
-                        Ok(json!({"id": r.get::<_, i64>(0)?, "path": r.get::<_, String>(1)?}))
-                    })?
-                    .collect()
-                })
-                .unwrap_or_default();
-            skipped.push(json!({"reason": error, "n": n, "examples": files}));
+            .unwrap_or_default()
+    }
+
+    /// How many files a folder has in the index, whatever their state.
+    pub fn folder_file_count(&self, folder_id: i64) -> i64 {
+        let db = self.db.lock();
+        db.prepare_cached("SELECT COUNT(*) FROM files WHERE folder_id = ?")
+            .and_then(|mut st| st.query_row([folder_id], |r| r.get(0)))
+            .unwrap_or(0)
+    }
+
+    /// Why a folder's files aren't searched, by type, the most first: how many, why ("!key", the
+    /// most common first; anything else as it was reported) and a few of them, each with what
+    /// shows it (`id`: a file in the index; `reason` and `index`: an example of the scan's report).
+    /// What the scan passed by as whole folders (left out, program folders, links) is one group
+    /// without a type. "report": the last scan's report as it is (folders it couldn't open, and
+    /// damaged archives, show with the files that couldn't be read).
+    pub fn details(&self, folder_id: i64, examples: usize) -> Value {
+        #[derive(Default)]
+        struct Group {
+            n: i64,
+            reasons: HashMap<String, i64>,
+            examples: Vec<Value>,
         }
-        json!({"report": report, "skipped": skipped})
+        let report = self.report(folder_id);
+        let mut groups: HashMap<Option<String>, Group> = HashMap::new();
+        for (reason, r) in &report.data {
+            if crate::filetypes::PROBLEMS.contains(&reason.as_str()) {
+                continue;
+            }
+            let why = format!("!{reason}");
+            let typed: i64 = r.exts.values().sum();
+            for (ext, n) in &r.exts {
+                let g = groups.entry(Some(ext.clone())).or_default();
+                g.n += n;
+                *g.reasons.entry(why.clone()).or_default() += n;
+            }
+            if r.n > typed {
+                let g = groups.entry(None).or_default();
+                g.n += r.n - typed;
+                *g.reasons.entry(why.clone()).or_default() += r.n - typed;
+            }
+            for (i, path) in r.examples.iter().enumerate() {
+                let ext = config::suffix(config::file_name(path));
+                let g = groups.entry(r.exts.contains_key(&ext).then_some(ext)).or_default();
+                if g.examples.len() < examples {
+                    g.examples.push(json!({"path": path, "why": why, "reason": reason, "index": i}));
+                }
+            }
+        }
+        let skipped: Vec<(i64, String, Option<String>)> = {
+            let db = self.reader.lock();
+            db.prepare("SELECT id, path, error FROM files WHERE folder_id = ? AND status = 'skipped' ORDER BY indexed_at DESC")
+                .and_then(|mut st| st.query_map([folder_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect())
+                .unwrap_or_default()
+        };
+        for (id, path, error) in skipped {
+            let g = groups.entry(Some(config::suffix(config::file_name(&path)))).or_default();
+            let why = error.unwrap_or_default();
+            g.n += 1;
+            if g.examples.len() < examples {
+                g.examples.push(json!({"path": path, "why": why, "id": id}));
+            }
+            *g.reasons.entry(why).or_default() += 1;
+        }
+        let mut list: Vec<(Option<String>, Group)> = groups.into_iter().collect();
+        list.sort_by(|a, b| b.1.n.cmp(&a.1.n).then(a.0.is_none().cmp(&b.0.is_none())).then(a.0.cmp(&b.0)));
+        let unsearched: Vec<Value> = list
+            .into_iter()
+            .map(|(ext, g)| {
+                let mut reasons: Vec<(String, i64)> = g.reasons.into_iter().collect();
+                reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                json!({"ext": ext, "n": g.n, "reasons": reasons, "examples": g.examples})
+            })
+            .collect();
+        json!({"report": report, "unsearched": unsearched})
     }
 
     // ---- files -------------------------------------------------------------------------------------

@@ -225,9 +225,7 @@ fn fullscreen_in_front() -> bool {
 
 const WM_TRAY: u32 = WM_APP + 1;
 const ID_OPEN: u32 = 1;
-const ID_UPDATE: u32 = 2;
 const ID_PAUSE: u32 = 3;
-const ID_AUTOSTART: u32 = 4;
 const ID_QUIT: u32 = 5;
 
 struct Tray {
@@ -318,12 +316,7 @@ impl Tray {
         let _ = self.proxy.lock().send_event(e);
     }
 
-    fn update_version(&self) -> Option<String> {
-        let b = self.backend.get()?;
-        let latest = b.updater.latest.lock();
-        latest.as_ref().and_then(|l| l["version"].as_str().map(String::from))
-    }
-
+    /// Open, pause (or go on) and quit: the rest is in the window.
     fn menu(&self) {
         let hwnd = HWND(self.hwnd.load(Ordering::SeqCst) as *mut _);
         let b = self.backend.get();
@@ -341,13 +334,8 @@ impl Tray {
                 let _ = AppendMenuW(m, flags, id as usize, &HSTRING::from(text));
             };
             item(menu, ID_OPEN, &self.tr("tray.open", &[]), false, true);
-            if let Some(v) = self.update_version() {
-                item(menu, ID_UPDATE, &self.tr("tray.update", &[("version", Value::from(v))]), false, true);
-            }
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let paused = b.is_some_and(|b| b.indexer.is_paused());
-            item(menu, ID_PAUSE, &self.tr("tray.pause", &[]), paused, ready);
-            item(menu, ID_AUTOSTART, &self.tr("tray.autostart", &[]), crate::shortcuts::autostart_enabled(), true);
+            item(menu, ID_PAUSE, &self.tr(if paused { "tray.resume" } else { "tray.pause" }, &[]), false, ready);
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             item(menu, ID_QUIT, &self.tr("tray.quit", &[]), false, true);
             let _ = SetMenuDefaultItem(menu, ID_OPEN, 0);
@@ -364,18 +352,11 @@ impl Tray {
     fn command(&self, id: u32) {
         let b = self.backend.get().cloned();
         match id {
-            ID_OPEN | ID_UPDATE => self.send(UserEvent::Show),
+            ID_OPEN => self.send(UserEvent::Show),
             ID_PAUSE => {
                 if let Some(b) = b {
                     if b.indexer.is_paused() { b.indexer.resume() } else { b.indexer.pause() }
                 }
-            }
-            ID_AUTOSTART => {
-                std::thread::spawn(|| {
-                    if let Err(e) = crate::shortcuts::set_autostart(!crate::shortcuts::autostart_enabled()) {
-                        log::error!("Could not change autostart: {e}");
-                    }
-                });
             }
             ID_QUIT => self.send(UserEvent::Quit),
             _ => {}
