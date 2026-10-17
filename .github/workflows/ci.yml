@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Make the release for this version (the version in Cargo.toml, e.g. 1.0.0); empty: only test"
+        description: "Make the draft release for this version (the version in Cargo.toml, e.g. 1.0.0); empty: only test"
         required: false
         default: ""
 
@@ -41,10 +41,13 @@ jobs:
       - name: install.ps1 in Windows PowerShell and PowerShell 7 (the newest of several releases)
         run: .github/install-test.ps1
 
+  # A new version on main (its Cargo.toml version has no release yet, not even a draft) gets its
+  # draft release by itself; a manual run with `release` makes it for main's version (when the
+  # automatic one failed and its draft was deleted).
   release:
     name: release
     needs: test
-    if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
@@ -53,26 +56,40 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: The version asked for is the one in Cargo.toml
+      - name: The version, and whether it has a release yet
+        id: version
         env:
-          VERSION: ${{ inputs.release }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ASKED: ${{ inputs.release }}
         run: |
-          $line = Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1
-          if ($line.Matches[0].Groups[1].Value -ne $env:VERSION) { throw "Cargo.toml says $($line.Matches[0].Groups[1].Value), not $env:VERSION." }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($env:ASKED -and $env:ASKED -ne $version) { throw "Cargo.toml says $version, not $env:ASKED." }
+          gh release view "v$version" --json tagName 2>$null | Out-Null
+          $make = [bool]$env:ASKED -or $LASTEXITCODE -ne 0
+          if (-not $make) { Write-Host "v$version has a release already: nothing to make." }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "make=$($make.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          exit 0
       - name: Rust (stable)
+        if: steps.version.outputs.make == 'true'
         run: rustup toolchain install stable --profile minimal; rustup default stable
       - name: The libraries the app loads (these exact files, checked)
+        if: steps.version.outputs.make == 'true'
         run: .github/libraries.ps1
       - name: Build
+        if: steps.version.outputs.make == 'true'
         run: cargo build --release --locked
       - name: The release zip (the app and its libraries side by side, their licenses in licenses\)
+        if: steps.version.outputs.make == 'true'
         env:
-          VERSION: ${{ inputs.release }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: .github/release.ps1 -Version $env:VERSION
       # A draft, with its zip: a maintainer writes its notes and publishes it, which makes its tag
       # (release tags are theirs to make, and a published release can't change).
       - name: The release, as a draft
+        if: steps.version.outputs.make == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.release }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: gh release create "v$env:VERSION" "Quiekel-Embed-$env:VERSION-windows-x64.zip" --draft --target "${{ github.sha }}" --title "v$env:VERSION" --generate-notes
