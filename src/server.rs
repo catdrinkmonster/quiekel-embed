@@ -447,6 +447,9 @@ impl Server {
             "folders": folders,
             "update": update,
             "app_mode": self.hooks.app_mode,
+            // Folders on their way out, with the files still to take out of the index.
+            "removing": self.b.store.removing_view().into_iter()
+                .map(|(id, path, left)| json!({"id": id, "path": path, "left": left})).collect::<Vec<_>>(),
         });
         if let Some(stamp) = page_stamp() {
             status["page"] = json!(stamp);
@@ -965,6 +968,9 @@ impl Server {
             }
             ["api", "folders", id] if method == Method::DELETE => {
                 let id = path_int("folder_id", id)?;
+                if b.store.removing().contains(&id) {
+                    return ok(); // (on its way out already)
+                }
                 self.known_folder(id)?;
                 b.indexer.remove_folder(id).map_err(|e| detail(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
                 ok()
@@ -1085,12 +1091,13 @@ impl Server {
                         .map(|f| {
                             let name = split_path(&f.path).1;
                             json!({"path": f.path, "name": if name.is_empty() { f.path.clone() } else { name },
-                                   "count": f.indexed + f.pending})
+                                   "count": f.indexed})
                         })
                         .collect();
                     return Ok(json_reply(&json!({"path": "", "dirs": dirs})));
                 }
-                Ok(json_reply(&json!({"path": path, "dirs": b.store.subdirs(&path)})))
+                // (with how many searchable files the folder itself holds, for its row on top)
+                Ok(json_reply(&json!({"path": path, "count": b.store.count_under(&path), "dirs": b.store.subdirs(&path)})))
             }
             ["api", "map"] if get => {
                 // Kept ready as JSON; the page asks again every few seconds while the map updates,
@@ -1735,6 +1742,26 @@ mod tests {
         for (reason, index) in [("media", 1), ("type", 0), ("media", -1)] {
             assert_eq!(reveal(reason, index), StatusCode::NOT_FOUND, "{reason} {index}"); // only what the details name
         }
+    }
+
+    #[test]
+    fn a_folder_on_its_way_out_shows_its_files_left_and_removing_it_again_is_no_error() {
+        let c = client();
+        let store = &c.b().store;
+        let folder = store.add_folder(r"C:\going").unwrap();
+        let unit = |k: usize| (0..EMBED_DIM).map(|j| if j == k { 1.0 } else { 0.0 }).collect::<Vec<f32>>();
+        let paths: Vec<String> = (0..3).map(|i| format!(r"C:\going\{i}.txt")).collect();
+        let entries: Vec<Entry> = paths.iter().map(|p| entry(folder, p, "text", "indexed", 1, None)).collect();
+        let rows: Vec<VectorRow> = paths.iter().enumerate().map(|(i, p)| row(folder, p, 0, "text", "words", unit(i))).collect();
+        store.save_files(&entries, &rows).unwrap();
+        store.begin_removing(folder); // (as removing it does, before its files leave)
+        let s = c.status();
+        assert!(s["folders"].as_array().unwrap().is_empty());
+        assert_eq!(s["removing"], json!([{"id": folder, "path": r"C:\going", "left": 3}]));
+        assert_eq!(c.send(Method::DELETE, &format!("/api/folders/{folder}"), &[APP], None).status, StatusCode::OK);
+        while !store.remove_folder_step(folder, 2).unwrap() {}
+        assert_eq!(c.status()["removing"], json!([]));
+        assert_eq!(c.send(Method::DELETE, &format!("/api/folders/{folder}"), &[APP], None).status, StatusCode::NOT_FOUND);
     }
 
     #[test]

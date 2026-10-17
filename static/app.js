@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   page: "search", kind: "all", scope: null, similar: null,
   foldersKey: "", settingsKey: "", deviceKey: "", folderInfo: null,
+  removing: new Map(), // folders on their way out: id -> { path, total, left, sent }
   ready: false, appMode: false, hasFolders: null,
   results: [], selected: -1, terms: [], lightbox: -1,
   update: null, resultShown: false, applying: false, last: null, statusClick: null,
@@ -528,7 +529,7 @@ function render(s) {
   const phase = workPhase(s);
   renderActivity(s, phase);
   updateNotice();
-  renderFolders(s.folders, s.progress, phase);
+  renderFolders(s.folders, s.progress, phase, s.removing || []);
   renderSettings(s);
   renderUpdate(s);
 }
@@ -682,9 +683,21 @@ function phaseStat(phase, p) {
   return el;
 }
 
-function renderFolders(folders, progress, phase) {
+function renderFolders(folders, progress, phase, removing = []) {
+  // Folders on their way out (removed here, or still going after a restart): their cards stay,
+  // emptying as their files leave the index, and go once the folder is gone.
+  const going = state.removing;
+  const listed = new Set(removing.map((r) => r.id));
+  for (const r of removing) {
+    const e = going.get(r.id) || { path: r.path, total: Math.max(1, r.left), sent: true };
+    e.left = r.left;
+    going.set(r.id, e);
+  }
+  for (const [id, e] of going) if (e.sent && !listed.has(id)) going.delete(id); // (gone)
+  folders = folders.filter((f) => !going.has(f.id));
   const active = phase ? progress.folder : null;
-  const key = JSON.stringify([folders, active, phase, progress.done, progress.total, Math.floor(Date.now() / 60000)]);
+  const key = JSON.stringify([folders, [...going].map(([id, e]) => [id, e.left]), active, phase, progress.done,
+    progress.total, Math.floor(Date.now() / 60000)]);
   const hadFolders = state.hasFolders;
   state.hasFolders = folders.length > 0;
   showProblemsBadge(folders);
@@ -701,23 +714,30 @@ function renderFolders(folders, progress, phase) {
     list.replaceChildren();
     list.dataset.lang = i18n.lang;
   }
-  const rows = new Map([...list.querySelectorAll(":scope > .folder")].map((el) => [el.dataset.id, el]));
-  const wanted = folders.map((f) => {
-    const row = rows.get(String(f.id)) || folderRow();
-    rows.delete(String(f.id));
-    fillFolderRow(row, f, active, phase, progress);
+  const rows = new Map([...list.querySelectorAll(":scope > .folder:not(.gone)")].map((el) => [el.dataset.id, el]));
+  // (in the order of their paths, so a card being removed keeps its place)
+  const cards = [...folders.map((f) => ({ path: f.path, id: f.id, f })), ...[...going].map(([id, e]) => ({ path: e.path, id, e }))]
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const wanted = cards.map((c) => {
+    const row = rows.get(String(c.id)) || folderRow();
+    rows.delete(String(c.id));
+    if (c.f) fillFolderRow(row, c.f, active, phase, progress);
+    else fillRemovingRow(row, c.id, c.e);
     return row;
   });
-  for (const gone of rows.values()) gone.remove();
+  for (const gone of rows.values()) leaveRow(gone);
   list.querySelector(":scope > .empty")?.remove();
-  if (!folders.length) wanted.push(h("div", { class: "empty compact" }, waitingText()));
-  // Where the next folder would go: a click picks one.
+  // Where the next folder would go: a click picks one. With none yet, it stands alone in the middle
+  // of the page, the one sentence under it.
   let slot = list.querySelector(":scope > .add-slot");
   if (!slot) {
     slot = h("button", { type: "button", class: "add-slot", onclick: () => pickFolder() }, icon("folderPlus"));
     setTip(slot, t("folders.add"));
   }
+  const none = !cards.length;
+  list.classList.toggle("none", none);
   wanted.push(slot);
+  if (none) wanted.push(h("div", { class: "empty compact" }, waitingText(false)));
   wanted.forEach((el, i) => { if (list.children[i] !== el) list.insertBefore(el, list.children[i] || null); });
   renderGlance(folders);
   // A folder that was searched in is gone: search everywhere again.
@@ -741,6 +761,7 @@ function folderRow() {
 function fillFolderRow(row, f, active, phase, progress) {
   row.folder = f;
   row.dataset.id = f.id;
+  row.querySelector(".folder-main").disabled = false;
   const here = active === f.path;
   const working = here && phase !== "paused"; // (everything paused: the rail turns it back on)
   row.className = `folder${here ? ` active ${phase}` : ""}${f.missing ? " missing" : ""}`;
@@ -776,6 +797,56 @@ function fillFolderRow(row, f, active, phase, progress) {
       f.paused ? "primary" : "") : null,
     iconButton("trash", t("folders.remove_title"), () => removeFolder(row.folder), "danger"),
   ].filter(Boolean));
+}
+
+// A folder on its way out: dimmed, without buttons, its ring the share of its files still in the
+// index (emptying as they leave), their number beside the bin.
+function fillRemovingRow(row, id, e) {
+  row.folder = null;
+  row.dataset.id = id;
+  row.className = "folder removing";
+  const name = row.querySelector(".folder-name");
+  const path = row.querySelector(".folder-path");
+  if (name.textContent !== baseName(e.path)) name.textContent = baseName(e.path);
+  if (path.textContent !== e.path) path.textContent = e.path;
+  row.querySelector(".folder-main").disabled = true;
+  const ring = row.querySelector(".folder-ring");
+  if (ring.dataset.key !== "removing") {
+    ring.dataset.key = "removing";
+    ring.replaceChildren(drainRing(44));
+  }
+  const share = Math.max(0, Math.min(100, (e.left / Math.max(e.total, e.left, 1)) * 100));
+  ring.querySelector(".drain").style.strokeDasharray = `${share.toFixed(2)} ${(100 - share).toFixed(2)}`;
+  row.querySelector(".stats").replaceChildren(stat("trash", fmt(e.left), t("folders.removing")));
+  const actions = row.querySelector(".folder-actions");
+  if (actions.dataset.key !== "removing") {
+    actions.dataset.key = "removing";
+    actions.replaceChildren();
+  }
+}
+
+// A ring of one share that can change smoothly (a folder's files still to remove).
+function drainRing(size) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.classList.add("donut-svg");
+  for (const cls of ["track", "part drain"]) {
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", 50); c.setAttribute("cy", 50); c.setAttribute("r", 42); c.setAttribute("pathLength", 100);
+    c.setAttribute("class", cls);
+    svg.append(c);
+  }
+  return h("span", { class: "donut", style: `--size: ${size}px` }, svg);
+}
+
+// A card whose folder is gone: a removed one fades out where it was, any other goes at once.
+function leaveRow(row) {
+  if (!row.classList.contains("removing")) return row.remove();
+  if (row.classList.contains("gone")) return;
+  row.classList.add("gone");
+  row.addEventListener("animationend", () => row.remove(), { once: true });
+  setTimeout(() => row.remove(), 800); // (also without animations)
 }
 
 // Reasons the indexer knows ("!damaged_image") come as keys; anything else as it was reported.
@@ -1044,12 +1115,28 @@ async function removeFolder(f) {
   const yes = await confirmDialog({
     title: t("folders.confirm_title", { name: baseName(f.path) }), text: t("folders.confirm_text"), ok: t("folders.forget"),
   });
-  if (!yes) return;
+  if (!yes || state.removing.has(f.id)) return;
+  // Its card turns into the removal at once (nothing left to click twice) and stays until the last of
+  // its files has left the index.
+  const going = { path: f.path, total: Math.max(1, f.files || 0), left: f.files || 0, sent: false };
+  state.removing.set(f.id, going);
+  redrawFolders();
   try {
     await api(`/api/folders/${f.id}`, { method: "DELETE" });
-    toast(t("folders.removed"), "trash");
-    refresh();
-  } catch (e) { toast(e.message, "alert"); }
+    going.sent = true;
+  } catch (e) {
+    state.removing.delete(f.id);
+    toast(e.message, "alert");
+  }
+  refresh();
+}
+
+// The folders drawn again from the last status (after something changed here).
+function redrawFolders() {
+  const s = state.last;
+  if (!s) return;
+  state.foldersKey = "";
+  renderFolders(s.folders, s.progress, workPhase(s), s.removing || []);
 }
 
 async function addFolder(path) {
@@ -1788,12 +1875,14 @@ function updateNotice() {
 }
 
 // No folders yet: one friendly sentence, its "add a folder" part a link to the folder picker.
-function waitingText() {
+function waitingText(link = true) {
   const [before, after = ""] = t("search.waiting").split("{folder}");
-  // A link, not a button: buttons don't flow with text, so the comma after them could wrap.
-  const link = h("a", { href: "#/folders", class: "link", onclick: (e) => { e.preventDefault(); pickFolder(); } },
-    t("search.waiting_folder"));
-  return h("p", { class: "waiting" }, before, link, after);
+  // A link, not a button: buttons don't flow with text, so the comma after them could wrap. (On the
+  // Index the + card above it does that: there it's just the words.)
+  const add = link
+    ? h("a", { href: "#/folders", class: "link", onclick: (e) => { e.preventDefault(); pickFolder(); } }, t("search.waiting_folder"))
+    : h("b", {}, t("search.waiting_folder"));
+  return h("p", { class: "waiting" }, before, add, after);
 }
 
 // Nothing searched yet: with no folders, the sentence that adds one; else "Search anything", in the
@@ -3653,11 +3742,20 @@ async function fillScopeList(box, list, path, text) {
   const parent = !path ? null : roots.includes(path.toLowerCase()) ? "" : path.replace(/[\\/][^\\/]+[\\/]?$/, "");
   if (state.scope) rows.push(row("globe", t("scope.clear"), null, () => { setScope(null); closeScopeMenu(); }));
   if (parent !== null) {
-    rows.push(row("up", parent ? baseName(parent) : t("search.all_folders"), null, () => fillScopeList(box, list, parent, "")));
-    // (the folder shown: a click searches in it)
-    const self = (state.last?.folders || []).find((f) => f.path.toLowerCase() === path.toLowerCase());
-    rows.push(row("folder", baseName(path), self ? self.indexed + self.pending : null, () => choose(path), { on: isScope(path) }));
-    rows.push(h("div", { class: "menu-sep" }));
+    // Where you are: back a level on the left, then the way down from the indexed folder to this
+    // one, this one in ink, with the files in it you can find; a click on it searches in it.
+    const back = h("button", { type: "button", class: "menu-open menu-back", onclick: () => fillScopeList(box, list, parent, "") },
+      icon("chevronLeft"));
+    setTip(back, parent ? baseName(parent) : t("search.all_folders"));
+    const crumbs = shortDir(path).split(" › ");
+    const last = crumbs.pop();
+    const here = h("button", { type: "button", class: `menu-row menu-here${isScope(path) ? " on" : ""}`, onclick: () => choose(path) },
+      h("span", { class: "menu-name crumbs" }, crumbs.length ? h("span", { class: "crumbs-up" }, `${crumbs.join(" › ")} ›`) : null,
+        h("b", {}, last)),
+      isScope(path) ? menuMark("check") : null,
+      data.count != null ? h("span", { class: "menu-count" }, fmt(data.count)) : null);
+    setTip(here, `${path}\n${t("scope.here")}`);
+    rows.push(h("div", { class: "menu-line" }, back, here), h("div", { class: "menu-sep" }));
   }
   for (const d of data.dirs) {
     rows.push(row(DIR_ICON[d.kind] || "folder", d.name, d.count, () => choose(d.path),

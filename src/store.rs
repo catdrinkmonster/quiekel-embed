@@ -934,6 +934,26 @@ impl Store {
         self.removing.lock().iter().copied().collect()
     }
 
+    /// Folders on their way out, for the page: id, path, and how many of their files are still in
+    /// the index (the folder itself goes with the last of them).
+    pub fn removing_view(&self) -> Vec<(i64, String, i64)> {
+        let ids = self.removing();
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let db = self.reader.lock();
+        ids.into_iter()
+            .filter_map(|id| {
+                db.query_row(
+                    "SELECT f.path, (SELECT COUNT(*) FROM files WHERE folder_id = f.id) FROM folders f WHERE f.id = ?",
+                    [id],
+                    |r| Ok((id, r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                )
+                .ok()
+            })
+            .collect()
+    }
+
     /// Takes up to `n` of a removed folder's files out of the index, with their keyword entries
     /// and vectors; true once none are left, and the folder itself is gone too.
     pub fn remove_folder_step(&self, folder_id: i64, n: usize) -> Result<bool> {
@@ -1724,12 +1744,22 @@ impl Store {
             .unwrap_or_default()
     }
 
-    /// The folders directly inside `path` that hold searchable files, with how many.
+    /// How many searchable files a folder holds, anywhere inside it.
+    pub fn count_under(&self, path: &str) -> i64 {
+        let (lo, hi) = inside(path);
+        let db = self.reader.lock();
+        db.prepare_cached("SELECT COUNT(*) FROM files WHERE status = 'indexed' AND path >= ? AND path < ?")
+            .and_then(|mut st| st.query_row(params![lo, hi], |r| r.get(0)))
+            .unwrap_or(0)
+    }
+
+    /// The folders directly inside `path` that hold searchable files, with how many (files still
+    /// waiting to be read don't count: they can't be found yet).
     pub fn subdirs(&self, path: &str) -> Vec<Value> {
         let (prefix, hi) = inside(path);
         let db = self.reader.lock();
         let rows: Vec<String> = db
-            .prepare_cached("SELECT path FROM files WHERE status IN ('indexed', 'pending') AND path >= ? AND path < ?")
+            .prepare_cached("SELECT path FROM files WHERE status = 'indexed' AND path >= ? AND path < ?")
             .and_then(|mut st| st.query_map(params![prefix, hi], |r| r.get(0))?.collect())
             .unwrap_or_default();
         drop(db);
@@ -1748,7 +1778,7 @@ impl Store {
     }
 
     /// Folders anywhere in the indexed ones whose name holds `text` (any case): the best `limit`,
-    /// names that start with it first, then by how many files they hold.
+    /// names that start with it first, then by how many searchable files they hold.
     pub fn find_dirs(&self, text: &str, limit: usize) -> Vec<Value> {
         let needle = text.trim().to_lowercase();
         if needle.is_empty() {
@@ -1757,7 +1787,7 @@ impl Store {
         let roots: Vec<String> = self.folders().into_iter().map(|f| f.path.trim_end_matches(['\\', '/']).to_string()).collect();
         let db = self.reader.lock();
         let rows: Vec<String> = db
-            .prepare_cached("SELECT path FROM files WHERE status IN ('indexed', 'pending')")
+            .prepare_cached("SELECT path FROM files WHERE status = 'indexed'")
             .and_then(|mut st| st.query_map([], |r| r.get(0))?.collect())
             .unwrap_or_default();
         drop(db);
@@ -2012,6 +2042,13 @@ mod tests {
         save(&s, fid, r"C:\data\ab\w.txt", "text", &["apple cake"], "w.txt ab");
         save(&s, fid, r"C:\data\c\z.txt", "text", &["apple tree"], "z.txt c");
 
+        // Files still waiting to be read aren't counted, nor is a folder that only holds such files.
+        let waiting = |p: &str| Entry {
+            folder_id: fid, path: p.into(), size: 1, mtime: 1.0, kind: "text".into(), status: "pending".into(),
+            chunks: 0, error: None, search_name: "w".into(),
+        };
+        s.save_files(&[waiting(r"C:\data\a\later.txt"), waiting(r"C:\data\d\later.txt")], &[]).unwrap();
+        assert_eq!((s.count_under(r"C:\data\a"), s.count_under(r"C:\data")), (2, 4));
         assert_eq!(s.file_ids_under(r"C:\data\a").len(), 2); // not the files in "ab"
         let subdirs = |p: &str| -> Vec<(String, i64)> {
             s.subdirs(p).iter().map(|d| (d["name"].as_str().unwrap().to_string(), d["count"].as_i64().unwrap())).collect()

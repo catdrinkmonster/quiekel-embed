@@ -403,6 +403,10 @@ svg.i .frame { stroke-width: 2.6; }
 }
 .menu-open:hover { color: var(--ink); background: var(--well); }
 .menu-open svg.i { width: 15px; height: 15px; }
+/* Where the folder menu is: back a level, then the way down to this folder (this one in ink). */
+.menu-here .crumbs { display: flex; gap: .3em; }
+.menu-here .crumbs-up { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 500; }
+.menu-here .crumbs b { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-weight: 700; }
 .menu.ctx { width: auto; min-width: 190px; z-index: 65; }
 .menu.sort-menu { width: auto; min-width: 200px; }
 .menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
@@ -816,6 +820,21 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 }
 .add-slot:hover { color: var(--ink); background: var(--hover); border-color: var(--faint); }
 .add-slot svg.i { width: 22px; height: 22px; }
+/* No folders yet: the + card alone in the middle of the page, the one sentence under it. */
+.folders.none { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; flex: 1; padding-bottom: 8vh; }
+.folders.none .add-slot { width: min(340px, 100%); }
+.folders.none .empty { padding: 0; }
+.folders.none .waiting b { font-weight: 600; color: var(--ink); }
+.main:has(> #page-folders:not([hidden]) > #folders.none) { height: 100vh; display: flex; flex-direction: column; }
+.main:has(> #page-folders:not([hidden]) > #folders.none) > #page-folders { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+/* A folder on its way out: dimmed and still, its ring emptying as its files leave the index; then
+   it fades away where it was. */
+.folder.removing .folder-main, .folder.removing .folder-side { opacity: .55; }
+.folder.removing .folder-main { cursor: default; }
+.folder.removing .folder-main:hover .folder-name { text-decoration: none; }
+.donut-svg .drain { stroke: var(--faint); transition: stroke-dasharray .5s ease; }
+.folder.gone { pointer-events: none; animation: folder-gone .25s ease forwards; }
+@keyframes folder-gone { to { opacity: 0; transform: scale(.97); } }
 .folder.missing .folder-name { color: var(--muted); }
 .error { color: var(--red); font-size: 13px; font-weight: 600; margin: -6px 0 12px; }
 /* The folders as cards, as many side by side as fit; the + card after them. */
