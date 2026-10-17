@@ -1,9 +1,11 @@
-//! Diagnostics: what the app uses, for the tab Settings -> Diagnostics adds. While it's switched on,
-//! once a second: what indexing is doing (and why it waits), the files waiting, the processor and
-//! memory of the app (with its window's processes, as Task Manager counts them) and of its model
-//! process, the model's load on its graphics card and its video memory, what the app reads from the
-//! disk, the whole PC's load, and where indexing spends its time; and how long searches take. The
-//! last ten minutes are kept for the tab's charts; switched off, nothing is sampled.
+//! Diagnostics: what the app uses, for the tab Settings -> Diagnostics adds. Once a second, what
+//! indexing is doing (and why it waits), the files waiting and where indexing spends its time,
+//! switched on or not, so the tab shows what happened before it was opened. While it's switched
+//! on, also the processor and memory of the app (with its window's processes, as Task Manager
+//! counts them) and of its model process, the model's load on its graphics card and its video
+//! memory, what the app reads from the disk and the whole PC's load; and how long searches take.
+//! The last ten minutes are kept for the tab's charts; switched off, none of the resources are
+//! measured, and the ones measured go.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -21,6 +23,7 @@ use crate::store::Store;
 const KEEP: usize = 600; // samples: ten minutes, one a second
 const SEARCHES: usize = 50; // the last searches' times
 const WINDOW_EVERY: u32 = 10; // the window's processes are looked up again every this many samples
+const RESOURCES: [&str; 4] = ["app", "model", "pc", "disk"]; // a sample's parts measured only while on
 const GIB: f64 = 1_073_741_824.0;
 
 pub struct Diagnostics {
@@ -30,7 +33,7 @@ pub struct Diagnostics {
 }
 
 impl Diagnostics {
-    /// The sampler, idle until switched on.
+    /// The sampler: indexing's activity always, the resources once switched on.
     pub fn start(embedder: Arc<Embedder>, governor: Arc<Governor>, indexer: Arc<Indexer>, on: bool) -> Arc<Diagnostics> {
         let d = Arc::new(Diagnostics {
             samples: Mutex::new(VecDeque::with_capacity(KEEP)),
@@ -45,22 +48,34 @@ impl Diagnostics {
                 let mut read: Option<(u64, Instant)> = None;
                 let mut gpu = Gpu::open();
                 let (mut window, mut n) = (Vec::new(), 0u32);
+                let mut was_on = false;
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
-                    if !me.on.load(Ordering::Relaxed) {
+                    let on = me.on.load(Ordering::Relaxed);
+                    if was_on && !on {
+                        // Switched off: what was measured goes, indexing's activity stays.
                         read = None;
-                        if !last.is_empty() {
-                            last.clear();
-                            me.samples.lock().clear();
-                            me.searches.lock().clear();
+                        n = 0;
+                        last.clear();
+                        for s in me.samples.lock().iter_mut() {
+                            if let Some(s) = s.as_object_mut() {
+                                for k in RESOURCES {
+                                    s.remove(k);
+                                }
+                            }
                         }
-                        continue;
+                        me.searches.lock().clear();
                     }
-                    if n % WINDOW_EVERY == 0 {
-                        window = window_processes(std::process::id());
-                    }
-                    n = n.wrapping_add(1);
-                    let sample = me.sample(&embedder, &governor, &indexer, &mut last, &mut read, gpu.as_mut(), &window);
+                    was_on = on;
+                    let sample = if on {
+                        if n % WINDOW_EVERY == 0 {
+                            window = window_processes(std::process::id());
+                        }
+                        n = n.wrapping_add(1);
+                        me.sample(&embedder, &governor, &indexer, &mut last, &mut read, gpu.as_mut(), &window)
+                    } else {
+                        Value::Object(activity(&embedder, &governor, &indexer))
+                    };
                     let mut s = me.samples.lock();
                     if s.len() == KEEP {
                         s.pop_front();
@@ -146,7 +161,6 @@ impl Diagnostics {
         let ours: Vec<u32> = std::iter::once(app).chain(window.iter().copied()).chain(model).collect();
         let g = gpu.and_then(|g| g.read(model, &ours));
         let m = governor.metrics();
-        let p = indexer.progress();
         let r1 = |x: f64| (x * 10.0).round() / 10.0;
         // What the app read from the disk since the last sample (the files it indexes, its index).
         let read_mbs = read_bytes().and_then(|now| {
@@ -155,33 +169,41 @@ impl Diagnostics {
             *read = Some((now, at));
             rate
         });
-        // Indexing waits: memory running out, or the governor holding it back for another reason.
-        let waiting = governor.decision().duty <= 0.0 || p.get("note").is_some_and(|n| n.as_str().is_some_and(|s| !s.is_empty()));
-        json!({
-            "t": now(),
-            "app": {"cpu": r1(app_cpu), "mb": app_mb.round()},
-            "model": {
-                "cpu": r1(model_cpu), "mb": embedder.memory_mb().round(),
-                "gpu": g.as_ref().map(|g| r1(g.model)),
-                // (the counters see the model's video memory even while it's idle; its own answers
-                // tell otherwise)
-                "vram_mb": g.as_ref().and_then(|g| g.vram_mb).or_else(|| embedder.vram_mb()).map(f64::round),
-                "shared_mb": g.as_ref().and_then(|g| g.shared_mb).map(f64::round),
-            },
-            "pc": {
-                "cpu": r1(m.cpu_others + app_cpu + model_cpu).min(100.0), "ram_free_gb": r1(m.ram_free_gb),
-                "ram_total_gb": r1(m.ram_total_gb), "gpu_others": g.as_ref().map(|g| r1(g.others)),
-            },
-            "disk": {"read_mbs": read_mbs.map(|x| (x * 1000.0).round() / 1000.0)},
-            "state": p.get("state"),
-            "paused": p.get("paused"),
-            "waiting": waiting,
-            "model_status": embedder.status(),
-            "pending": indexer.waiting_files(),
-            "queued": p.get("queued"),
-            "pipeline": p.get("pipeline"),
-        })
+        let mut s = activity(embedder, governor, indexer);
+        s.insert("app".into(), json!({"cpu": r1(app_cpu), "mb": app_mb.round()}));
+        s.insert("model".into(), json!({
+            "cpu": r1(model_cpu), "mb": embedder.memory_mb().round(),
+            "gpu": g.as_ref().map(|g| r1(g.model)),
+            // (the counters see the model's video memory even while it's idle; its own answers
+            // tell otherwise)
+            "vram_mb": g.as_ref().and_then(|g| g.vram_mb).or_else(|| embedder.vram_mb()).map(f64::round),
+            "shared_mb": g.as_ref().and_then(|g| g.shared_mb).map(f64::round),
+        }));
+        s.insert("pc".into(), json!({
+            "cpu": r1(m.cpu_others + app_cpu + model_cpu).min(100.0), "ram_free_gb": r1(m.ram_free_gb),
+            "ram_total_gb": r1(m.ram_total_gb), "gpu_others": g.as_ref().map(|g| r1(g.others)),
+        }));
+        s.insert("disk".into(), json!({"read_mbs": read_mbs.map(|x| (x * 1000.0).round() / 1000.0)}));
+        Value::Object(s)
     }
+}
+
+/// What indexing is doing: its state, whether it waits, the files waiting and its counters. Cheap
+/// enough to take every second while the tab is switched off.
+fn activity(embedder: &Embedder, governor: &Governor, indexer: &Indexer) -> serde_json::Map<String, Value> {
+    let p = indexer.progress();
+    // Indexing waits: memory running out, or the governor holding it back for another reason.
+    let waiting = governor.decision().duty <= 0.0 || p.get("note").is_some_and(|n| n.as_str().is_some_and(|s| !s.is_empty()));
+    let mut s = serde_json::Map::new();
+    s.insert("t".into(), json!(now()));
+    s.insert("state".into(), json!(p.get("state")));
+    s.insert("paused".into(), json!(Indexer::shows_paused(&p)));
+    s.insert("waiting".into(), json!(waiting));
+    s.insert("model_status".into(), json!(embedder.status()));
+    s.insert("pending".into(), json!(indexer.waiting_files()));
+    s.insert("queued".into(), json!(p.get("queued")));
+    s.insert("pipeline".into(), json!(p.get("pipeline")));
+    s
 }
 
 /// Bytes the app has read so far.

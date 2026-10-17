@@ -47,8 +47,8 @@
           <button type="button" data-kind="images" data-icon="image"></button>
         </div>
         <div class="scope" id="scope-search"></div>
+        <div class="chip" id="similar-chip" hidden></div>
         <div class="toolbar-end">
-          <span class="hint-icon" id="notice" data-icon="timer" hidden></span>
           <button type="button" class="tool-btn" id="sort-btn" data-icon="sort" aria-haspopup="menu"></button>
           <div class="seg" id="views" role="radiogroup">
             <button type="button" data-view="cards" data-icon="rows"></button>
@@ -135,7 +135,8 @@
     <!-- Diagnostics (Settings switches it on): what the app uses, the last ten minutes -->
     <section class="page page-diagnostics" id="page-diagnostics" hidden>
       <div class="dg-strip" id="dg-strip"></div>
-      <div class="card dg-activity" id="dg-activity" hidden></div>
+      <div class="card dg-progress" id="dg-progress" hidden></div>
+      <div class="card dg-activity" id="dg-activity"></div>
       <div class="dg-charts" id="dg-charts"></div>
       <div class="card dg-time" id="dg-time" hidden></div>
     </section>

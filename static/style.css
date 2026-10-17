@@ -36,24 +36,10 @@
   --tip-fg: #f1f1ec;
   --tip-strong: #ffffff;
   --tip-line: #151515;
-  --badge-bg: #151515;
-  --badge-fg: #ffffff;
   --overlay: rgba(21, 21, 21, .72);
   --overlay-soft: rgba(21, 21, 21, .22);
-  --yellow-bg: #fff3d1;
-  --yellow-line: #f2d27c;
   --yellow-fg: #5c3f00;
-  --yellow-icon: #9a6a00;
-  --blue-bg: #e7ecff;
-  --blue-line: #c2cdfd;
-  --blue-fg: #1a2f8f;
-  --pink-bg: #fde8ee;
-  --pink-fg: #a8264f;
   --red-bg: #fff7f6;
-  --red-line: #f3c9c4;
-  --orange-line: #ffc3a6;
-  --orange-glow: #ffd9c7;
-  --mark-fg: #6b4b00;
   --tip-accent: #ffe58f;
   --kind-docs: #1d4aff;
   --kind-text: #7048e8;
@@ -101,26 +87,12 @@
   --tip-fg: #e6e6e0;
   --tip-strong: #ffffff;
   --tip-line: #46484e;
-  --badge-bg: #f2f2ee;
-  --badge-fg: #151618;
   --overlay: rgba(0, 0, 0, .72);
   --overlay-soft: rgba(0, 0, 0, .45);
   --match-s: 62%;
   --match-l: 56%;
-  --yellow-bg: #3a2f12;
-  --yellow-line: #6b5419;
   --yellow-fg: #ffd77a;
-  --yellow-icon: #f7b733;
-  --blue-bg: #1d264f;
-  --blue-line: #33437f;
-  --blue-fg: #bfcbff;
-  --pink-bg: #3c1c28;
-  --pink-fg: #ff9fbd;
   --red-bg: #33191a;
-  --red-line: #6a2a27;
-  --orange-line: #7a3814;
-  --orange-glow: #4a240d;
-  --mark-fg: #ffe9a8;
   --tip-accent: #ffd77a;
   --kind-docs: #6f8bff;
   --kind-text: #a487ff;
@@ -185,9 +157,13 @@ kbd {
 .icon-btn.danger:hover { --fg: var(--red); }
 .icon-btn.danger-solid, .icon-btn.danger-solid:hover { --face: var(--red); --edge: var(--red); --fg: #fff; }
 .icon-btn.primary, .icon-btn.primary:hover, .icon-btn.primary svg.i { --fg: #151515; } /* dark on the soft yellow in both themes */
-.icon-btn.working svg.i { animation: spin 1s linear infinite; }
+/* A button at work: a ring filling up, or the waiting hourglass (busyIcon); nothing spins. */
+.icon-btn[data-busy="ring"]:disabled, .icon-btn[data-busy="wait"]:disabled { opacity: 1; } /* (at work, not unavailable) */
+.btn-ring { transform: rotate(-90deg); }
+.btn-ring circle { fill: none; stroke: currentColor; stroke-width: 2.4; }
+.btn-ring .track { opacity: .22; }
+.btn-ring .arc { stroke-linecap: round; transition: stroke-dasharray .3s ease; }
 .icon-btn:focus-visible, .seg button:focus-visible, .nav a:focus-visible, .status:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .input, .select {
   background: var(--card); border: 1px solid var(--border); border-radius: 7px;
@@ -269,6 +245,57 @@ kbd {
 @keyframes spin-ring { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
 .status-inner { position: relative; display: grid; place-items: center; font: 800 10px var(--sans); color: var(--ink); letter-spacing: -.02em; }
 .status-inner svg.i { width: 17px; height: 17px; color: var(--c); }
+/* Quiekel in the middle of the ring. At work (indexing, or looking for files): eating them. Every
+   1.2 s a file flies in, from the top right, the left, the top and the right in turn; its mouth
+   opens for it, shuts, and it munches. The files keep their size. Paused: asleep, eyes closed,
+   breathing slowly, z's drifting up. A file is white paper edged in the ring's colour (in both
+   themes, as Quiekel's own colours are), the z's in the quiet colour. */
+.status-inner .quiekel { display: block; width: 30px; height: 30px; overflow: visible; }
+.eating .ea-head { transform-box: view-box; transform-origin: 16px 24px; animation: ea-munch 1.2s ease-in-out infinite; }
+.eating .ea-mouth { fill: #181616; transform-box: view-box; transform-origin: 16px 19.3px; animation: ea-mouth 1.2s infinite; }
+.eating .ea-tongue { fill: #fcb3c8; }
+.eating .ea-file { fill: #fff; stroke: var(--c); stroke-width: 1.2; stroke-linejoin: round; stroke-linecap: round;
+  opacity: 0; animation: ea-fly 4.8s infinite; }
+.eating .ea-lines { fill: none; stroke-width: .9; }
+.eating .ea-file.a { --x: 27px; --y: 6px; --r: 25deg; }
+.eating .ea-file.b { --x: 3.5px; --y: 13px; --r: -20deg; animation-delay: 1.2s; }
+.eating .ea-file.c { --x: 16px; --y: 3px; --r: 12deg; animation-delay: 2.4s; }
+.eating .ea-file.d { --x: 28.5px; --y: 19px; --r: -15deg; animation-delay: 3.6s; }
+@keyframes ea-fly {
+  0% { opacity: 0; transform: translate(var(--x), var(--y)) rotate(var(--r)) scale(1.3); animation-timing-function: ease-in; }
+  2% { opacity: 1; }
+  11.5% { opacity: 1; transform: translate(16px, 19.6px) rotate(0) scale(1.3); }
+  12.5%, 100% { opacity: 0; transform: translate(16px, 19.6px) rotate(0) scale(1.3); }
+}
+@keyframes ea-mouth {
+  0%, 14% { transform: scaleY(0); }
+  32%, 46% { transform: scaleY(1); }
+  54%, 100% { transform: scaleY(0); }
+}
+@keyframes ea-munch {
+  0%, 52%, 90%, 100% { transform: scale(1, 1); }
+  60% { transform: scale(1.06, .9); }
+  68% { transform: scale(.99, 1.02); }
+  76% { transform: scale(1.06, .9); }
+  83% { transform: scale(1, 1.01); }
+}
+.sleeping .sl-head { transform-box: view-box; transform-origin: 16px 24.5px; animation: sl-breathe 3.6s ease-in-out infinite; }
+.sleeping .sl-head circle { fill: #fcb3c8; } /* (the logo's own colour, over its open eyes) */
+.sleeping .sl-lid { fill: none; stroke: #181616; stroke-width: .62; stroke-linecap: round; }
+.sleeping .sl-z { fill: none; stroke: var(--muted); stroke-width: .6; stroke-linecap: round; stroke-linejoin: round; opacity: 0;
+  transform-box: fill-box; transform-origin: 50% 50%; animation: sl-z 3.6s ease-out infinite; }
+.sleeping .sl-z.b { animation-delay: 1.2s; }
+.sleeping .sl-z.c { animation-delay: 2.4s; }
+@keyframes sl-breathe {
+  0%, 100% { transform: translateY(1.2px) scale(1, 1); }
+  50% { transform: translateY(1.2px) scale(1.025, 1.045); }
+}
+@keyframes sl-z {
+  0% { opacity: 0; transform: translate(0, 0) scale(.6); }
+  20% { opacity: 1; }
+  75% { opacity: .9; }
+  100% { opacity: 0; transform: translate(3px, -6px) scale(1.25); }
+}
 .status.busy { --c: var(--orange); }
 .status.warn { --c: var(--yellow); }
 .status.ok { --c: var(--green); }
@@ -276,9 +303,9 @@ kbd {
 .status.paused { --c: var(--muted); }
 /* Waiting: a bold hourglass whose sand runs down before it turns over, and again. */
 svg.i .frame { stroke-width: 2.6; }
-.status-inner .timer, .map-busy .timer { transform-box: view-box; transform-origin: 50% 50%; animation: timer-turn 3.2s infinite; }
-.status-inner .sand, .map-busy .sand { transform-box: fill-box; transform-origin: 50% 100%; animation: sand-top 3.2s linear infinite; }
-.status-inner .sand.bottom, .map-busy .sand.bottom { animation-name: sand-bottom; }
+.status-inner .timer, .map-busy .timer, .icon-btn .timer { transform-box: view-box; transform-origin: 50% 50%; animation: timer-turn 3.2s infinite; }
+.status-inner .sand, .map-busy .sand, .icon-btn .sand { transform-box: fill-box; transform-origin: 50% 100%; animation: sand-top 3.2s linear infinite; }
+.status-inner .sand.bottom, .map-busy .sand.bottom, .icon-btn .sand.bottom { animation-name: sand-bottom; }
 @keyframes timer-turn {
   0%, 40% { transform: rotate(0deg); animation-timing-function: cubic-bezier(.65, 0, .35, 1); }
   50%, 90% { transform: rotate(180deg); animation-timing-function: cubic-bezier(.65, 0, .35, 1); }
@@ -287,19 +314,31 @@ svg.i .frame { stroke-width: 2.6; }
 @keyframes sand-top { 0% { transform: scale(1); } 40%, 50% { transform: scale(0); } 90%, 100% { transform: scale(1); } }
 @keyframes sand-bottom { 0% { transform: scale(0); } 40%, 50% { transform: scale(1); } 90%, 100% { transform: scale(0); } }
 
+/* A new version: the main action's soft yellow, a group's gap above the status ring (two things,
+   not one). */
 .update-badge {
-  cursor: pointer; display: grid; place-items: center; width: var(--ctl); height: var(--ctl); padding: 0;
-  background: var(--yellow); color: #151515; border: 0; border-radius: 50%;
+  cursor: pointer; display: grid; place-items: center; width: var(--ctl); height: var(--ctl); padding: 0; margin-bottom: var(--gap);
+  background: var(--primary); color: #151515; border: 1px solid var(--primary-edge); border-radius: 50%;
   animation: wiggle 2.6s ease-in-out infinite;
 }
-.update-badge:hover { background: color-mix(in srgb, var(--yellow) 88%, #151515); }
+.update-badge:hover { background: color-mix(in srgb, var(--primary) 88%, #151515); }
 .update-badge.news { animation: none; }
 .version.link { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
 .version.link:hover { color: var(--ink); }
-.um-notes { display: flex; flex-direction: column; gap: var(--gap-group); max-height: min(52vh, 420px); overflow: auto; }
-.um-release h4 { display: flex; align-items: baseline; gap: var(--gap); margin: 0 0 6px; font-size: 13px; }
+/* What's new: each version's notes in their structure (notesView): the summary, a label for each
+   area, the bullets with their bold lead-in in ink and the rest muted, commands on a tint. */
+.um-notes { display: flex; flex-direction: column; gap: 22px; max-height: min(56vh, 460px); overflow: auto; margin-top: 12px; }
+.um-release { display: flex; flex-direction: column; gap: 6px; }
+.um-release h4 { display: flex; align-items: baseline; gap: var(--gap); margin: 0; font-size: 13px; color: var(--ink); }
 .um-release h4 .muted { color: var(--muted); font-weight: 500; font-size: 12px; }
-.um-release .notes { margin: 0; max-height: none; overflow: visible; } /* (the list around them scrolls) */
+.um-release p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--text); }
+.um-label { margin-top: 10px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.um-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+.um-list li { position: relative; padding-left: 14px; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.um-list li::before { content: ""; position: absolute; left: 2px; top: calc(.775em - 2px); width: 4px; height: 4px; border-radius: 50%; background: var(--faint); }
+.um-list strong { color: var(--ink); font-weight: 600; }
+.um-release code { font: 12px var(--mono); color: var(--ink); }
+.um-code { margin: 2px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--well); font: 12px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .update-badge svg.i { width: 20px; height: 20px; }
 @keyframes wiggle { 0%, 82%, 100% { transform: rotate(0); } 86% { transform: rotate(-12deg); } 92% { transform: rotate(10deg); } }
 
@@ -348,16 +387,21 @@ svg.i .frame { stroke-width: 2.6; }
   background: var(--card); color: var(--ink); border: 1px solid var(--border-strong); border-radius: 8px; padding: 0 5px 0 10px;
   font-weight: 600; font-size: 13px;
 }
-.chip > [data-icon] svg.i { width: 16px; height: 16px; color: var(--muted); }
-.chip-name { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip[hidden] { display: none; }
+.chip > svg.i { width: 16px; height: 16px; color: var(--muted); }
+.chip .mini { flex: none; width: 22px; height: 22px; object-fit: contain; border-radius: 4px; background: var(--well); }
+.chip .ext { flex: none; display: grid; place-items: center; width: 22px; height: 22px; }
+.chip .ext svg.i { width: 16px; height: 16px; color: var(--muted); }
+.chip .ext span { display: none; }
+.chip-name { min-width: 0; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-name.open { cursor: pointer; }
+.chip-name.open:hover { text-decoration: underline; text-underline-offset: 3px; }
 .chip-x {
   cursor: pointer; display: grid; place-items: center; width: 24px; height: 24px; padding: 0;
   border: 0; border-radius: 6px; background: transparent; color: var(--muted);
 }
 .chip-x:hover { color: var(--ink); background: var(--hover); }
 .chip-x svg.i { width: 14px; height: 14px; }
-.hint-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--yellow-bg); color: var(--yellow-icon); cursor: help; }
-.hint-icon svg.i { width: 17px; height: 17px; }
 /* Narrowing to one folder: a control that opens a little folder browser. Off: muted, no frame; on:
    a chosen control (card colour, stronger border), like every other filter that's on. */
 .scope { display: inline-flex; align-items: center; gap: 2px; border-radius: 8px; }
@@ -496,19 +540,6 @@ svg.i .frame { stroke-width: 2.6; }
   background: var(--card); border: 2px dashed var(--border-strong); color: var(--ink); font-weight: 600;
 }
 .drop-box svg.i { width: 22px; height: 22px; color: var(--muted); }
-/* Similar files: the file they are like, on top, with the way back to searching. */
-.reference {
-  display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; background: var(--card);
-  border: 1px solid var(--border-strong); border-radius: 8px;
-}
-.reference > svg.i { color: var(--muted); }
-.reference .mini { width: 30px; height: 30px; object-fit: contain; border-radius: 4px; background: var(--well); }
-.reference .ext { width: 30px; height: 30px; }
-.reference .ext svg.i { width: 20px; height: 20px; }
-.reference .ext span { display: none; }
-.ref-body { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
-.ref-body .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ref-body .dir { flex: 0 1 auto; }
 mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 0 1px; }
 .info { color: var(--faint); font-size: 12px; margin-top: 6px; }
 .actions { display: flex; gap: 6px; margin-left: auto; flex: none; }
@@ -881,9 +912,13 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .ring-mini circle { fill: none; stroke-width: 2.8; }
 .ring-mini .t { stroke: var(--border); }
 .ring-mini .a { stroke: var(--orange); stroke-linecap: round; transition: stroke-dasharray .6s ease; }
-.ring-mini.busy svg { animation: spin-ring 1.2s linear infinite; }
+.ring-mini.paused .a { stroke: var(--muted); }
 .stat.phase.waiting svg.i { color: var(--yellow); }
 .stat.phase.paused svg.i { color: var(--muted); }
+/* Paused: a click goes on again; pointing at it shows the ▶. */
+.stat.resume { padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
+.stat.resume svg.i:last-child, .stat.resume:is(:hover, :focus-visible) svg.i:first-child { display: none; }
+.stat.resume:is(:hover, :focus-visible) svg.i:last-child { display: block; color: var(--ink); }
 .folder-actions { display: flex; gap: 6px; margin-left: auto; }
 /* A folder's details */
 .modal-card.folder-info { width: min(640px, 100%); }
@@ -892,25 +927,28 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 .fm-body > * { flex-shrink: 0; }
 .fm-headline { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .fm-headline b { display: block; font: 800 30px/1.1 var(--display); color: var(--ink); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-.fm-headline div > span { font-size: 13px; color: var(--muted); }
+.fm-headline b { cursor: default; }
 .fm-when { display: inline-flex; align-items: center; gap: 6px; padding-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; cursor: default; }
 .fm-when svg.i { width: 15px; height: 15px; color: var(--faint); }
 /* One bar: searchable, still to do, not searched, unreadable */
 .fm-bar { display: flex; gap: 2px; height: 8px; margin-top: 14px; border-radius: 999px; overflow: hidden; background: var(--well); }
 .fm-bar i { flex-basis: 0; min-width: 4px; }
 .fm-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 9px; font-size: 12.5px; color: var(--muted); }
-.fm-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.fm-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.fm-legend span { display: inline-flex; align-items: center; gap: 6px; cursor: default; }
+.fm-legend svg.i { width: 15px; height: 15px; }
 .fm-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
-.fm-bar .ok, .fm-legend .ok i { background: var(--green); }
-.fm-bar .wait, .fm-legend .wait i { background: var(--yellow); }
-.fm-bar .skip, .fm-legend .skip i { background: var(--border-strong); }
-.fm-bar .bad, .fm-legend .bad i { background: var(--red); }
+.fm-bar .ok { background: var(--green); }
+.fm-bar .wait { background: var(--yellow); }
+.fm-bar .skip { background: var(--border-strong); }
+.fm-bar .bad { background: var(--red); }
+.fm-legend .ok svg.i { color: var(--green); }
+.fm-legend .wait svg.i { color: var(--yellow); }
+.fm-legend .skip svg.i { color: var(--faint); }
+.fm-legend .bad svg.i { color: var(--red); }
 /* A few numbers in one strip */
 .fm-stats { display: flex; flex-wrap: wrap; gap: 10px 36px; }
-.fm-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.fm-stat span { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fm-stat span svg.i { flex: none; width: 14px; height: 14px; color: var(--faint); }
+.fm-stat { display: inline-flex; align-items: center; gap: 8px; min-width: 0; cursor: default; }
+.fm-stat svg.i { width: 17px; height: 17px; color: var(--faint); }
 .fm-stat b { font: 700 17px/1.25 var(--display); color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fm-section-head { display: flex; align-items: center; justify-content: space-between; min-height: 28px; margin-bottom: 8px; }
 .fm-label { font-size: 12px; font-weight: 700; color: var(--muted); }
@@ -967,9 +1005,6 @@ label.set-row { cursor: pointer; }
 .set-controls { display: inline-flex; align-items: center; gap: 12px; }
 .version { font: 500 12px var(--mono); color: var(--faint); }
 #language { min-width: 200px; font-weight: 600; }
-#modes button { width: 40px; height: 30px; }
-#modes button svg.i { width: 22px; height: 22px; stroke-width: 2.6; }
-#modes button.active { color: var(--orange); }
 
 .switch {
   appearance: none; flex: none; width: 36px; height: 20px; border-radius: 999px; margin: 0;
@@ -1060,11 +1095,6 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
    scrolls, so nothing shifts). */
 .fm-body, .tm-body, .um-notes { margin-right: -14px; padding-right: 2px; scrollbar-gutter: stable; }
 .modal-text { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
-.notes {
-  margin: 12px 0 0; padding: 0;
-  font: 13px/1.6 var(--sans); color: var(--text); white-space: pre-wrap; overflow: auto; max-height: 320px;
-}
-.notes:empty { display: none; }
 .modal-hint { margin: 12px 0 0; font-size: 13px; color: var(--yellow-fg); }
 .modal-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 18px; }
 .modal-card.confirm { width: min(400px, 100%); }
@@ -1125,13 +1155,31 @@ kbd.mouse svg.i { width: 12px; height: 12px; stroke-width: 2; }
 .dg-top { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--faint); font-variant-numeric: tabular-nums; }
 .dg-kinds { padding-top: 6px; border-top: 1px solid var(--border); }
 .dg-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
-.dg-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.dg-legend i { width: 8px; height: 8px; border-radius: 2px; }
+.dg-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: default; }
+.dg-legend svg.i { width: 14px; height: 14px; }
 .dg-legend b { color: var(--ink); font-weight: 600; margin-left: 2px; }
 .dg-time { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+/* How far indexing is: the share ready as the headline, the folders' files as one bar (a folder's
+   details have the same), each folder's under a line, the file being read last. */
+.dg-progress { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+.dg-progress[hidden] { display: none; }
+.dg-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.dg-progress .dg-headline { cursor: default; }
+.dg-progress .dg-headline b { font-variant-numeric: tabular-nums; }
+.dg-progress .fm-bar, .dg-progress .fm-legend { margin-top: 0; }
+.dg-folders { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+.dg-folder { display: grid; grid-template-columns: minmax(0, 14em) minmax(0, 1fr) 3.5em; align-items: center; gap: 12px; font-size: 12.5px; color: var(--text); cursor: default; }
+.dg-folder > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dg-folder .fm-bar { height: 6px; }
+.dg-folder b { text-align: right; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.dg-now { display: flex; align-items: center; gap: 10px; min-width: 0; padding-top: 10px; border-top: 1px solid var(--border); cursor: default; }
+.dg-now svg.i { flex: none; width: 18px; height: 18px; color: var(--faint); }
+/* The file's name, and where it is under it in the mono font (as the folders show theirs). */
+.dg-now-text { display: flex; flex-direction: column; min-width: 0; }
+.dg-now-text b { font-weight: 700; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dg-now-text span { font: 12px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* What indexing did over the charts' time: one band, coloured by what it was doing. */
 .dg-activity { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-.dg-activity[hidden] { display: none; }
 .dg-band { position: relative; height: 14px; border-radius: 4px; background: var(--well); overflow: hidden; }
 .dg-band i { position: absolute; top: 0; bottom: 0; cursor: help; }
 .dg-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--well); }

@@ -96,6 +96,7 @@ const ICONS = {
   leaf: '<path d="M5 19.5C4.5 11 9.5 5 19.5 4.5 19.5 14 14 19.5 5 19.5z"/><path d="M5 19.5 13.5 11"/>',
   bolt: '<path d="M13.5 3 5.5 13.5h6l-1 7.5 8-10.5h-6z"/>',
   dots: '<path d="M6 6h1M11.5 6h1M17 6h1M6 11.5h1M11.5 11.5h1M17 11.5h1M6 17h1M11.5 17h1M17 17h1"/>',
+  pending: '<circle cx="12" cy="12" r="8.5" stroke-dasharray="1.9 4.776"/>', // (a circle not drawn yet: still to do)
   bug: '<path d="M8.5 7.5a3.5 3.5 0 0 1 7 0"/><rect x="7" y="7.5" width="10" height="12.5" rx="5"/><path d="M12 11v9M7 12.5H3.5M20.5 12.5H17M7 16.5l-3 1.5M17 16.5l3 1.5M7.6 9 4.5 7M16.4 9l3.1-2"/>',
   archive: '<rect x="3.5" y="4.5" width="17" height="4.5" rx="1.2"/><path d="M5 9v9.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V9M10 13h4"/>',
   lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3M12 14.5v2"/>',
@@ -451,17 +452,67 @@ function queryTerms(q) {
   return content.length ? content : words;
 }
 
-// Release notes are Markdown: show them as tidy plain text (never as HTML).
-function plainNotes(md) {
-  return md
-    .replace(/\r\n/g, "\n")
-    .replace(/^#{1,6}\s*/gm, "")
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/__(.+?)__/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/^\s*[-*]\s+/gm, "• ")
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, "$1 ($2)")
-    .trim();
+// Release notes are Markdown (GitHub shows them as such). Here they keep their structure, built from
+// text nodes, never HTML: the summary, a label for each area or section, the bullets with their bold
+// lead-ins, commands as code. "## What's new" is what the dialog says already, and "## Download" is
+// about the zip, which the update takes care of: neither shows.
+function notesView(md) {
+  const inline = (text) => {
+    const parts = [];
+    const re = /\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`|\[([^\]]+)\]\(https?:[^)\s]+\)/g;
+    let at = 0;
+    for (let m; (m = re.exec(text));) {
+      if (m.index > at) parts.push(text.slice(at, m.index));
+      if (m[1] != null || m[2] != null) parts.push(h("strong", {}, m[1] ?? m[2]));
+      else if (m[3] != null) parts.push(h("code", {}, m[3]));
+      else parts.push(m[4]); // (a link: its words)
+      at = re.lastIndex;
+    }
+    if (at < text.length) parts.push(text.slice(at));
+    return parts;
+  };
+  const out = [];
+  let list = null;
+  let skip = false;
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const head = line.match(/^(#{1,6})\s+(.*?)\s*#*$/);
+    if (head) {
+      list = null;
+      if (head[1].length <= 2) {
+        skip = /^download\b/i.test(head[2]);
+        if (skip || /^what'?s new\b/i.test(head[2])) continue;
+      }
+      if (!skip) out.push(h("div", { class: "um-label" }, ...inline(head[2])));
+      continue;
+    }
+    if (skip) continue;
+    const bullet = line.match(/^\s{0,3}[-*+]\s+(.*)$/);
+    if (bullet) {
+      if (!list) out.push((list = h("ul", { class: "um-list" })));
+      list.append(h("li", {}, ...inline(bullet[1])));
+      continue;
+    }
+    if (/^( {4}|\t)/.test(line) && line.trim() && !list) { // a command, as it is
+      const code = [line.replace(/^( {4}|\t)/, "")];
+      while (i + 1 < lines.length && /^( {4}|\t)/.test(lines[i + 1])) code.push(lines[++i].replace(/^( {4}|\t)/, ""));
+      out.push(h("pre", { class: "um-code" }, code.join("\n").trimEnd()));
+      continue;
+    }
+    if (!line.trim()) {
+      list = null;
+      continue;
+    }
+    if (list && /^\s+\S/.test(line)) { // (a bullet going on in the next line)
+      list.lastElementChild.append(" ", ...inline(line.trim()));
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (last?.tagName === "P" && !/^\s*$/.test(lines[i - 1] ?? "")) last.append(" ", ...inline(line.trim()));
+    else out.push(h("p", {}, ...inline(line.trim())));
+  }
+  return out;
 }
 
 // The search box shows example searches instead of an explanation.
@@ -590,12 +641,39 @@ function followIndex() {
 // folders list and the tray, so they never contradict each other.
 function workPhase({ progress: p, resources }) {
   if (p.state !== "indexing" && p.state !== "scanning") return null;
-  if (p.paused) return "paused"; // you pressed pause
+  if (p.paused || p.folder_paused) return "paused"; // you pressed pause (in the rail, or on the folder's card)
   if (resources.decision.duty === 0 || p.note) return "waiting"; // memory running out
   return p.state;
 }
 
 const RING = 2 * Math.PI * 16;
+
+// Quiekel in the middle of the ring (the logo's own drawing). At work ("eating": indexing, or
+// looking for files), it eats them: files fly in from four sides, one after another, its mouth
+// opens for each (drawn over its smile) and it munches (style.css). Paused ("sleeping"), it
+// sleeps: its eyes closed (the open ones covered in its colour, a lid over each), breathing
+// slowly, z's drifting up.
+const QUIEKEL_SCENES = new Set(["eating", "sleeping"]);
+
+function quiekelScene(mode) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 32 32");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("quiekel", mode);
+  const head = '<image href="/static/quiekel.svg" x="6.3" y="7.6" width="19.4" height="16.4"/>';
+  const scenes = {
+    eating: () => `<g class="ea-head">${head}<g class="ea-mouth"><path d="M13.6 19.3h4.8a2.4 2.2 0 0 1-4.8 0z"/>`
+      + '<ellipse class="ea-tongue" cx="16" cy="20.85" rx="1.35" ry=".62"/></g></g>'
+      + ["a", "b", "c", "d"].map((k) => `<g class="ea-file ${k}"><path d="M-3 -3.8h4.1l1.9 1.9v5.7h-6z"/>`
+        + '<path class="ea-lines" d="M-1.6 -0.6h3.2M-1.6 1.4h3.2"/></g>').join(""),
+    sleeping: () => `<g clip-path="url(#qk-ground)"><g class="sl-head">${head}<circle cx="11.48" cy="14.42" r="1.3"/><circle cx="20.52" cy="14.42" r="1.3"/>`
+      + '<path class="sl-lid" d="M10.25 14.3q1.23 1 2.46 0M19.29 14.3q1.23 1 2.46 0"/></g></g>'
+      + ["a", "b", "c"].map((k) => `<g transform="translate(22.4 9.2)"><path class="sl-z ${k}" d="M0 0h1.7l-1.7 2h1.7"/></g>`).join(""),
+  };
+  svg.innerHTML = `<defs><clipPath id="qk-ground"><rect width="32" height="24.5"/></clipPath></defs>${scenes[mode]()}`;
+  return svg;
+}
+
 
 // The ring: a colour for the state, an icon (or the percentage) inside, details in its tooltip.
 // The ring in the rail: what indexing is doing, and (when there is something to pause or continue)
@@ -611,7 +689,7 @@ function setStatus({ kind = "", icon: name = null, label = null, frac = null, sp
   const key = `${label ?? `icon:${name}`}|${action ?? ""}`;
   if (inner.dataset.key !== key) {
     inner.dataset.key = key;
-    inner.replaceChildren(h("span", { class: "status-now" }, label ?? icon(name)),
+    inner.replaceChildren(h("span", { class: "status-now" }, label ?? (QUIEKEL_SCENES.has(name) ? quiekelScene(name) : icon(name))),
       ...(action ? [h("span", { class: "status-do" }, icon(action))] : []));
   }
   setTip(el, lines.filter(Boolean).join("\n"));
@@ -626,6 +704,8 @@ function renderActivity({ model, progress: p, folders, resources, settings }, ph
   const resting = model.status === "asleep";
   const d = resources.decision;
   const total = folders.reduce((a, f) => a + f.indexed, 0);
+  // Folders paused on their cards with files still to do: nothing else to do is paused too.
+  const held = folders.filter((f) => f.paused && f.pending > 0);
   let s;
 
   if (model.status === "downloading") {
@@ -651,28 +731,36 @@ function renderActivity({ model, progress: p, folders, resources, settings }, ph
     }
     s = {
       kind: { paused: "paused", waiting: "warn", scanning: "busy", indexing: "busy" }[phase],
-      icon: { paused: "pause", waiting: "timer", scanning: "search" }[phase],
-      frac, spin: phase === "scanning", lines, // (indexing: the ring alone, how far in its tooltip)
+      // (Quiekel in the middle, eating the files; looking for them, how many there are is unknown,
+      // so no arc; asleep while paused)
+      icon: { paused: "sleeping", waiting: "timer", scanning: "eating", indexing: "eating" }[phase],
+      frac, lines,
     };
   } else if (p.state === "error") {
     s = { kind: "warn", icon: "alert", lines: [t("activity.error"), p.message] };
   } else if (!folders.length) {
     s = { icon: "folderPlus", lines: [t("activity.no_folders"), t("activity.no_folders_sub")], onclick: () => goTo("folders") };
-  } else if (p.paused) {
-    s = { kind: "paused", icon: "pause", lines: [t("activity.paused"), tp("activity.ready", total)] };
+  } else if (p.paused || held.length) {
+    const share = readyShare({ indexed: total, pending: folders.reduce((a, f) => a + f.pending, 0) }) / 100;
+    s = { kind: "paused", icon: "sleeping", frac: share, lines: [t("activity.paused"), tp("activity.ready", total)] };
   } else {
     s = { kind: "ok", icon: "check", frac: 1, lines: [t("activity.idle"), tp("activity.ready", total)] };
   }
   if (resting) s.lines.push(t("activity.model_resting"));
-  const busy = state.ready && (phase || p.paused || p.queued);
-  if (busy && !p.paused) { // paused by you: "Paused" says it all
+  const busy = state.ready && (phase || p.paused || p.queued || held.length);
+  // (paused on the folder's card: the ring goes on with that folder, as its play button does; with
+  // nothing else to do, with the folders paused on their cards)
+  const paused = p.paused || p.folder_paused || (!phase && held.length > 0);
+  if (busy && !paused) { // paused by you: "Paused" says it all
     const why = p.note ? t(p.note.key, p.note.params) : d.level !== "full" ? t(`gov.${d.code}`, d.params) : "";
     if (why) s.lines.push(why);
   }
   if (busy) { // the ring itself pauses and continues
-    s.action = p.paused ? "play" : "pause";
-    s.onclick = () => post(p.paused ? "/api/resume" : "/api/pause").then(refresh).catch((e) => toast(e.message, "alert"));
-    s.lines.push(t(p.paused ? "activity.click_resume" : "activity.click_pause"));
+    const urls = p.paused ? ["/api/resume"] : p.folder_paused ? [`/api/folders/${p.folder_id}/resume`]
+      : paused ? held.map((f) => `/api/folders/${f.id}/resume`) : ["/api/pause"];
+    s.action = paused ? "play" : "pause";
+    s.onclick = () => Promise.all(urls.map((u) => post(u))).then(refresh).catch((e) => toast(e.message, "alert"));
+    s.lines.push(t(paused ? "activity.click_resume" : "activity.click_pause"));
   }
 
   setStatus(s);
@@ -717,18 +805,39 @@ function stat(name, text, tip, cls = "", onclick = null) {
   return el;
 }
 
-// The folder being worked on: a small ring that fills up as it's indexed (and turns while files
-// are still being looked for); paused or waiting, its icon.
+// Paused: the pause sign, and a click goes on again; pointing at it shows the ▶ (as the status
+// ring does). `url`: what goes on (everything, or the folder paused on its card).
+function pausedStat(url = "/api/resume") {
+  const go = () => post(url).then(refresh).catch((e) => toast(e.message, "alert"));
+  const el = h("button", { type: "button", class: "stat phase paused resume", onclick: go }, icon("pause"), icon("play"));
+  setTip(el, `${t("activity.paused")}\n${t("activity.click_resume")}`);
+  return el;
+}
+
+// The folder being worked on: a small ring that fills up as it's indexed; while files are still
+// being looked for, the magnifying glass and how many so far (nothing turns); waiting, its icon.
 function phaseStat(phase, p) {
-  if (phase !== "indexing" && phase !== "scanning") {
+  if (phase === "scanning") return stat("search", p.found ? fmt(p.found) : "", t(PHASE_STAT.scanning[1])); // (how many there are: unknown yet)
+  if (phase !== "indexing") {
     return stat(PHASE_STAT[phase][0], "", t(PHASE_STAT[phase][1]), `phase ${phase}`);
   }
-  const share = phase === "indexing" && p.total ? Math.min(1, (p.done || 0) / p.total) : null;
-  const ring = h("span", { class: `ring-mini${share == null ? " busy" : ""}` });
+  const share = p.total ? Math.min(1, (p.done || 0) / p.total) : 0;
+  const ring = h("span", { class: "ring-mini" });
   ring.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle class="t" cx="10" cy="10" r="7.5"/>'
-    + `<circle class="a" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray="${share == null ? 28 : Math.max(2, share * 100)} 100"/></svg>`;
-  const el = h("span", { class: "stat phase" }, ring, share == null ? "" : pct(share * 100));
+    + `<circle class="a" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray="${Math.max(2, share * 100)} 100"/></svg>`;
+  const el = h("span", { class: "stat phase" }, ring, pct(share * 100));
   setTip(el, t(PHASE_STAT[phase][1]));
+  return el;
+}
+
+// A paused folder: how far it got, its ring standing still in grey (the card's play button goes on).
+function pausedRing(f) {
+  const share = readyShare(f);
+  const ring = h("span", { class: "ring-mini paused" });
+  ring.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle class="t" cx="10" cy="10" r="7.5"/>'
+    + `<circle class="a" cx="10" cy="10" r="7.5" pathLength="100" stroke-dasharray="${Math.max(2, share)} 100"/></svg>`;
+  const el = h("span", { class: "stat phase paused" }, ring, pct(share));
+  setTip(el, t("activity.paused"));
   return el;
 }
 
@@ -812,7 +921,8 @@ function fillFolderRow(row, f, active, phase, progress) {
   row.dataset.id = f.id;
   row.querySelector(".folder-main").disabled = false;
   const here = active === f.path;
-  const working = here && phase !== "paused"; // (everything paused: the rail turns it back on)
+  const working = here && phase !== "paused";
+  const paused = f.paused || (here && phase === "paused"); // (this folder, or everything: the rail's pause)
   row.className = `folder${here ? ` active ${phase}` : ""}${f.missing ? " missing" : ""}`;
   const name = row.querySelector(".folder-name");
   const path = row.querySelector(".folder-path");
@@ -830,20 +940,21 @@ function fillFolderRow(row, f, active, phase, progress) {
     stat("doc", fmt(f.indexed), t("folder.ready_long")),
     stat("archive", bytes(f.bytes || 0), t("folder.size")),
     f.errors ? stat("alert", fmt(f.errors), tp("folders.unreadable", f.errors), "bad", () => openFolderInfo(row.folder)) : null,
-    f.paused ? stat("pause", "", t("activity.paused"), "phase paused")
-      : here ? phaseStat(phase, progress) : stat("clock", ago(f.last_scan_at), t("folders.col.scanned")),
+    paused ? pausedRing(f) : here ? phaseStat(phase, progress) : stat("clock", ago(f.last_scan_at), t("folders.col.scanned")),
   ].filter(Boolean));
   // Its buttons are drawn again only when they change.
   const actions = row.querySelector(".folder-actions");
-  const key = JSON.stringify([!!f.missing, !!f.paused, working]);
+  const key = JSON.stringify([!!f.missing, !!f.paused, paused, working]);
   if (actions.dataset.key === key) return;
   actions.dataset.key = key;
+  // Pausing a folder here holds just this one; the others go on (the rail pauses everything). Its
+  // play button goes on with it, or with everything when the rail paused it: one plain icon, as
+  // its pause is.
+  const go = paused ? (f.paused ? `/api/folders/${f.id}/resume` : "/api/resume") : `/api/folders/${f.id}/pause`;
   actions.replaceChildren(...[
     f.missing ? iconButton("folder", t("folder.locate"), () => locateFolder(row.folder), "primary") : null,
-    // Pausing a folder here holds just this one; the others go on (the rail pauses everything).
-    f.paused || working ? iconButton(f.paused ? "play" : "pause", t(f.paused ? "activity.resume" : "activity.pause"),
-      () => post(`/api/folders/${f.id}/${f.paused ? "resume" : "pause"}`).then(refresh).catch((e) => toast(e.message, "alert")),
-      f.paused ? "primary" : "") : null,
+    paused || working ? iconButton(paused ? "play" : "pause", t(paused ? "activity.resume" : "activity.pause"),
+      () => post(go).then(refresh).catch((e) => toast(e.message, "alert"))) : null,
     iconButton("trash", t("folders.remove_title"), () => removeFolder(row.folder), "danger"),
   ].filter(Boolean));
 }
@@ -983,19 +1094,50 @@ function typeRow(g, open) {
   return el;
 }
 
-// The folder at a glance: how many of its files can be searched, one bar for what's what, and a
-// few numbers.
+// A folder's files (or all folders'), as one bar for what's what: ready to search, still to do, not
+// searched, unreadable; and its legend, an icon in its part's colour and a number each (the words
+// in the tooltip).
+const fileParts = (f) => [["ok", f.indexed, "folder.ready"], ["wait", f.pending, "folder.waiting"],
+  ["skip", f.unsearched, "folder.unsearched"], ["bad", f.unreadable, "folder.unreadable"]].filter(([, n]) => n > 0);
+const PART_ICON = { ok: "check", wait: "pending", skip: "skip", bad: "alert" };
+const partsBar = (parts) => h("div", { class: "fm-bar" }, ...parts.map(([cls, n]) => h("i", { class: cls, style: `flex-grow: ${n}` })));
+const partsLegend = (parts) => h("div", { class: "fm-legend" }, ...parts.map(([cls, n, key]) => {
+  const el = h("span", { class: cls }, icon(PART_ICON[cls]), h("b", {}, fmt(n)));
+  setTip(el, `${fmt(n)} ${t(key)}`);
+  return el;
+}));
+
+// How much of a folder's files (or all folders') can be searched, in % (99 while any file waits,
+// never a rounded 100).
+const readyShare = (f) => (f.pending ? Math.min(99, Math.floor((f.indexed / (f.indexed + f.pending)) * 100)) : 100);
+
+// A legend's item in Diagnostics: an icon in its line's colour and the value, its name in the tooltip.
+function legendItem(name, color, tip, value) {
+  const svg = icon(name);
+  svg.style.color = color;
+  const el = h("span", {}, svg, h("b", {}, value));
+  setTip(el, tip);
+  return el;
+}
+
+// The folder at a glance: how much of it can be searched, one bar for what's what, and a few
+// numbers, each an icon and its value (the words in the tooltips).
 function renderFolderSummary(f) {
-  const parts = [["ok", f.indexed, "folder.ready"], ["wait", f.pending, "folder.waiting"],
-    ["skip", f.unsearched, "folder.unsearched"], ["bad", f.unreadable, "folder.unreadable"]].filter(([, n]) => n > 0);
+  const parts = fileParts(f);
   const when = h("span", { class: "fm-when" }, icon("clock"), ago(f.last_scan_at));
   setTip(when, t("folders.col.scanned"));
+  const share = h("b", {}, pct(readyShare(f)));
+  setTip(share, `${fmt(f.indexed)} ${t("folder.ready_long")}`);
   $("fm-summary").replaceChildren(
-    h("div", { class: "fm-headline" }, h("div", {}, h("b", {}, fmt(f.indexed)), h("span", {}, t("folder.ready_long"))), when),
-    h("div", { class: "fm-bar" }, ...parts.map(([cls, n]) => h("i", { class: cls, style: `flex-grow: ${n}` }))),
-    h("div", { class: "fm-legend" }, ...parts.map(([cls, n, key]) => h("span", { class: cls }, h("i"), h("b", {}, fmt(n)), " ", t(key)))),
+    h("div", { class: "fm-headline" }, h("div", {}, share), when),
+    partsBar(parts),
+    partsLegend(parts),
   );
-  const cell = (ic, key, value) => h("div", { class: "fm-stat" }, h("span", {}, icon(ic), t(key)), h("b", {}, value));
+  const cell = (ic, key, value) => {
+    const el = h("div", { class: "fm-stat" }, icon(ic), h("b", {}, value));
+    setTip(el, t(key));
+    return el;
+  };
   $("fm-numbers").replaceChildren(
     cell("doc", "folder.docs", fmt(Math.max(0, f.indexed - f.images))),
     cell("image", "folders.col.images", fmt(f.images)),
@@ -1265,7 +1407,7 @@ const KIND_PARTS = [["docs", "doc", "--kind-docs", "documents"], ["texts", "text
 
 function kindParts(count) {
   const parts = KIND_PARTS.map(([key, ic, color, cat]) => ({ ic, n: count(key), color: `var(${color})`, name: t(`types.cat.${cat}`) }));
-  parts.push({ ic: "hourglass", n: count("pending"), color: "var(--border-strong)", name: t("folder.waiting") });
+  parts.push({ ic: "pending", n: count("pending"), color: "var(--border-strong)", name: t("folder.waiting") });
   return parts;
 }
 
@@ -1545,12 +1687,13 @@ function openUpdateModal(mode) {
   if (!releases.length) return;
   state.updateMode = mode;
   $("um-title").textContent = mode === "update" ? t("update.modal_title", { version: u.latest.version }) : t("update.whats_new_in", { version: u.current });
-  const date = releases[0].published ? new Date(releases[0].published).toLocaleDateString(i18n.lang) : "";
+  // (one version: its date under the title; several: each one's with it)
+  const date = releases[0].published && releases.length === 1 ? new Date(releases[0].published).toLocaleDateString(i18n.lang) : "";
   $("um-sub").textContent = date;
   $("um-sub").hidden = !date;
   $("um-notes").replaceChildren(...releases.map((r) => h("div", { class: "um-release" },
     releases.length > 1 ? h("h4", {}, `v${r.version}`, r.published ? h("span", { class: "muted" }, new Date(r.published).toLocaleDateString(i18n.lang)) : "") : "",
-    h("pre", { class: "notes" }, plainNotes(r.notes || "")))));
+    ...notesView(r.notes || ""))));
   $("um-error").hidden = true;
   const apply = $("um-apply");
   apply.hidden = mode !== "update" || !u.can_apply || !u.latest.asset;
@@ -1562,26 +1705,52 @@ function openUpdateModal(mode) {
   if (mode === "news") saveSettings({ seen_version: u.current }); // (looked at: the badge goes)
 }
 
-// Installing: the download's progress, then "closes and opens again".
+// A button at work: its icon gives way to a ring filling up as the work goes (`frac`, 0 to 1), or
+// to the waiting hourglass while how long is unknown (null); `false` gives it its own icon back.
+// Nothing spins.
+function busyIcon(btn, frac) {
+  if (typeof frac === "number") {
+    let ring = btn.querySelector(":scope > svg.btn-ring");
+    if (!ring) {
+      ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      ring.setAttribute("viewBox", "0 0 24 24");
+      ring.setAttribute("aria-hidden", "true");
+      ring.classList.add("i", "btn-ring");
+      ring.innerHTML = '<circle class="track" cx="12" cy="12" r="8"/><circle class="arc" cx="12" cy="12" r="8"/>';
+      btn.replaceChildren(ring);
+      btn.dataset.busy = "ring";
+    }
+    const arc = ring.querySelector(".arc"), round = 2 * Math.PI * 8, k = Math.max(0, Math.min(1, frac));
+    arc.style.strokeDasharray = `${(k * round).toFixed(1)} ${round.toFixed(1)}`;
+    arc.style.opacity = k > 0 ? 1 : 0; // (a round end would draw a dot at 0 %)
+    return;
+  }
+  const key = frac === false ? "" : "wait";
+  if ((btn.dataset.busy || "") === key) return;
+  btn.dataset.busy = key;
+  btn.replaceChildren(icon(key ? "timer" : btn.dataset.icon));
+}
+
+// Installing: the download as a ring filling up in the button, then the hourglass while Quiekel
+// closes, updates itself and opens again (said once, under the notes).
 function renderStage(u) {
   const stage = u.stage || { state: "idle" };
   const apply = $("um-apply");
-  const busy = state.applying || stage.state === "downloading" || stage.state === "installing" || stage.state === "ready";
-  apply.disabled = busy;
-  apply.classList.toggle("working", busy);
-  const hint = $("um-hint");
-  if (stage.state === "downloading" && state.applying) {
-    hint.hidden = false;
-    hint.textContent = t("update.downloading", { pct: pct(stage.total ? Math.floor((stage.done / stage.total) * 100) : 0) });
-  } else if ((stage.state === "ready" || stage.state === "installing") && state.applying) {
-    hint.hidden = false;
-    hint.textContent = t("update.restarting");
-  } else if (stage.state === "failed" && state.applying) {
+  if (stage.state === "failed" && state.applying) {
     state.applying = false;
-    apply.disabled = false;
-    apply.classList.remove("working");
     $("um-error").textContent = t("update.failed", { error: stage.error || "" });
     $("um-error").hidden = false;
+  }
+  const downloading = stage.state === "downloading";
+  const restarting = stage.state === "ready" || stage.state === "installing";
+  const busy = state.applying || downloading || restarting;
+  const frac = downloading && stage.total ? stage.done / stage.total : 0;
+  apply.disabled = busy;
+  busyIcon(apply, !busy ? false : downloading ? frac : null);
+  setTip(apply, downloading ? t("update.downloading", { pct: pct(Math.floor(frac * 100)) }) : t("update.apply"));
+  if (restarting && state.applying) {
+    $("um-hint").hidden = false;
+    $("um-hint").textContent = t("update.restarting");
   }
 }
 
@@ -1612,7 +1781,7 @@ $("report-bug").addEventListener("click", () => post("/api/report-bug").catch((e
 $("check-now").addEventListener("click", async () => {
   const btn = $("check-now");
   btn.disabled = true;
-  btn.classList.add("working");
+  busyIcon(btn, null);
   try {
     const u = await post("/api/update/check");
     state.update = u;
@@ -1624,7 +1793,7 @@ $("check-now").addEventListener("click", async () => {
     toast(e.message, "alert");
   } finally {
     btn.disabled = false;
-    btn.classList.remove("working");
+    busyIcon(btn, false);
   }
 });
 
@@ -1646,7 +1815,7 @@ async function refreshDiagnostics() {
 
 const DIAG_COLORS = { app: "var(--orange)", model: "var(--blue)", others: "var(--faint)", files: "var(--green)" };
 // (the kinds a file is read as, under the names the filters give them: code is text there too)
-const DIAG_KINDS = [[["doc"], "docs", "--kind-docs"], [["text", "code"], "text", "--kind-text"], [["image"], "images", "--kind-images"]];
+const DIAG_KINDS = [[["doc"], "docs", "--kind-docs", "doc"], [["text", "code"], "text", "--kind-text", "text"], [["image"], "images", "--kind-images", "image"]];
 
 // A round top for a chart, a little above its highest value: 1, 2, 2.5 or 5 times a power of ten.
 function niceTop(v) {
@@ -1685,16 +1854,15 @@ function diagChart(title, lines, { show, top = null, t0, t1, more = null }) {
     svg.append(pl);
   }
   const last = (l) => (l.points.length ? l.points[l.points.length - 1][1] : null);
-  const legend = h("div", { class: "dg-legend" }, ...lines.map((l) => h("span", {},
-    h("i", { style: `background: ${l.color}` }), l.name, h("b", {}, last(l) == null ? "–" : show(last(l))))));
+  const legend = h("div", { class: "dg-legend" }, ...lines.map((l) => legendItem(l.icon, l.color, l.name, last(l) == null ? "–" : show(last(l)))));
   return h("div", { class: "card dg-chart" }, h("div", { class: "dg-title" }, h("span", {}, title), h("span", { class: "dg-top" }, show(max))),
     svg, legend, more);
 }
 
 // What indexing did, second by second: one band over the charts' time in the colour of what it was
 // doing; the legend says how long each. (Nothing to do: the band's own colour.)
-const ACTIVITY = [["indexing", "var(--orange)"], ["scanning", "var(--blue)"], ["waiting", "var(--yellow)"],
-  ["paused", "var(--faint)"], ["idle", "var(--well)"]];
+const ACTIVITY = [["indexing", "var(--orange)", "refresh"], ["scanning", "var(--blue)", "search"],
+  ["waiting", "var(--yellow)", PHASE_STAT.waiting[0]], ["paused", "var(--faint)", "pause"], ["idle", "var(--well)", "check"]];
 
 // (a burst shorter than a second still counts: files were read since the sample before)
 function activityOf(x, before) {
@@ -1716,8 +1884,6 @@ function renderActivityBand(s, t0, t1) {
     runs.push({ a, from: x.t });
   }
   runs.forEach((r, i) => { r.to = i + 1 < runs.length ? runs[i + 1].from : t1; });
-  box.hidden = runs.length === 0;
-  if (!runs.length) return;
   const span = Math.max(1, t1 - t0);
   const color = Object.fromEntries(ACTIVITY);
   const band = h("div", { class: "dg-band" }, ...runs.filter((r) => r.a !== "idle").map((r) => {
@@ -1727,8 +1893,8 @@ function renderActivityBand(s, t0, t1) {
   }));
   const total = new Map();
   for (const r of runs) total.set(r.a, (total.get(r.a) || 0) + (r.to - r.from));
-  const legend = h("div", { class: "dg-legend" }, ...ACTIVITY.filter(([a]) => total.get(a) >= 1).map(([a, c]) => h("span", {},
-    h("i", { style: `background: ${c}` }), t(`diag.state.${a}`), h("b", {}, duration(total.get(a))))));
+  const legend = h("div", { class: "dg-legend" }, ...ACTIVITY.filter(([a]) => total.get(a) >= 1)
+    .map(([a, c, name]) => legendItem(name, c, t(`diag.state.${a}`), duration(total.get(a)))));
   box.replaceChildren(h("div", { class: "dg-title" }, h("span", {}, t("diag.activity"))), band, legend);
 }
 
@@ -1764,9 +1930,9 @@ function searchChart(searches, t0, t1) {
   }
   const mid = (key) => (shown.length ? t("diag.ms", { n: fmt(Math.round(median(shown.map((x) => x[key])))) }) : "–");
   const legend = h("div", { class: "dg-legend" },
-    h("span", {}, h("i", { style: "background: var(--blue)" }), t("diag.search_words"), h("b", {}, mid("model_ms"))),
-    h("span", {}, h("i", { style: "background: var(--orange)" }), t("diag.search_rest"),
-      h("b", {}, shown.length ? t("diag.ms", { n: fmt(Math.round(median(shown.map((x) => x.ms - x.model_ms)))) }) : "–")));
+    legendItem("keyboard", "var(--blue)", t("diag.search_words"), mid("model_ms")),
+    legendItem("search", "var(--orange)", t("diag.search_rest"),
+      shown.length ? t("diag.ms", { n: fmt(Math.round(median(shown.map((x) => x.ms - x.model_ms)))) }) : "–"));
   return h("div", { class: "card dg-chart" },
     h("div", { class: "dg-title" }, h("span", {}, t("diag.searches")), h("span", { class: "dg-top" }, t("diag.ms", { n: fmt(max) }))), svg, legend);
 }
@@ -1783,6 +1949,52 @@ function setupChip(d) {
   return stat("chip", s.gpu ? shortGpu(s.card) : t("diag.cpu"), `${on}\n${why}`);
 }
 
+// How far indexing is: how many of the folders' files are ready to search, one bar for what's what
+// (as a folder's details have it), each folder's when there are several, and the file being read.
+// Drawn again only when something in it changed, never while a press is held: paused, its pause
+// is the button that goes on.
+function renderProgress() {
+  const box = $("dg-progress");
+  const s = state.last;
+  const folders = s?.folders || [];
+  box.hidden = !folders.length;
+  if (!folders.length || pressing) return;
+  const p = s.progress;
+  const phase = workPhase(s);
+  const sum = (key) => folders.reduce((n, f) => n + (f[key] || 0), 0);
+  const all = { indexed: sum("indexed"), pending: sum("pending"), unsearched: sum("unsearched"), unreadable: sum("unreadable") };
+  const reading = phase === "indexing" && p.current ? p.current : "";
+  const key = JSON.stringify([i18n.lang, phase, p.eta_s, p.found, reading, folders.map((f) => [f.path, ...fileParts(f).flat()])]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  let now = null;
+  if (phase === "paused") now = pausedStat(p.paused ? "/api/resume" : `/api/folders/${p.folder_id}/resume`);
+  else if (phase === "waiting") now = stat(PHASE_STAT.waiting[0], "", t("activity.waiting"), "phase waiting");
+  else if (phase === "scanning") now = stat("search", fmt(p.found || 0), t("activity.scanning"));
+  else if (phase === "indexing" && p.eta_s != null) {
+    const hours = p.eta_s / 3600;
+    now = stat("clock", hours >= 1 ? t("diag.hours", { n: fmt(hours, hours < 10 ? 1 : 0) }) : duration(Math.max(60, p.eta_s)), t("diag.time_left"));
+  }
+  const headline = h("div", { class: "dg-headline" }, h("b", {}, pct(readyShare(all))));
+  setTip(headline, t("diag.ready_of", { done: fmt(all.indexed), total: fmt(all.indexed + all.pending) }));
+  const parts = [h("div", { class: "dg-progress-head" }, headline, now), partsBar(fileParts(all)), partsLegend(fileParts(all))];
+  if (folders.length > 1) {
+    parts.push(h("div", { class: "dg-folders" }, ...folders.map((f) => {
+      const row = h("div", { class: "dg-folder" }, h("span", {}, baseName(f.path)), partsBar(fileParts(f)), h("b", {}, pct(readyShare(f))));
+      setTip(row, f.path);
+      return row;
+    })));
+  }
+  if (reading) { // (its name, and where it is under it, as the folders show theirs)
+    const name = baseName(reading);
+    const row = h("div", { class: "dg-now" }, icon("doc"), h("span", { class: "dg-now-text" }, h("b", {}, name),
+      h("span", {}, reading.slice(0, reading.length - name.length).replace(/[\\/]+$/, ""))));
+    setTip(row, `${t("diag.now")}\n${reading}`);
+    parts.push(row);
+  }
+  box.replaceChildren(...parts);
+}
+
 function renderDiagnostics(d) {
   const s = d.samples || [];
   const at = (f) => s.map((x) => { try { const v = f(x); return v == null ? null : [x.t, v]; } catch { return null; } }).filter(Boolean);
@@ -1797,82 +2009,78 @@ function renderDiagnostics(d) {
     return out;
   };
   const files = rate("files");
-  // The charts start when Diagnostics was switched on and fill up to ten minutes.
+  // The charts go back as far as the samples do, up to ten minutes. (What indexing did is kept
+  // switched on or not; what the app uses only from when Diagnostics was switched on.)
   const t1 = s.length ? s[s.length - 1].t : Date.now() / 1000;
-  const t0 = Math.min(t1 - 30, Math.max(s.length ? s[0].t : t1, t1 - 600));
-  // What's waiting, and how long it takes at the last minute's pace.
-  const minute = s.filter((x) => x.t >= t1 - 60 && x.pipeline);
-  const pace = minute.length > 1 && minute[minute.length - 1].t > minute[0].t
-    ? (minute[minute.length - 1].pipeline.files - minute[0].pipeline.files) / (minute[minute.length - 1].t - minute[0].t) : 0;
-  const waiting = (state.last?.folders || []).reduce((n, f) => n + (f.pending || 0), 0);
+  const t0 = Math.max(s.length ? s[0].t : t1, t1 - 600);
   const ix = d.index || {};
   const searches = (d.searches || []).map((x) => x.ms);
-  const strip = [
+  $("dg-strip").replaceChildren(...[
     setupChip(d),
-    stat("doc", fmt(ix.files || 0), [t("diag.index", { files: fmt(ix.files || 0), passages: fmt(ix.passages || 0) }),
+    // (how many files are in it: the progress below says)
+    stat("size", megabytes(ix.disk_mb || 0), [t("diag.index", { files: fmt(ix.files || 0), passages: fmt(ix.passages || 0) }),
       t("diag.on_disk", { size: megabytes(ix.disk_mb || 0) }),
       ix.memory_mb > 0 ? t("diag.in_memory", { size: megabytes(ix.memory_mb) }) : t("diag.searched_on_disk")].join("\n")),
     searches.length ? stat("search", t("diag.ms", { n: fmt(Math.round(median(searches))) }), t("diag.search_tip", {
       n: fmt(searches.length), model: fmt(Math.round(median(d.searches.map((x) => x.model_ms)))) })) : null,
-    waiting ? stat("hourglass", pace > 0 ? `${fmt(waiting)} · ${eta(waiting / pace)}` : fmt(waiting), t("diag.waiting_tip")) : null,
     // How far back the charts go (the same for all of them).
     stat("clock", t1 - t0 >= 60 ? t("diag.minutes", { n: fmt(Math.round((t1 - t0) / 60)) }) : t("diag.seconds", { n: fmt(Math.round(t1 - t0)) }),
       t("diag.span_tip")),
-  ];
-  const now = files.length ? files[files.length - 1][1] : 0;
-  $("dg-strip").replaceChildren(...[
-    s.length && s[s.length - 1].state === "indexing"
-      ? h("div", { class: "dg-headline" }, h("b", {}, fmt(Math.round(now * 10) / 10)), h("span", {}, t("diag.files"))) : null,
-    ...strip].filter(Boolean));
+  ].filter(Boolean));
+  renderProgress();
   // Which kinds of files were read in the charts' time.
   const ps = s.map((x) => x.pipeline).filter(Boolean);
   const first = ps[0], lastP = ps[ps.length - 1];
   const kinds = first?.kinds && lastP?.kinds
-    ? DIAG_KINDS.map(([keys, name, color]) => ({ name, color, n: keys.reduce((n, k) => n + (lastP.kinds[k] || 0) - (first.kinds[k] || 0), 0) }))
+    ? DIAG_KINDS.map(([keys, name, color, ic]) => ({ name, color, ic, n: keys.reduce((n, k) => n + (lastP.kinds[k] || 0) - (first.kinds[k] || 0), 0) }))
       .filter((k) => k.n > 0) : [];
-  const byKind = kinds.length ? h("div", { class: "dg-legend dg-kinds" }, ...kinds.map((k) => h("span", {},
-    h("i", { style: `background: var(${k.color})` }), t(`search.kind.${k.name}`), h("b", {}, fmt(k.n))))) : null;
+  const byKind = kinds.length ? h("div", { class: "dg-legend dg-kinds" },
+    ...kinds.map((k) => legendItem(k.ic, `var(${k.color})`, t(`search.kind.${k.name}`), fmt(k.n)))) : null;
   const pctShow = (v) => pct(Math.round(v));
   const perSecond = (v) => `${fmt(Math.round(v * 10) / 10)}/s`;
   const vramShared = d.setup?.shared;
+  const app = { name: t("diag.app"), icon: "app", color: DIAG_COLORS.app };
+  const model = { name: t("diag.model"), icon: "chip", color: DIAG_COLORS.model };
   renderActivityBand(s, t0, t1);
   $("dg-charts").replaceChildren(
-    diagChart(t("diag.files"), [{ name: t("diag.files_short"), color: DIAG_COLORS.files, points: files }],
+    diagChart(t("diag.files"), [{ name: t("diag.files_short"), icon: "check", color: DIAG_COLORS.files, points: files }],
       { show: perSecond, t0, t1, more: byKind }),
     diagChart(t("diag.model"), [
-      { name: t("diag.passages"), color: "var(--blue)", points: rate("texts") },
-      { name: t("diag.pictures"), color: "var(--pink)", points: rate("pictures") }], { show: perSecond, t0, t1 }),
-    diagChart(t("diag.queue"), [{ name: t("folders.col.files"), color: "var(--yellow)", points: at((x) => x.pending) }],
+      { name: t("diag.passages"), icon: "text", color: "var(--blue)", points: rate("texts") },
+      { name: t("diag.pictures"), icon: "image", color: "var(--pink)", points: rate("pictures") }], { show: perSecond, t0, t1 }),
+    diagChart(t("diag.queue"), [{ name: t("diag.queue"), icon: "pending", color: "var(--yellow)", points: at((x) => x.pending) }],
       { show: (v) => fmt(Math.round(v)), t0, t1 }),
-    diagChart(t("diag.disk"), [{ name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.disk.read_mbs) }],
+    diagChart(t("diag.disk"), [{ ...app, points: at((x) => x.disk.read_mbs) }],
       { show: (v) => (v >= 1 ? `${fmt(Math.round(v * 10) / 10)} MB/s` : `${fmt(Math.round(v * 1000))} KB/s`), t0, t1 }),
     diagChart(t("diag.cpu"), [
-      { name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.app.cpu) },
-      { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.cpu) },
-      { name: t("diag.pc"), color: DIAG_COLORS.others, points: at((x) => x.pc.cpu) }], { show: pctShow, top: 100, t0, t1 }),
+      { ...app, points: at((x) => x.app.cpu) },
+      { ...model, points: at((x) => x.model.cpu) },
+      { name: t("diag.pc"), icon: "monitor", color: DIAG_COLORS.others, points: at((x) => x.pc.cpu) }], { show: pctShow, top: 100, t0, t1 }),
     diagChart(t("diag.memory"), [
-      { name: t("diag.app"), color: DIAG_COLORS.app, points: at((x) => x.app.mb) },
-      { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.mb) }], { show: megabytes, t0, t1 }),
+      { ...app, points: at((x) => x.app.mb) },
+      { ...model, points: at((x) => x.model.mb) }], { show: megabytes, t0, t1 }),
     diagChart(t("diag.gpu"), [
-      { name: t("diag.model"), color: DIAG_COLORS.model, points: at((x) => x.model.gpu) },
-      { name: t("diag.others"), color: DIAG_COLORS.others, points: at((x) => x.pc.gpu_others) }], { show: pctShow, top: 100, t0, t1 }),
-    diagChart(vramShared ? t("diag.shared_memory") : t("diag.vram"), [{ name: t("diag.model"), color: DIAG_COLORS.model,
+      { ...model, points: at((x) => x.model.gpu) },
+      { name: t("diag.others"), icon: "dots", color: DIAG_COLORS.others, points: at((x) => x.pc.gpu_others) }], { show: pctShow, top: 100, t0, t1 }),
+    diagChart(vramShared ? t("diag.shared_memory") : t("diag.vram"), [{ ...model,
       points: at((x) => (vramShared ? x.model.shared_mb : x.model.vram_mb)) }], { show: megabytes, t0, t1 }),
     searchChart(d.searches || [], t0, t1),
   );
   // Where indexing time went in these minutes: one bar.
   const box = $("dg-time");
   if (ps.length < 2) { box.hidden = true; return; }
-  const parts = [["diag.reading", lastP.read_ms - first.read_ms, "var(--orange)"], ["diag.waiting", lastP.wait_ms - first.wait_ms, "var(--pink)"],
-    ["diag.model", lastP.embed_ms - first.embed_ms, "var(--blue)"], ["diag.saving", lastP.save_ms - first.save_ms, "var(--green)"]];
+  const parts = [["diag.reading", lastP.read_ms - first.read_ms, "var(--orange)", "eye"],
+    ["diag.waiting", lastP.wait_ms - first.wait_ms, "var(--pink)", "pending"],
+    ["diag.model", lastP.embed_ms - first.embed_ms, "var(--blue)", "chip"],
+    ["diag.saving", lastP.save_ms - first.save_ms, "var(--green)", "archive"]];
   const total = parts.reduce((sum, p) => sum + p[1], 0);
   box.hidden = total <= 0;
   if (total <= 0) return;
   box.replaceChildren(h("div", { class: "dg-title" }, t("diag.time")),
     h("div", { class: "dg-bar" }, ...parts.map(([, v, c]) => h("i", { style: `width: ${(v / total) * 100}%; background: ${c}` }))),
-    h("div", { class: "dg-legend" }, ...parts.map(([k, v, c]) => h("span", {}, h("i", { style: `background: ${c}` }), t(k),
-      h("b", {}, `${fmt(Math.round(v / 1000))} s`)))));
+    h("div", { class: "dg-legend" }, ...parts.map(([k, v, c, ic]) => legendItem(ic, c, t(k), `${fmt(Math.round(v / 1000))} s`))));
 }
+
 
 // ---------- confirm ----------
 
@@ -1985,18 +2193,35 @@ async function refreshResults() {
   if (i >= 0 && (i < visibleResults())) select(i, false);
 }
 
-// The hourglass next to the results: matches by meaning aren't there yet (the model is waking up),
-// or indexing is still running, so files it hasn't reached are found by name only for now.
+// While the folders searched still have files to index, the folder selector says so: its folder
+// icon gives way to a small ring filling up as they're indexed, in the colour of progress; its
+// tooltip says how far, and that the rest is found by name only for now. Changed in place, so a
+// click on the selector is never lost. (Matches before the model is ready say so themselves: "Aa".)
 function updateNotice() {
-  const notice = $("notice");
-  const p = state.last?.progress;
-  const indexing = p && (p.state === "indexing" || p.state === "scanning");
-  const searching = !!($("q").value.trim() || state.similar);
-  notice.hidden = !searching || !(state.semantic === false || indexing);
-  if (notice.hidden) return;
-  if (state.semantic === false) return setTip(notice, t("search.keyword_only"));
-  const progress = p.state === "indexing" && p.total ? `${t("activity.progress", { done: fmt(p.done), total: fmt(p.total) })} · ` : "";
-  setTip(notice, `${t("search.still_indexing")}\n${progress}${t("search.by_name_only")}`);
+  const s = state.scope;
+  const folders = state.last?.folders || [];
+  const roots = s ? folders.filter((f) => s.prefix.startsWith(`${f.path.toLowerCase().replace(/[\\/]+$/, "")}\\`)) : folders;
+  const ready = roots.reduce((n, f) => n + f.indexed, 0);
+  const waiting = roots.reduce((n, f) => n + f.pending, 0);
+  const tip = s ? s.path : t("scope.pick");
+  for (const pill of document.querySelectorAll(".scope-pill")) {
+    const first = pill.firstElementChild;
+    const ring = first?.classList.contains("ring-mini") ? first : null;
+    if (!waiting) {
+      if (ring) ring.replaceWith(icon("folder"));
+      setTip(pill, tip);
+      continue;
+    }
+    const mini = ring || h("span", { class: "ring-mini" });
+    if (!ring) {
+      mini.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle class="t" cx="10" cy="10" r="7.5"/>'
+        + '<circle class="a" cx="10" cy="10" r="7.5" pathLength="100"/></svg>';
+      first.replaceWith(mini);
+    }
+    mini.querySelector(".a").setAttribute("stroke-dasharray", `${Math.max(2, (ready / (ready + waiting)) * 100).toFixed(1)} 100`);
+    setTip(pill, `${tip}\n${t("search.still_indexing")}\n`
+      + `${t("activity.progress", { done: fmt(ready), total: fmt(ready + waiting) })} · ${t("search.by_name_only")}`);
+  }
 }
 
 // No folders yet: one friendly sentence, its "add a folder" part a link to the folder picker.
@@ -2042,6 +2267,7 @@ function renderResults(items, likely) {
   const box = $("results");
   box.replaceChildren();
   hideTip();
+  renderSimilarChip();
   state.selected = -1;
   state.likely = Math.min(likely ?? (items || []).length, (items || []).length);
   // Similar files: the nearly identical ones come first (the server puts them there).
@@ -2053,10 +2279,7 @@ function renderResults(items, likely) {
   state.results = items || [];
   const view = currentView();
   box.className = `results ${view}`;
-  if (items === null) {
-    $("notice").hidden = true;
-    return renderEmpty();
-  }
+  if (items === null) return renderEmpty();
   if (!items.length) return renderMessage(t("search.nothing"));
   $("empty").hidden = true;
   const make = { cards: row, list: line, grid: tile }[view];
@@ -2072,8 +2295,8 @@ function renderResults(items, likely) {
   };
   const label = (key) => h("div", { class: "more-divider static" }, h("span", { class: "more-label" }, t(key)));
   if (state.similar) {
-    // The file they are like, on top; then the nearly identical ones, if any, apart from the related.
-    if (state.reference) box.append(referenceCard(state.reference));
+    // The nearly identical ones first, if any, apart from the related. (The file they are like is
+    // in the bar, beside the folder.)
     if (!near) return put(items, 0);
     box.append(label("search.near"));
     put(items.slice(0, near), 0);
@@ -2219,8 +2442,14 @@ const similarTo = (r) => {
   runSimilar({ id: r.file_id, name: r.name });
 };
 
-// The file the similar ones are like: on top of them, with the way back to searching.
-function referenceCard(r) {
+// The file the similar ones are like: a filter that's on, in the bar beside the folder searched in
+// (not one more result among them): its picture or its kind, its name (a click opens it), and ×
+// back to searching.
+function renderSimilarChip() {
+  const chip = $("similar-chip");
+  const r = state.similar ? state.reference : null;
+  chip.hidden = !r;
+  if (!r) return chip.replaceChildren();
   let visual;
   if (r.picture || r.preview) {
     visual = h("img", { class: "mini", src: r.picture || thumbUrl(r), alt: "" });
@@ -2228,13 +2457,12 @@ function referenceCard(r) {
   } else {
     visual = extBadge(r);
   }
-  // (a dropped or pasted file isn't in the index: nothing to open, no folder)
-  const name = h("span", { class: "name", onclick: r.file_id ? () => openFile(r) : null }, r.name);
-  if (r.path) setTip(name, r.path);
+  // (a dropped or pasted file isn't in the index: nothing to open)
+  const name = h("span", { class: `chip-name${r.file_id ? " open" : ""}`, onclick: r.file_id ? () => openFile(r) : null }, r.name);
+  setTip(name, r.path || r.name);
   const back = h("button", { type: "button", class: "chip-x", onclick: () => clearSimilar() }, icon("close"));
   setTip(back, t("search.back"));
-  return h("div", { class: "reference" }, icon("similar"), visual,
-    h("div", { class: "ref-body" }, name, r.dir ? dirButton(r) : null), back);
+  chip.replaceChildren(icon("similar"), visual, name, back);
 }
 
 // ---------- search by example ----------
@@ -2472,6 +2700,7 @@ function clearSimilar(rerun = true) {
   if (state.similar.picture) URL.revokeObjectURL(state.similar.picture);
   state.similar = null;
   state.reference = null;
+  renderSimilarChip();
   rotatePlaceholder();
   if (rerun) runSearch();
 }
@@ -3824,6 +4053,7 @@ function renderScopes() {
     box.classList.toggle("on", !!s);
     box.replaceChildren(...parts);
   }
+  updateNotice(); // (files of the folders searched still being indexed: a ring in place of the folder)
 }
 
 // A small folder browser. A click on a folder searches in it; the › at its end shows the folders
