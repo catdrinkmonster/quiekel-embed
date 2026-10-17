@@ -72,7 +72,7 @@ tray-icon = "0.21"
 nvml-wrapper = "0.11"
 
 [dependencies.windows]
-version = "0.61"
+version = "0.62"
 features = [
     "Win32_Foundation",
     "Win32_Security",
