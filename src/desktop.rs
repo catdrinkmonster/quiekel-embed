@@ -518,8 +518,11 @@ fn now_s() -> u64 {
 pub fn main(hidden: bool) -> Result<()> {
     log::info!("Desktop app starting");
     unsafe {
-        // Own taskbar identity.
-        let _ = windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(config::APP_ID));
+        // Own taskbar identity; a copy with a data folder of its own has one of its own (and so
+        // its own icon there).
+        let copy: String = config::COPY_NAME.chars().filter(char::is_ascii_alphanumeric).collect();
+        let id = if copy.is_empty() { config::APP_ID.to_string() } else { format!("{}.{copy}", config::APP_ID) };
+        let _ = windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(id));
     }
     if !first_copy() {
         // Running already, maybe still starting: show that window instead. Started with Windows:

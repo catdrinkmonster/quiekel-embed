@@ -57,7 +57,7 @@
   --tip-accent: #ffe58f;
   --kind-docs: #1d4aff;
   --kind-text: #7048e8;
-  --kind-code: #f54e00;
+  --kind-mail: #f54e00;
   --kind-images: #f2547f;
   --match-s: 72%;  /* the match ring's colours: red to green at this saturation and lightness */
   --match-l: 44%;
@@ -124,7 +124,7 @@
   --tip-accent: #ffd77a;
   --kind-docs: #6f8bff;
   --kind-text: #a487ff;
-  --kind-code: #ff7a3d;
+  --kind-mail: #ff7a3d;
   --kind-images: #ff6f97;
   --ink-rgb: 242, 242, 238;
   --card-rgb: 33, 34, 38;
@@ -134,7 +134,9 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-html { scrollbar-gutter: stable; } /* pages don't shift sideways when a scrollbar appears */
+/* The page's scrollbar is always there (pages don't shift sideways when one gets long); its track
+   carries on the hairline under the title bar, the only way it reaches the window's right edge. */
+html { overflow-y: scroll; }
 body {
   font: 14px/1.5 var(--sans);
   background: var(--bg);
@@ -145,13 +147,13 @@ h3 { font-family: var(--display); color: var(--ink); margin: 0; letter-spacing: 
 ::selection { background: var(--mark); color: var(--ink); }
 [hidden] { display: none !important; }
 .i18n-pending body { visibility: hidden; } /* until the texts are translated */
-:root[data-theme="dark"] img.logo { content: url("/static/quiekel-dark.svg"); } /* white edge on dark paper */
 .mono { font-family: var(--mono); font-size: 12px; }
 
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-thumb { background: var(--scroll) padding-box; border-radius: 10px; border: 3px solid transparent; }
 ::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover) padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+html::-webkit-scrollbar-track { background: linear-gradient(var(--border), var(--border)) top / 100% 1px no-repeat; }
 
 svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; display: block; }
 svg.i .solid { fill: currentColor; stroke-width: 1; }
@@ -207,7 +209,8 @@ kbd {
 
 /* ---- app shell: an icon rail and the page ---- */
 .app { display: grid; grid-template-columns: 64px minmax(0, 1fr); min-height: 100vh; }
-/* A hairline under the window's title bar, meeting the rail's edge in the corner. */
+/* A hairline under the window's title bar, meeting the rail's edge in the corner (the scrollbar's
+   track takes it on to the window's edge). */
 .app::before {
   content: ""; position: fixed; top: 0; left: 64px; right: 0; height: 1px;
   background: var(--border); z-index: 6; pointer-events: none;
@@ -585,7 +588,6 @@ mark { background: var(--mark); color: var(--ink); border-radius: 2px; padding: 
 /* The map's kinds: the search's choice, in the dots' colours (they're the map's legend). */
 #map-kinds button[data-kind="docs"] { color: var(--kind-docs); }
 #map-kinds button[data-kind="text"] { color: var(--kind-text); }
-#map-kinds button[data-kind="code"] { color: var(--kind-code); }
 #map-kinds button[data-kind="images"] { color: var(--kind-images); }
 /* The map's own controls, on the map: its views at the bottom left, turning and resetting at the
    bottom right, How it works at the top right (next to the column it opens in). */

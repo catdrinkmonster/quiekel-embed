@@ -511,6 +511,11 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) poll
 const refresh = () => api("/api/status").then(render).catch(() => {});
 
 function render(s) {
+  // (a copy serving its page from a folder: when a file there changes, the page loads itself again)
+  if (s.page) {
+    if (state.pageStamp && s.page !== state.pageStamp) return location.reload();
+    state.pageStamp = s.page;
+  }
   state.last = s;
   state.appMode = !!s.app_mode;
   if (s.settings.language_resolved !== i18n.lang) {
@@ -1078,7 +1083,7 @@ async function locateFolder(f) {
 // What kind the files are, as File types counts them, in the colours of the kinds: a folder's (or
 // all folders') numbers as the parts of a ring, what's still waiting in grey.
 const KIND_PARTS = [["docs", "doc", "--kind-docs", "documents"], ["texts", "text", "--kind-text", "text"],
-  ["mails", "mail", "--kind-code", "mail"], ["images", "image", "--kind-images", "pictures"]];
+  ["mails", "mail", "--kind-mail", "mail"], ["images", "image", "--kind-images", "pictures"]];
 
 function kindParts(count) {
   const parts = KIND_PARTS.map(([key, ic, color, cat]) => ({ ic, n: count(key), color: `var(${color})`, name: t(`types.cat.${cat}`) }));
@@ -1462,8 +1467,8 @@ async function refreshDiagnostics() {
 }
 
 const DIAG_COLORS = { app: "var(--orange)", model: "var(--blue)", others: "var(--faint)", files: "var(--green)" };
-const DIAG_KINDS = [["doc", "docs", "--kind-docs"], ["text", "text", "--kind-text"], ["code", "code", "--kind-code"],
-  ["image", "images", "--kind-images"]];
+// (the kinds a file is read as, under the names the filters give them: code is text there too)
+const DIAG_KINDS = [[["doc"], "docs", "--kind-docs"], [["text", "code"], "text", "--kind-text"], [["image"], "images", "--kind-images"]];
 
 // A round top for a chart, a little above its highest value: 1, 2, 2.5 or 5 times a power of ten.
 function niceTop(v) {
@@ -1645,7 +1650,8 @@ function renderDiagnostics(d) {
   const ps = s.map((x) => x.pipeline).filter(Boolean);
   const first = ps[0], lastP = ps[ps.length - 1];
   const kinds = first?.kinds && lastP?.kinds
-    ? DIAG_KINDS.map(([k, name, color]) => ({ name, color, n: (lastP.kinds[k] || 0) - (first.kinds[k] || 0) })).filter((k) => k.n > 0) : [];
+    ? DIAG_KINDS.map(([keys, name, color]) => ({ name, color, n: keys.reduce((n, k) => n + (lastP.kinds[k] || 0) - (first.kinds[k] || 0), 0) }))
+      .filter((k) => k.n > 0) : [];
   const byKind = kinds.length ? h("div", { class: "dg-legend dg-kinds" }, ...kinds.map((k) => h("span", {},
     h("i", { style: `background: var(${k.color})` }), t(`search.kind.${k.name}`), h("b", {}, fmt(k.n))))) : null;
   const pctShow = (v) => pct(Math.round(v));
@@ -2309,8 +2315,8 @@ $("lightbox").addEventListener("click", (e) => { if (e.target.id === "lightbox")
 
 // Every file is a dot in a cube; files with similar meaning sit close together. Clicking a dot
 // flies there: the other dots fade by how related they are, and you can walk from file to file.
-const KIND_GROUP = { doc: "docs", text: "text", code: "code", image: "images" };
-const KIND_COLOR = { docs: "#1d4aff", text: "#7048e8", code: "#f54e00", images: "#f2547f" };
+const KIND_GROUP = { doc: "docs", text: "text", code: "text", image: "images" }; // (code is text, as in File types)
+const KIND_COLOR = { docs: "#1d4aff", text: "#7048e8", images: "#f2547f" };
 const CUBE = [...Array(8)].map((_, i) => [i & 1 ? 1.15 : -1.15, i & 2 ? 1.15 : -1.15, i & 4 ? 1.15 : -1.15]);
 const CUBE_EDGES = [[0, 1], [1, 3], [3, 2], [2, 0], [4, 5], [5, 7], [7, 6], [6, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
 const OVERVIEW = { tx: 0, ty: 0, tz: 0, zoom: 1 };

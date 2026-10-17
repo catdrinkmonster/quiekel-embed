@@ -1,8 +1,10 @@
 //! The local web server on 127.0.0.1: the page (embedded in the app) and its API, shown in the
 //! desktop window or a browser.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock};
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -54,19 +56,39 @@ const SECURITY_HEADERS: [(&str, &str); 6] = [
 ];
 
 /// The page's files, inside the app.
-const STATIC: [(&str, &[u8], &str); 8] = [
+const STATIC: [(&str, &[u8], &str); 7] = [
     ("app.js", include_bytes!("../static/app.js"), "text/javascript; charset=utf-8"),
     ("i18n.json", include_bytes!("../static/i18n.json"), "application/json"),
     ("icon.png", include_bytes!("../static/icon.png"), "image/png"),
     ("index.html", include_bytes!("../static/index.html"), "text/html; charset=utf-8"),
-    ("quiekel-dark.svg", include_bytes!("../static/quiekel-dark.svg"), "image/svg+xml"),
     ("quiekel.svg", include_bytes!("../static/quiekel.svg"), "image/svg+xml"),
     ("style.css", include_bytes!("../static/style.css"), "text/css; charset=utf-8"),
     ("theme.js", include_bytes!("../static/theme.js"), "text/javascript; charset=utf-8"),
 ];
 
-pub fn static_file(name: &str) -> Option<&'static [u8]> {
-    STATIC.iter().find(|(n, _, _)| *n == name).map(|(_, b, _)| *b)
+/// For working on the page: a folder its files are read from instead (QUIEKEL_EMBED_STATIC), on
+/// every request, so a change shows on the next load; /api/status then says when one changed, and
+/// the page loads itself again.
+static PAGE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| std::env::var_os("QUIEKEL_EMBED_STATIC").map(PathBuf::from));
+
+/// A page file and its type: from that folder when there is one (and it has the file), else the app's own.
+fn page_file(name: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
+    let (_, bytes, kind) = STATIC.iter().find(|(n, _, _)| *n == name)?;
+    match PAGE_DIR.as_ref().and_then(|dir| std::fs::read(dir.join(name)).ok()) {
+        Some(read) => Some((Cow::Owned(read), kind)),
+        None => Some((Cow::Borrowed(*bytes), kind)),
+    }
+}
+
+/// When that folder's page files last changed, in milliseconds (None without one).
+fn page_stamp() -> Option<u128> {
+    let dir = PAGE_DIR.as_ref()?;
+    let newest = STATIC
+        .iter()
+        .filter_map(|(n, _, _)| std::fs::metadata(dir.join(n)).and_then(|m| m.modified()).ok())
+        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .max()?;
+    Some(newest.as_millis())
 }
 
 /// What differs between browser mode and the desktop app.
@@ -410,7 +432,7 @@ impl Server {
                 v
             })
             .collect();
-        json!({
+        let mut status = json!({
             "model": {
                 "id": config::MODEL_ID, "status": state.status, "error": state.error,
                 "on_gpu": state.on_gpu, "cpu_because": state.cpu_because, "gpu_name": state.gpu_name,
@@ -425,7 +447,11 @@ impl Server {
             "folders": folders,
             "update": update,
             "app_mode": self.hooks.app_mode,
-        })
+        });
+        if let Some(stamp) = page_stamp() {
+            status["page"] = json!(stamp);
+        }
+        status
     }
 
     fn update_settings(&self, body: SettingsIn) -> Result<Response, ApiError> {
@@ -863,25 +889,25 @@ impl Server {
                 // anything is drawn: no white flash when the app opens in dark mode.
                 let mode = b.settings.str("theme");
                 let mode = if THEMES.contains(&mode.as_str()) { mode } else { "auto".into() };
-                let page = String::from_utf8_lossy(static_file("index.html").unwrap_or_default())
-                    .replacen("<html ", &format!("<html data-theme-mode=\"{mode}\" "), 1);
+                let html = page_file("index.html").map(|(b, _)| b).unwrap_or_default();
+                let page = String::from_utf8_lossy(&html).replacen("<html ", &format!("<html data-theme-mode=\"{mode}\" "), 1);
                 let mut r = Response::new(Body::from(page));
                 r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
                 r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
                 Ok(r)
             }
             ["static", name] if get => {
-                let Some((_, bytes, kind)) = STATIC.iter().find(|(n, _, _)| n == name) else {
+                let Some((bytes, kind)) = page_file(name) else {
                     return Err(detail(StatusCode::NOT_FOUND, "Not Found"));
                 };
-                let tag = etag_of(bytes);
+                let tag = etag_of(&bytes);
                 if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(tag.as_str()) {
                     let mut r = Response::new(Body::empty());
                     *r.status_mut() = StatusCode::NOT_MODIFIED;
                     r.headers_mut().insert(header::ETAG, HeaderValue::from_str(&tag).unwrap());
                     return Ok(r);
                 }
-                let mut r = Response::new(Body::from(*bytes));
+                let mut r = Response::new(Body::from(bytes.into_owned()));
                 r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
                 r.headers_mut().insert(header::ETAG, HeaderValue::from_str(&tag).unwrap());
                 Ok(r)
@@ -1273,7 +1299,7 @@ mod tests {
         assert_eq!(split_path(r"C:\b.txt"), (r"C:\".to_string(), "b.txt".to_string()));
         assert!(known_path(&["api", "folders", "3", "rescan"]));
         assert!(!known_path(&["api", "nope"]));
-        assert!(static_file("index.html").is_some());
+        assert!(page_file("index.html").is_some() && page_file("nope.js").is_none());
     }
 
     // ---- the app's HTTP API on a fresh, empty index (the model is never loaded) ----------------
